@@ -101,77 +101,141 @@ fn check_references(
         let line_num = i + 1;
         let line = strip_comment(line);
 
-        for arg in extract_commands(&line, "input") {
-            let input_path = resolve_tex_path(root, arg);
-            if !input_path.exists() {
-                errors.push(LintError {
-                    file: rel.to_string(),
-                    line: line_num,
-                    message: format!("\\input{{{}}} — file not found", arg),
-                    suggestion: Some(format!("Create {}", input_path.display())),
-                });
-            }
-        }
+        check_input_references(root, rel, line_num, &line, errors);
+        check_includegraphics_references(root, rel, line_num, &line, errors);
+        check_cite_references(rel, line_num, &line, bib_file, bib_keys, errors);
+        check_ref_references(rel, line_num, &line, all_labels, errors);
+        check_lstinputlisting_references(root, rel, line_num, &line, errors);
+        check_inputminted_references(root, rel, line_num, &line, errors);
+    }
+}
 
-        for arg in extract_commands(&line, "includegraphics") {
-            let img_path = root.join(arg);
-            if !img_path.exists() {
+/// Check \input references for file existence.
+fn check_input_references(
+    root: &Path,
+    rel: &str,
+    line_num: usize,
+    line: &str,
+    errors: &mut Vec<LintError>,
+) {
+    for arg in extract_commands(line, "input") {
+        let input_path = resolve_tex_path(root, arg);
+        if !input_path.exists() {
+            errors.push(LintError {
+                file: rel.to_string(),
+                line: line_num,
+                message: format!("\\input{{{}}} — file not found", arg),
+                suggestion: Some(format!("Create {}", input_path.display())),
+            });
+        }
+    }
+}
+
+/// Check \includegraphics references for file existence.
+fn check_includegraphics_references(
+    root: &Path,
+    rel: &str,
+    line_num: usize,
+    line: &str,
+    errors: &mut Vec<LintError>,
+) {
+    for arg in extract_commands(line, "includegraphics") {
+        let img_path = root.join(arg);
+        if !img_path.exists() {
+            errors.push(LintError {
+                file: rel.to_string(),
+                line: line_num,
+                message: format!("\\includegraphics{{{}}} — file not found", arg),
+                suggestion: None,
+            });
+        }
+    }
+}
+
+/// Check \cite references against bibliography keys.
+fn check_cite_references(
+    rel: &str,
+    line_num: usize,
+    line: &str,
+    bib_file: Option<&str>,
+    bib_keys: &HashSet<String>,
+    errors: &mut Vec<LintError>,
+) {
+    if bib_file.is_none() {
+        return;
+    }
+
+    for arg in extract_commands(line, "cite") {
+        for key in arg.split(',') {
+            let key = key.trim();
+            if !key.is_empty() && !bib_keys.contains(key) {
                 errors.push(LintError {
                     file: rel.to_string(),
                     line: line_num,
-                    message: format!("\\includegraphics{{{}}} — file not found", arg),
+                    message: format!("\\cite{{{}}} — key not found in .bib", key),
                     suggestion: None,
                 });
             }
         }
+    }
+}
 
-        if bib_file.is_some() {
-            for arg in extract_commands(&line, "cite") {
-                for key in arg.split(',') {
-                    let key = key.trim();
-                    if !key.is_empty() && !bib_keys.contains(key) {
-                        errors.push(LintError {
-                            file: rel.to_string(),
-                            line: line_num,
-                            message: format!("\\cite{{{}}} — key not found in .bib", key),
-                            suggestion: None,
-                        });
-                    }
-                }
-            }
+/// Check \ref references against defined labels.
+fn check_ref_references(
+    rel: &str,
+    line_num: usize,
+    line: &str,
+    all_labels: &HashSet<String>,
+    errors: &mut Vec<LintError>,
+) {
+    for arg in extract_commands(line, "ref") {
+        if !all_labels.contains(arg) {
+            errors.push(LintError {
+                file: rel.to_string(),
+                line: line_num,
+                message: format!("\\ref{{{}}} — no matching \\label found", arg),
+                suggestion: None,
+            });
         }
+    }
+}
 
-        for arg in extract_commands(&line, "ref") {
-            if !all_labels.contains(arg) {
-                errors.push(LintError {
-                    file: rel.to_string(),
-                    line: line_num,
-                    message: format!("\\ref{{{}}} — no matching \\label found", arg),
-                    suggestion: None,
-                });
-            }
+/// Check \lstinputlisting references for file existence.
+fn check_lstinputlisting_references(
+    root: &Path,
+    rel: &str,
+    line_num: usize,
+    line: &str,
+    errors: &mut Vec<LintError>,
+) {
+    for arg in extract_commands(line, "lstinputlisting") {
+        if !root.join(arg).exists() {
+            errors.push(LintError {
+                file: rel.to_string(),
+                line: line_num,
+                message: format!("\\lstinputlisting{{{}}} — file not found", arg),
+                suggestion: None,
+            });
         }
+    }
+}
 
-        for arg in extract_commands(&line, "lstinputlisting") {
-            if !root.join(arg).exists() {
-                errors.push(LintError {
-                    file: rel.to_string(),
-                    line: line_num,
-                    message: format!("\\lstinputlisting{{{}}} — file not found", arg),
-                    suggestion: None,
-                });
-            }
-        }
-
-        for arg in extract_inputminted_files(&line) {
-            if !root.join(arg).exists() {
-                errors.push(LintError {
-                    file: rel.to_string(),
-                    line: line_num,
-                    message: format!("\\inputminted{{{}}} — file not found", arg),
-                    suggestion: None,
-                });
-            }
+/// Check \inputminted references for file existence.
+fn check_inputminted_references(
+    root: &Path,
+    rel: &str,
+    line_num: usize,
+    line: &str,
+    errors: &mut Vec<LintError>,
+) {
+    for arg in extract_inputminted_files(line) {
+        if !root.join(arg).exists() {
+            errors.push(LintError {
+                file: rel.to_string(),
+                line: line_num,
+                message: format!("\\inputminted{{{}}} — file not found", arg),
+                suggestion: None,
+            });
         }
     }
 }
@@ -321,8 +385,6 @@ fn strip_comment(line: &str) -> String {
 
 /// Check mermaid/graphviz blocks: unclosed and invalid pos option.
 fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<LintError>) {
-    const VALID_POS: &[&str] = &["H", "t", "b", "h", "p"];
-
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
@@ -331,38 +393,63 @@ fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<Li
             continue;
         }
 
-        // Check for unclosed block
-        let end_tag = format!("\\end{{{}}}", env);
-        let rest = &content[content.lines().take(i).map(|l| l.len() + 1).sum::<usize>()..];
-        if !rest.contains(&*end_tag) {
-            errors.push(LintError {
-                file: rel.to_string(),
-                line: line_num,
-                message: format!("\\begin{{{}}} without matching \\end{{{}}}", env, env),
-                suggestion: Some(format!("Add \\end{{{}}}", env)),
-            });
-            continue;
-        }
+        check_unclosed_diagram_block(rel, content, env, line_num, i, errors);
+        check_diagram_pos_option(rel, trimmed, env, line_num, errors);
+    }
+}
 
-        // Check pos option if present
-        if let Some(opts_start) = trimmed.find('[') {
-            if let Some(opts_end) = trimmed.find(']') {
-                let opts = &trimmed[opts_start + 1..opts_end];
-                for part in opts.split(',') {
-                    if let Some((k, v)) = part.split_once('=') {
-                        if k.trim() == "pos" {
-                            let pos = v.trim();
-                            if !VALID_POS.contains(&pos) {
-                                errors.push(LintError {
-                                    file: rel.to_string(),
-                                    line: line_num,
-                                    message: format!(
-                                        "\\begin{{{}}} invalid pos='{}' — valid values: H, t, b, h, p",
-                                        env, pos
-                                    ),
-                                    suggestion: Some("Use pos=H, pos=t, pos=b, pos=h, or pos=p".into()),
-                                });
-                            }
+/// Check if a diagram block is properly closed.
+fn check_unclosed_diagram_block(
+    rel: &str,
+    content: &str,
+    env: &str,
+    line_num: usize,
+    line_index: usize,
+    errors: &mut Vec<LintError>,
+) {
+    let end_tag = format!("\\end{{{}}}", env);
+    let rest = &content[content
+        .lines()
+        .take(line_index)
+        .map(|l| l.len() + 1)
+        .sum::<usize>()..];
+    if !rest.contains(&*end_tag) {
+        errors.push(LintError {
+            file: rel.to_string(),
+            line: line_num,
+            message: format!("\\begin{{{}}} without matching \\end{{{}}}", env, env),
+            suggestion: Some(format!("Add \\end{{{}}}", env)),
+        });
+    }
+}
+
+/// Check if the pos option in diagram block is valid.
+fn check_diagram_pos_option(
+    rel: &str,
+    line: &str,
+    env: &str,
+    line_num: usize,
+    errors: &mut Vec<LintError>,
+) {
+    const VALID_POS: &[&str] = &["H", "t", "b", "h", "p"];
+
+    if let Some(opts_start) = line.find('[') {
+        if let Some(opts_end) = line.find(']') {
+            let opts = &line[opts_start + 1..opts_end];
+            for part in opts.split(',') {
+                if let Some((k, v)) = part.split_once('=') {
+                    if k.trim() == "pos" {
+                        let pos = v.trim();
+                        if !VALID_POS.contains(&pos) {
+                            errors.push(LintError {
+                                file: rel.to_string(),
+                                line: line_num,
+                                message: format!(
+                                    "\\begin{{{}}} invalid pos='{}' — valid values: H, t, b, h, p",
+                                    env, pos
+                                ),
+                                suggestion: Some("Use pos=H, pos=t, pos=b, pos=h, or pos=p".into()),
+                            });
                         }
                     }
                 }
