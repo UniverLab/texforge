@@ -76,50 +76,80 @@ pub(crate) fn render_env(
         let after_begin = &remaining[start + begin_tag.len()..];
         let (opts, after_opts) = parse_opts(after_begin);
 
-        let end = after_opts
-            .find(&*end_tag)
-            .with_context(|| format!("\\begin{{{}}} without matching \\end{{{}}}", env, env))?;
-
+        let end = find_end_tag(after_opts, &end_tag, env)?;
         let diagram_src = after_opts[..end].trim();
 
-        // Fail fast: validate pos before doing any rendering work
-        let pos = opts.get("pos").map(String::as_str).unwrap_or("H");
-        if !["H", "t", "b", "h", "p"].contains(&pos) {
-            anyhow::bail!(
-                "Invalid {} option pos='{}' — valid values are: H, t, b, h, p",
-                env,
-                pos
-            );
-        }
+        validate_pos_option(&opts, env)?;
 
         let png = render_fn(diagram_src)?;
+        let filename = save_diagram_png(diagrams_dir, counter, &png)?;
+        let fig_env = build_figure_environment(&opts, env, &filename)?;
 
-        *counter += 1;
-        let filename = format!("diagram-{}.png", counter);
-        std::fs::write(diagrams_dir.join(&filename), &png)?;
-
-        // Build figure environment
-        let width = opts
-            .get("width")
-            .map(String::as_str)
-            .unwrap_or("\\linewidth");
-        let caption = opts.get("caption");
-        let rel_path = format!("diagrams/{}", filename);
-
-        let mut fig = format!(
-            "\\begin{{figure}}[{pos}]\n  \\centering\n  \\includegraphics[width={width}]{{{rel_path}}}\n"
-        );
-        if let Some(cap) = caption {
-            fig.push_str(&format!("  \\caption{{{}}}\n", cap));
-        }
-        fig.push_str("\\end{figure}");
-
-        result.push_str(&fig);
+        result.push_str(&fig_env);
         remaining = &after_opts[end + end_tag.len()..];
     }
 
     result.push_str(remaining);
     Ok(result)
+}
+
+/// Find the end tag position and validate it exists.
+fn find_end_tag(after_opts: &str, end_tag: &str, env: &str) -> Result<usize> {
+    after_opts
+        .find(end_tag)
+        .with_context(|| format!("\\begin{{{}}} without matching \\end{{{}}}", env, env))
+}
+
+/// Validate the pos option is one of the allowed values.
+fn validate_pos_option(opts: &HashMap<String, String>, env: &str) -> Result<()> {
+    let pos = opts.get("pos").map(String::as_str).unwrap_or("H");
+    if !["H", "t", "b", "h", "p"].contains(&pos) {
+        anyhow::bail!(
+            "Invalid {} option pos='{}' — valid values are: H, t, b, h, p",
+            env,
+            pos
+        );
+    }
+    Ok(())
+}
+
+/// Save the rendered diagram as PNG and return the filename.
+fn save_diagram_png(diagrams_dir: &Path, counter: &mut usize, png: &[u8]) -> Result<String> {
+    *counter += 1;
+    let filename = format!("diagram-{}.png", counter);
+    std::fs::write(diagrams_dir.join(&filename), png)?;
+    Ok(filename)
+}
+
+/// Build the figure environment LaTeX code.
+fn build_figure_environment(
+    opts: &HashMap<String, String>,
+    _env: &str,
+    filename: &str,
+) -> Result<String> {
+    let pos = opts.get("pos").map(String::as_str).unwrap_or("H");
+    let width = opts
+        .get("width")
+        .map(String::as_str)
+        .unwrap_or("\\linewidth");
+    let rel_path = format!("diagrams/{}", filename);
+
+    let mut fig = format!(
+        "\\begin{{figure}}[{pos}]\n  \\centering\n  \\includegraphics[width={width}]{{{rel_path}}}\n"
+    );
+
+    add_caption_if_present(opts, &mut fig)?;
+    fig.push_str("\\end{figure}");
+
+    Ok(fig)
+}
+
+/// Add caption to figure environment if present in options.
+fn add_caption_if_present(opts: &HashMap<String, String>, fig: &mut String) -> Result<()> {
+    if let Some(cap) = opts.get("caption") {
+        fig.push_str(&format!("  \\caption{{{}}}\n", cap));
+    }
+    Ok(())
 }
 
 /// Render a DOT/Graphviz diagram to SVG using layout-rs (pure Rust).
@@ -217,6 +247,15 @@ fn build_fontdb() -> resvg::usvg::fontdb::Database {
     use resvg::usvg::fontdb::Database;
 
     let mut db = Database::new();
+    load_system_and_platform_fonts(&mut db);
+    load_fallback_font_directories(&mut db);
+    configure_font_families(&mut db);
+
+    db
+}
+
+/// Load system fonts and platform-specific fonts (Windows/WSL).
+fn load_system_and_platform_fonts(db: &mut resvg::usvg::fontdb::Database) {
     db.load_system_fonts();
 
     // On WSL / Windows, also load the Windows font directory
@@ -224,7 +263,10 @@ fn build_fontdb() -> resvg::usvg::fontdb::Database {
     if win_fonts.is_dir() {
         db.load_fonts_dir(win_fonts);
     }
+}
 
+/// Load fallback font directories if no fonts were found.
+fn load_fallback_font_directories(db: &mut resvg::usvg::fontdb::Database) {
     // If the DB still has no fonts at all, try common directories explicitly.
     if db.is_empty() {
         for dir in ["/usr/share/fonts", "/usr/local/share/fonts"] {
@@ -234,7 +276,10 @@ fn build_fontdb() -> resvg::usvg::fontdb::Database {
             }
         }
     }
+}
 
+/// Configure font families based on available fonts.
+fn configure_font_families(db: &mut resvg::usvg::fontdb::Database) {
     // Collect the set of available family names once (avoids borrow conflicts).
     let available: std::collections::HashSet<String> = db
         .faces()
@@ -242,10 +287,27 @@ fn build_fontdb() -> resvg::usvg::fontdb::Database {
         .collect();
 
     // Map generic CSS families to the first concrete font we find in the DB.
+    configure_sans_serif_family(db, &available);
+    configure_serif_family(db, &available);
+    configure_monospace_family(db, &available);
+}
+
+/// Configure sans-serif font family.
+fn configure_sans_serif_family(
+    db: &mut resvg::usvg::fontdb::Database,
+    available: &std::collections::HashSet<String>,
+) {
     let sans = ["Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"];
     if let Some(f) = sans.iter().find(|n| available.contains(**n)) {
         db.set_sans_serif_family(*f);
     }
+}
+
+/// Configure serif font family.
+fn configure_serif_family(
+    db: &mut resvg::usvg::fontdb::Database,
+    available: &std::collections::HashSet<String>,
+) {
     let serif = [
         "Times New Roman",
         "DejaVu Serif",
@@ -255,6 +317,13 @@ fn build_fontdb() -> resvg::usvg::fontdb::Database {
     if let Some(f) = serif.iter().find(|n| available.contains(**n)) {
         db.set_serif_family(*f);
     }
+}
+
+/// Configure monospace font family.
+fn configure_monospace_family(
+    db: &mut resvg::usvg::fontdb::Database,
+    available: &std::collections::HashSet<String>,
+) {
     let mono = [
         "Courier New",
         "DejaVu Sans Mono",
@@ -264,8 +333,6 @@ fn build_fontdb() -> resvg::usvg::fontdb::Database {
     if let Some(f) = mono.iter().find(|n| available.contains(**n)) {
         db.set_monospace_family(*f);
     }
-
-    db
 }
 
 /// Convert SVG string to PNG bytes at 2x scale for print quality.
