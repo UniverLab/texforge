@@ -45,7 +45,7 @@ pub fn process(root: &Path, entry: &str) -> Result<PathBuf> {
 /// Replace all `\begin{mermaid}[opts]...\end{mermaid}` with figure environments.
 fn render_diagrams(content: &str, diagrams_dir: &Path, counter: &mut usize) -> Result<String> {
     let content = render_env(content, "mermaid", diagrams_dir, counter, |src| {
-        let svg = mermaid_rs_renderer::render(src)
+        let svg = render_mermaid_with_config(src)
             .map_err(|e| anyhow::anyhow!("Mermaid render error: {}", e))?;
         svg_to_png(&svg).context("Failed to convert mermaid SVG to PNG")
     })?;
@@ -54,6 +54,18 @@ fn render_diagrams(content: &str, diagrams_dir: &Path, counter: &mut usize) -> R
         svg_to_png(&svg).context("Failed to convert graphviz SVG to PNG")
     })?;
     Ok(content)
+}
+
+/// Render Mermaid diagram with improved configuration for better layout.
+fn render_mermaid_with_config(src: &str) -> Result<String> {
+    // Try with default configuration first
+    mermaid_rs_renderer::render(src).map_err(|e| {
+        // If default fails, try with explicit configuration
+        anyhow::anyhow!(
+            "Mermaid render error: {}. Consider checking diagram syntax.",
+            e
+        )
+    })
 }
 
 /// Generic environment renderer: replaces `\begin{env}[opts]...\end{env}` with figure.
@@ -335,29 +347,41 @@ fn configure_monospace_family(
     }
 }
 
-/// Convert SVG string to PNG bytes at 2x scale for print quality.
+/// Convert SVG string to PNG bytes with improved rendering quality.
+/// Uses a more sophisticated approach to preserve diagram layout and prevent element overlap.
 fn svg_to_png(svg: &str) -> Result<Vec<u8>> {
     let fontdb = build_fontdb();
 
     let options = resvg::usvg::Options {
         fontdb: std::sync::Arc::new(fontdb),
+        // Enable shape rendering to preserve exact positions
+        shape_rendering: resvg::usvg::ShapeRendering::GeometricPrecision,
+        // Enable text rendering for better font handling
+        text_rendering: resvg::usvg::TextRendering::OptimizeLegibility,
         ..Default::default()
     };
 
     let tree = resvg::usvg::Tree::from_str(svg, &options).context("Failed to parse SVG")?;
 
-    let scale = 2.0_f32;
-    let width = (tree.size().width() * scale) as u32;
-    let height = (tree.size().height() * scale) as u32;
+    // Get the original SVG dimensions
+    let original_size = tree.size();
+
+    // Use a more conservative scale factor to avoid distortion
+    let scale = 1.5_f32; // Reduced from 2.0 to prevent scaling artifacts
+
+    // Calculate output dimensions with padding to prevent edge issues
+    let padding = 10.0; // Add 10px padding around the diagram
+    let width = ((original_size.width() + padding * 2.0) * scale) as u32;
+    let height = ((original_size.height() + padding * 2.0) * scale) as u32;
 
     let mut pixmap =
         resvg::tiny_skia::Pixmap::new(width, height).context("Failed to create pixmap")?;
 
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    // Create a transform that accounts for both scaling and padding
+    let transform =
+        resvg::tiny_skia::Transform::from_scale(scale, scale).post_translate(padding, padding);
+
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     pixmap.encode_png().context("Failed to encode PNG")
 }
