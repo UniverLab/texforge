@@ -8,11 +8,14 @@ order: 4
 
 ## `texforge build`
 
-Compiles the project to `build/main.pdf`:
+Compiles the project to `<title>.pdf` in the project root:
 
-1. Copies sources into `build/` (originals are never modified).
+1. Copies sources into a temporary build directory (originals are never
+   modified).
 2. Renders embedded [diagram environments](diagrams.md) to PNG.
-3. Invokes Tectonic on the entry point declared in `project.toml`.
+3. Invokes Tectonic on the entry point declared in `project.toml` and
+   places the resulting PDF (named after the document title) in the
+   project root.
 
 On the first run texforge downloads the Tectonic binary into
 `~/.texforge/bin/` automatically.

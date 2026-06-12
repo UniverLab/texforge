@@ -157,9 +157,9 @@ sequenceDiagram
 
     User->>CLI: texforge build
     Note over CLI: render embedded diagrams to PNG
-    CLI->>Tectonic: compile build/main.tex
+    CLI->>Tectonic: compile entry .tex
     Note over CLI,Tectonic: auto-installs tectonic on first run
-    Tectonic-->>User: build/main.pdf
+    Tectonic-->>User: my-doc.pdf
 ```
 
 ## `texforge init`
@@ -248,7 +248,7 @@ Templates are managed through the [texforge-templates](https://github.com/Univer
 
 ## Diagrams
 
-`texforge build` intercepts embedded diagram environments before compilation. Originals are never modified — diagrams are rendered in `build/` copies.
+`texforge build` intercepts embedded diagram environments before compilation. Originals are never modified — diagrams are rendered in temporary build copies.
 
 ### Mermaid
 
