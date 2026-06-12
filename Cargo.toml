@@ -60,6 +60,9 @@ resvg = "0.46"
 # Graphviz/DOT diagram rendering
 layout-rs = "0.1"
 
+# D2 diagram rendering (pure-Rust port of the d2lang pipeline, MPL-2.0)
+d2-little = "0.7.2"
+
 # Temporary directories for build
 tempfile = "3.8"
 

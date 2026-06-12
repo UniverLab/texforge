@@ -52,6 +52,10 @@ fn render_diagrams(content: &str, diagrams_dir: &Path) -> Result<String> {
         let svg = render_graphviz(src)?;
         svg_to_png(&svg).context("Failed to convert graphviz SVG to PNG")
     })?;
+    let content = render_env(&content, "d2", diagrams_dir, |src| {
+        let svg = render_d2(src)?;
+        svg_to_png(&svg).context("Failed to convert D2 SVG to PNG")
+    })?;
     Ok(content)
 }
 
@@ -214,6 +218,12 @@ fn render_graphviz(src: &str) -> Result<String> {
     Ok(svg.finalize())
 }
 
+/// Render a D2 diagram to SVG using d2-little (pure Rust port of the d2lang pipeline).
+fn render_d2(src: &str) -> Result<String> {
+    let svg = d2_little::d2_to_svg(src).map_err(|e| anyhow::anyhow!("D2 render error: {}", e))?;
+    String::from_utf8(svg).context("D2 produced non-UTF8 SVG")
+}
+
 /// Parse `[key=val, key2=val2]` into a map. Returns `(map, rest_of_str)`.
 pub(crate) fn parse_opts(s: &str) -> (HashMap<String, String>, &str) {
     let s = s.trim_start_matches('\n').trim_start_matches('\r');
@@ -341,6 +351,11 @@ fn configure_font_families(db: &mut resvg::usvg::fontdb::Database) {
 }
 
 /// Configure sans-serif font family.
+///
+/// D2 diagrams reference embedded font-family names that never resolve directly,
+/// so their text relies entirely on this sans-serif fallback. If none of the
+/// preferred fonts exist, fall back to any available family so text never
+/// silently disappears on minimal systems.
 fn configure_sans_serif_family(
     db: &mut resvg::usvg::fontdb::Database,
     available: &std::collections::HashSet<String>,
@@ -348,6 +363,8 @@ fn configure_sans_serif_family(
     let sans = ["Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"];
     if let Some(f) = sans.iter().find(|n| available.contains(**n)) {
         db.set_sans_serif_family(*f);
+    } else if let Some(any) = available.iter().next() {
+        db.set_sans_serif_family(any.clone());
     }
 }
 
@@ -511,6 +528,28 @@ mod tests {
             "expected SVG output, got: {}",
             &svg[..100.min(svg.len())]
         );
+    }
+
+    #[test]
+    fn render_d2_produces_svg() {
+        let svg = render_d2("a -> b -> c").unwrap();
+        assert!(
+            svg.contains("<svg"),
+            "expected SVG output, got: {}",
+            &svg[..100.min(svg.len())]
+        );
+    }
+
+    #[test]
+    fn render_d2_to_png_via_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{d2}[caption=Flow]\nx -> y: go\n\\end{d2}";
+        let out = render_diagrams(content, dir.path()).unwrap();
+        assert!(out.contains("\\includegraphics"));
+        assert!(out.contains("\\caption{Flow}"));
+        // exactly one cached PNG written
+        let pngs = std::fs::read_dir(dir.path()).unwrap().count();
+        assert_eq!(pngs, 1);
     }
 
     #[test]
