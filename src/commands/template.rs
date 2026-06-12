@@ -4,8 +4,9 @@ use anyhow::Result;
 
 use crate::templates;
 
-/// List available templates.
-pub fn list(all: bool) -> Result<()> {
+/// List available templates. By default also queries the remote registry;
+/// pass `include_remote = false` (via `--local`) to list only installed ones.
+pub fn list(include_remote: bool) -> Result<()> {
     let cached = templates::list_cached()?;
     let installed: std::collections::HashSet<&str> = cached.iter().map(String::as_str).collect();
 
@@ -15,7 +16,7 @@ pub fn list(all: bool) -> Result<()> {
         println!("  - {}", name);
     }
 
-    if all {
+    if include_remote {
         print!("\nFetching remote registry...");
         match templates::list_remote() {
             Ok(remote) => {
