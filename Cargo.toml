@@ -33,8 +33,17 @@ walkdir = "2.5"
 # Home directory resolution
 dirs = "6.0"
 
-# HTTP client (template downloads)
-reqwest = { version = "0.13", features = ["blocking", "json"] }
+# HTTP client (template downloads). rustls with the `ring` provider instead of
+# the default `aws-lc-rs`: ring is pure-Rust+portable asm and cross-compiles
+# cleanly to Windows/musl without a C toolchain (aws-lc-sys needs clang/NASM).
+reqwest = { version = "0.13", default-features = false, features = [
+    "blocking",
+    "json",
+    "http2",
+    "charset",
+    "rustls-no-provider",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 # Archive extraction (GitHub tarballs + tectonic zip on Windows)
 flate2 = "1.1"
@@ -51,7 +60,7 @@ resvg = "0.46"
 # Graphviz/DOT diagram rendering
 layout-rs = "0.1"
 
-[dev-dependencies]
+# Temporary directories for build
 tempfile = "3.8"
 
 [lints.clippy]

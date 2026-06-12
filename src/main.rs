@@ -24,6 +24,10 @@ use clap::Parser;
 use cli::Cli;
 
 fn main() -> Result<()> {
+    // reqwest is built with `rustls-no-provider`, so install the ring crypto
+    // provider as the process default before any HTTPS request is made.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
     cli.execute()
 }
