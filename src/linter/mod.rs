@@ -82,6 +82,7 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         check_environments(&rel, &content, &mut errors);
         check_diagram_blocks(&rel, &content, "mermaid", &mut errors);
         check_diagram_blocks(&rel, &content, "graphviz", &mut errors);
+        check_diagram_blocks(&rel, &content, "d2", &mut errors);
     }
 
     Ok(errors)
@@ -621,5 +622,19 @@ mod tests {
         let (dir, entry) = setup("\\begin{graphviz}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(has_error(&errors, "without matching \\end{graphviz}"));
+    }
+
+    #[test]
+    fn d2_invalid_pos_is_error() {
+        let (dir, entry) = setup("\\begin{d2}[pos=Z]\n\\end{d2}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(has_error(&errors, "invalid pos"));
+    }
+
+    #[test]
+    fn d2_without_end_is_error() {
+        let (dir, entry) = setup("\\begin{d2}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(has_error(&errors, "without matching \\end{d2}"));
     }
 }
