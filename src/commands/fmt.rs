@@ -45,12 +45,7 @@ pub fn execute(check: bool) -> Result<()> {
 }
 
 /// Format a single file, returning 1 if it needed formatting (else 0).
-fn format_one(
-    file: &Path,
-    root: &Path,
-    check: bool,
-    fmt: fn(&str) -> String,
-) -> Result<usize> {
+fn format_one(file: &Path, root: &Path, check: bool, fmt: fn(&str) -> String) -> Result<usize> {
     let content = std::fs::read_to_string(file)?;
     let formatted = fmt(&content);
 

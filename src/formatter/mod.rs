@@ -84,9 +84,7 @@ fn leading_dedent(line: &str) -> usize {
     if line.starts_with("\\end{") {
         return 1;
     }
-    line.chars()
-        .take_while(|&c| c == '}' || c == ']')
-        .count()
+    line.chars().take_while(|&c| c == '}' || c == ']').count()
 }
 
 /// Net nesting change a line contributes: `\begin`/`\end` plus the balance of
@@ -402,10 +400,7 @@ mod tests {
     fn multiline_brace_argument_indents() {
         let src = "\\hypersetup{\npdftitle={X},\ncolorlinks\n}";
         let out = format(src);
-        assert_eq!(
-            out,
-            "\\hypersetup{\n  pdftitle={X},\n  colorlinks\n}\n"
-        );
+        assert_eq!(out, "\\hypersetup{\n  pdftitle={X},\n  colorlinks\n}\n");
     }
 
     #[test]
@@ -439,10 +434,7 @@ mod tests {
     fn verbatim_content_preserved() {
         let src = "\\begin{verbatim}\n  raw   content\n\\end{verbatim}";
         let out = format(src);
-        assert_eq!(
-            out,
-            "\\begin{verbatim}\n  raw   content\n\\end{verbatim}\n"
-        );
+        assert_eq!(out, "\\begin{verbatim}\n  raw   content\n\\end{verbatim}\n");
     }
 
     #[test]
