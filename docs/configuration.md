@@ -45,20 +45,20 @@ Every texforge project has a `project.toml` at its root. It is generated
 by `texforge new` / `texforge init`:
 
 ```toml
-[documento]
-titulo = "My Thesis"
-autor = "Ada Lovelace"
+[document]
+title = "My Thesis"
+author = "Ada Lovelace"
 template = "general"
 
-[compilacion]
+[build]
 entry = "main.tex"
-# bibliografia = "references.bib"   # optional
+# bibliography = "references.bib"   # optional
 ```
 
 | Key | Description |
 |---|---|
-| `documento.titulo` | Document title |
-| `documento.autor` | Document author |
-| `documento.template` | Template the project was created from |
-| `compilacion.entry` | Entry `.tex` file passed to the engine |
-| `compilacion.bibliografia` | Optional `.bib` file used by the linter |
+| `document.title` | Document title |
+| `document.author` | Document author |
+| `document.template` | Template the project was created from |
+| `build.entry` | Entry `.tex` file passed to the engine |
+| `build.bibliography` | Optional `.bib` file used by the linter |

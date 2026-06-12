@@ -8,7 +8,7 @@ use crate::utils::sanitize_filename;
 /// Remove generated PDF files and the legacy build/ directory from the project root.
 pub fn execute() -> Result<()> {
     let project = Project::load()?;
-    let titulo = &project.config.documento.titulo;
+    let titulo = &project.config.document.title;
     let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
     let pdf_path = project.root.join(&pdf_name);
     let legacy_build = project.root.join("build");

@@ -16,24 +16,24 @@ use crate::utils::sanitize_filename;
 /// Compile project to PDF using a temp directory, output named after the document title.
 pub fn execute() -> Result<()> {
     let project = Project::load()?;
-    let titulo = &project.config.documento.titulo;
+    let titulo = &project.config.document.title;
     println!("Building project: {titulo}");
 
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path();
     println!("  ◇ temp: {}", build_dir.display());
 
-    diagrams::process(&project.root, &project.config.compilacion.entry, build_dir)?;
-    let entry_filename = Path::new(&project.config.compilacion.entry)
+    diagrams::process(&project.root, &project.config.build.entry, build_dir)?;
+    let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| project.config.compilacion.entry.clone());
+        .unwrap_or_else(|| project.config.build.entry.clone());
     compiler::compile(build_dir, &entry_filename)?;
 
     let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
     let pdf_dest = project.root.join(&pdf_name);
     let pdf_src = build_dir.join(
-        Path::new(&project.config.compilacion.entry)
+        Path::new(&project.config.build.entry)
             .with_extension("pdf")
             .file_name()
             .unwrap(),
@@ -50,7 +50,7 @@ pub fn watch(delay_secs: u64) -> Result<()> {
     let debounce = Duration::from_secs(delay_secs);
     let cooldown = Duration::from_secs(2);
 
-    print_watch_header(&project.config.documento.titulo, delay_secs);
+    print_watch_header(&project.config.document.title, delay_secs);
 
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path().to_path_buf();
@@ -141,22 +141,22 @@ enum WatchResult {
 
 fn run_build(project: &Project, build_dir: &Path) -> WatchResult {
     let _ = std::fs::create_dir_all(build_dir);
-    if let Err(e) = diagrams::process(&project.root, &project.config.compilacion.entry, build_dir) {
+    if let Err(e) = diagrams::process(&project.root, &project.config.build.entry, build_dir) {
         return WatchResult::Err(e.to_string());
     }
-    let entry_filename = Path::new(&project.config.compilacion.entry)
+    let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| project.config.compilacion.entry.clone());
+        .unwrap_or_else(|| project.config.build.entry.clone());
     match compiler::compile(build_dir, &entry_filename) {
         Ok(()) => {
             let pdf_name = format!(
                 "{}.pdf",
-                sanitize_filename(&project.config.documento.titulo)
+                sanitize_filename(&project.config.document.title)
             );
             let pdf_dest = project.root.join(&pdf_name);
             let pdf_src = build_dir.join(
-                Path::new(&project.config.compilacion.entry)
+                Path::new(&project.config.build.entry)
                     .with_extension("pdf")
                     .file_name()
                     .unwrap(),

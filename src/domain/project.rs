@@ -8,22 +8,22 @@ use serde::{Deserialize, Serialize};
 /// Project configuration from project.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
-    pub documento: DocumentoConfig,
-    pub compilacion: CompilacionConfig,
+    pub document: DocumentConfig,
+    pub build: BuildConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DocumentoConfig {
-    pub titulo: String,
-    pub autor: String,
+pub struct DocumentConfig {
+    pub title: String,
+    pub author: String,
     pub template: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompilacionConfig {
+pub struct BuildConfig {
     pub entry: String,
     #[serde(default)]
-    pub bibliografia: Option<String>,
+    pub bibliography: Option<String>,
 }
 
 /// Represents a `TexForge` project.
