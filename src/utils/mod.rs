@@ -46,6 +46,28 @@ pub fn find_tex_files(root: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
     Ok(files)
 }
 
+/// Find all `.bib` files under `root` (excluding the legacy `build/` dir).
+pub fn find_bib_files(root: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let mut files = Vec::new();
+    let build_dir = root.join("build");
+
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.starts_with(&build_dir) {
+            continue;
+        }
+        if entry.file_type().is_file() && path.extension().is_some_and(|ext| ext == "bib") {
+            files.push(path.to_path_buf());
+        }
+    }
+
+    Ok(files)
+}
+
 /// Sanitize a document title into a valid filename (lowercase, alphanumeric + hyphens).
 pub fn sanitize_filename(title: &str) -> String {
     title
