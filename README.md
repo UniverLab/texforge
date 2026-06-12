@@ -128,6 +128,11 @@ texforge new mi-tesis
 texforge build
 ```
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/): installation, quick start,
+building, diagrams, templates, configuration and the complete CLI reference.
+
 ## Workflow
 
 ```mermaid
@@ -193,8 +198,8 @@ texforge init
 | `texforge config list` | Show all configured values |
 | `texforge config <key>` | Show value for key (name, email, institution, language) |
 | `texforge config <key> <value>` | Set value for key |
-| `texforge template list` | List installed templates |
-| `texforge template list --all` | List installed + available in registry |
+| `texforge template list` | List installed + available in registry |
+| `texforge template list --installed` | List only locally installed templates |
 | `texforge template add <name>` | Download template from registry |
 | `texforge template remove <name>` | Remove installed template |
 | `texforge template validate <name>` | Verify template compatibility |
@@ -385,4 +390,5 @@ MIT
 
 ---
 
-Made with ❤️ by [JheisonMB](https://github.com/JheisonMB) and [UniverLab](https://github.com/UniverLab)
+An experiment of [UniverLab](https://github.com/UniverLab) — an open computational laboratory.
+Made with ❤️ by [JheisonMB](https://github.com/JheisonMB)
