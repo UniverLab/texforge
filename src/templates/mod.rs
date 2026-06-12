@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 
 use crate::utils;
 
-const REGISTRY_REPO: &str = "JheisonMB/texforge-templates";
+const REGISTRY_REPO: &str = "UniverLab/texforge-templates";
 
 /// Embedded files for the "general" template (fallback when offline).
 const GENERAL_TEMPLATE_TOML: &str = include_str!("general/template.toml");
@@ -119,7 +119,7 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
         let mut entry = entry?;
         let path = entry.path()?.to_string_lossy().to_string();
 
-        // GitHub tarballs have a root dir like "JheisonMB-texforge-templates-abc1234/"
+        // GitHub tarballs have a root dir like "UniverLab-texforge-templates-abc1234/"
         // We need to find entries under "<root>/<template_name>/..."
         let Some(after_root) = path.split_once('/').map(|x| x.1) else {
             continue;

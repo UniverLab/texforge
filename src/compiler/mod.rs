@@ -132,8 +132,8 @@ fn locate_tectonic() -> Option<std::path::PathBuf> {
 
     // Check known locations
     [
-        dirs::home_dir().map(|h| h.join(".texforge/bin/tectonic")),
-        dirs::home_dir().map(|h| h.join(".cargo/bin/tectonic")),
+        tectonic_managed_path().ok(),
+        dirs::home_dir().map(|h| h.join(".cargo/bin").join(TECTONIC_BIN)),
         Some("/usr/local/bin/tectonic".into()),
         Some("/opt/homebrew/bin/tectonic".into()),
     ]
@@ -142,9 +142,15 @@ fn locate_tectonic() -> Option<std::path::PathBuf> {
     .find(|p| p.exists())
 }
 
+/// Tectonic binary filename — Windows requires the .exe extension to execute it.
+#[cfg(windows)]
+const TECTONIC_BIN: &str = "tectonic.exe";
+#[cfg(not(windows))]
+const TECTONIC_BIN: &str = "tectonic";
+
 fn tectonic_managed_path() -> Result<std::path::PathBuf> {
     dirs::home_dir()
-        .map(|h| h.join(".texforge/bin/tectonic"))
+        .map(|h| h.join(".texforge").join("bin").join(TECTONIC_BIN))
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
 }
 
