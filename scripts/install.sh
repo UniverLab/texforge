@@ -97,7 +97,29 @@ if [ -n "$PATHS_TO_ADD" ]; then
 fi
 
 # ============================================================
-# 3. Verify
+# 3. Install the texforge agent skill (optional)
+# ============================================================
+# Teaches AI agents how to drive texforge. Skipped when npx is unavailable or
+# SKIP_SKILL is set; a failure here never fails the binary install above.
+
+SKILL="texforge"
+SKILLS_REPO="https://github.com/UniverLab/skills"
+
+if [ -n "${SKIP_SKILL:-}" ]; then
+  info "skill" "skipped (SKIP_SKILL set)"
+elif command -v npx >/dev/null 2>&1; then
+  info "skill" "adding '$SKILL' (npx skills add)"
+  if npx -y skills add "$SKILLS_REPO" --skill "$SKILL" </dev/null; then
+    info "skill" "installed"
+  else
+    info "skill" "skipped — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
+  fi
+else
+  info "skill" "npx not found — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
+fi
+
+# ============================================================
+# 4. Verify
 # ============================================================
 
 info "done" "$($INSTALL_DIR/$BINARY --version 2>/dev/null || echo "$BINARY installed")"
