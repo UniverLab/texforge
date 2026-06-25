@@ -1,0 +1,117 @@
+[demo]
+name = "demo"
+output_dir = "./dist"
+prompt = '\[\e[1;32m\]texforge@demo\[\e[0m\]:\[\e[1;34m\]~\[\e[0m\]$ '
+
+[typing]
+base_ms = 80
+salt_ms = 15
+
+[layout]
+width = 1030
+height = 1000
+fps = 15
+line_height = 1.2000000476837158
+background = "#0b0f14"
+
+[[layout.panes]]
+id = "main"
+type = "terminal"
+x = 0
+y = 0
+width = 1030
+height = 1000
+font_family = "monospace"
+font_size = 16
+
+[[timeline]]
+action = "focus"
+pane = "main"
+
+[[timeline]]
+action = "type"
+text = "opencode"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 993
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2500
+
+[[timeline]]
+action = "type"
+text = "/mode"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 1134
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2500
+
+[[timeline]]
+action = "type"
+text = "free"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 1387
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1465
+
+[[timeline]]
+action = "type"
+text = "hola"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 475
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2500
+
+[[timeline]]
+action = "type"
+text = "/exit"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 2341
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1500
+
+[[timeline]]
+action = "terminate"
