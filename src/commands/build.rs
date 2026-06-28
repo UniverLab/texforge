@@ -150,10 +150,7 @@ fn run_build(project: &Project, build_dir: &Path) -> WatchResult {
         .unwrap_or_else(|| project.config.build.entry.clone());
     match compiler::compile(build_dir, &entry_filename) {
         Ok(()) => {
-            let pdf_name = format!(
-                "{}.pdf",
-                sanitize_filename(&project.config.document.title)
-            );
+            let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
             let pdf_dest = project.root.join(&pdf_name);
             let pdf_src = build_dir.join(
                 Path::new(&project.config.build.entry)

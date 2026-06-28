@@ -57,26 +57,9 @@ fn parse_errors(raw: &str) -> Vec<CompileError> {
         let trimmed = line.trim();
 
         if let Some(rest) = trimmed.strip_prefix("error:") {
-            let rest = rest.trim();
-            if let Some((loc, msg)) = rest.split_once(": ") {
-                if let Some((file, line_str)) = loc.rsplit_once(':') {
-                    if let Ok(line_num) = line_str.parse::<usize>() {
-                        errors.push(CompileError {
-                            file: file.trim().to_string(),
-                            line: line_num,
-                            message: msg.trim().to_string(),
-                        });
-                        continue;
-                    }
-                }
-            }
-            errors.push(CompileError {
-                file: String::new(),
-                line: 0,
-                message: rest.to_string(),
-            });
+            parse_tectonic_error(rest, &mut errors);
+            continue;
         }
-
         if let Some(msg) = trimmed.strip_prefix("! ") {
             errors.push(CompileError {
                 file: String::new(),
@@ -95,6 +78,27 @@ fn parse_errors(raw: &str) -> Vec<CompileError> {
     }
 
     errors
+}
+
+fn parse_tectonic_error(rest: &str, errors: &mut Vec<CompileError>) {
+    let rest = rest.trim();
+    if let Some((loc, msg)) = rest.split_once(": ") {
+        if let Some((file, line_str)) = loc.rsplit_once(':') {
+            if let Ok(line_num) = line_str.parse::<usize>() {
+                errors.push(CompileError {
+                    file: file.trim().to_string(),
+                    line: line_num,
+                    message: msg.trim().to_string(),
+                });
+                return;
+            }
+        }
+    }
+    errors.push(CompileError {
+        file: String::new(),
+        line: 0,
+        message: rest.to_string(),
+    });
 }
 
 /// Find the tectonic binary in PATH or known locations, auto-installing if needed.
