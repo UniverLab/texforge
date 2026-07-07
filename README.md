@@ -23,12 +23,6 @@ Texforge is a unified LaTeX workspace — one tool for writing, rendering diagra
 
 ---
 
-### Demo CLI
-
-![Demo CLI](assets/texforge.gif)
-
----
-
 ## Features
 
 - **🚀 One-command setup** — Install once, everything is included (LaTeX engine, templates, diagram renderers).
@@ -39,6 +33,12 @@ Texforge is a unified LaTeX workspace — one tool for writing, rendering diagra
 - **🧭 Smart linting** — Catch missing files, broken references, bibliography keys, and unclosed environments before build.
 - **✨ Format on demand** — Normalize `.tex` files with an opinionated formatter (including `--check` mode).
 - **🔄 Placeholders and config** — Reuse project details from configuration without retyping.
+
+---
+
+### Demo with OpenCode 
+
+![Demo OpenCode](demo/dist/demo.gif)
 
 ---
 
@@ -112,10 +112,6 @@ If you want Copilot to understand texforge and help with common LaTeX tasks, ins
 ```bash
 npx skills add https://github.com/jheisonmb/skills --skill texforge
 ```
-
-### Demo with OpenCode agents
-
-![Demo OpenCode](assets/opencode.gif)
 
 ## Quick Start
 
