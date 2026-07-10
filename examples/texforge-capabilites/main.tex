@@ -1,0 +1,304 @@
+% General Article Template — Texforge Capabilities Demo
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+
+\pagestyle{fancy}
+\fancyhf{}
+\cfoot{\thepage}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10}
+}
+
+\title{Demostración de Capacidades de Texforge}
+\author{Jheison M}
+\date{\today}
+
+\begin{document}
+
+  \maketitle
+
+  \begin{abstract}
+    Este documento demuestra las capacidades principales de \textbf{texforge},
+    un compilador LaTeX que utiliza tectonic como motor interno, eliminando la
+    necesidad de instalar TeX Live o MiKTeX. Se presentan diagramas embebidos
+    (Mermaid, Graphviz y D2), citas bibliográficas, referencias cruzadas,
+    matemáticas, listados de código, tablas y más.
+  \end{abstract}
+
+  \tableofcontents
+  \newpage
+
+  % -------------------------------------------------------
+  \section{Introducción}\label{sec:intro}
+
+  Texforge simplifica el flujo de trabajo académico al compilar documentos
+  LaTeX directamente a PDF sin distribuciones externas~\cite{example}. En
+  esta sección se describen los antecedentes y motivaciones del proyecto.
+
+  \subsection{Antecedentes}
+
+  La edición de documentos académicos en \LaTeX{} requiere tradicionalmente
+  instalaciones pesadas como TeX Live o MiKTeX. Texforge elimina esa
+  barrera~\cite{example2}, ofreciendo una experiencia de línea de comandos
+  ligera y moderna.
+
+  \subsection{Objetivos}
+
+  Los objetivos de este documento son:
+
+  \begin{enumerate}[label=(\roman*)]
+    \item Demostrar diagramas embebidos en tres formatos distintos.
+    \item Mostrar la integración bibliográfica con BibTeX.
+    \item Ejemplificar referencias cruzadas entre secciones.
+    \item Presentar ecuaciones matemáticas complejas.
+    \item Incluir listados de código fuente.
+  \end{enumerate}
+
+  % -------------------------------------------------------
+  \section{Diagramas Embebidos}\label{sec:diagramas}
+
+  Texforge renderiza diagramas directamente desde el código fuente LaTeX
+  sin herramientas externas como Inkscape o Node.js.
+
+  \subsection{Mermaid}
+
+  El siguiente diagrama de secuencia muestra la interacción entre los
+  componentes de Texforge:
+
+  \begin{mermaid}[caption=Secuencia de compilación de Texforge, height=10cm, pos=t]
+    sequenceDiagram
+    actor User as Usuario
+    participant CLI as texforge
+    participant PRE as Pre-procesador
+    participant TEC as tectonic
+
+    User->>CLI: texforge build
+    CLI->>PRE: parsea .tex y detecta diagramas
+    loop Diagramas embebidos
+    PRE->>CLI: Mermaid / Graphviz / D2
+    CLI-->>PRE: imagen PNG generada
+    end
+    CLI->>TEC: main.tex + imágenes
+    TEC-->>User: PDF final
+  \end{mermaid}
+
+  \subsection{Graphviz / DOT}
+
+  También se pueden crear diagramas directed-Graph con Graphviz:
+
+  \begin{graphviz}[caption=Arquitectura de Texforge, width=0.8\linewidth, pos=t]
+    digraph G {
+      rankdir=LR
+      node [shape=box style="rounded,filled" fillcolor="#E8F4FD"]
+
+      CLI [label="CLI\ntexforge"]
+      Parser [label="Parser\nLaTeX"]
+      MermaidEngine [label="Mermaid\nRenderer"]
+      GraphvizEngine [label="Graphviz\nRenderer"]
+      D2Engine [label="D2\nRenderer"]
+      Tectonic [label="tectonic\nEngine"]
+      PDF [label="Output\nPDF"]
+
+      CLI -> Parser
+      Parser -> MermaidEngine
+      Parser -> GraphvizEngine
+      Parser -> D2Engine
+      MermaidEngine -> Tectonic
+      GraphvizEngine -> Tectonic
+      D2Engine -> Tectonic
+      Tectonic -> PDF
+    }
+  \end{graphviz}
+
+  \subsection{D2}
+
+  El diagrama D2 es otro formato soportado nativamente:
+
+  \begin{d2}[caption=Pipeline de renderizado, height=14cm, pos=t]
+    source: "Código LaTeX" {
+      shape: document
+    }
+    preprocessor: "Pre-procesador" {
+      shape: hexagon
+    }
+    engines: "Engines de diagramas" {
+      shape: package
+    }
+    pdf: "PDF final" {
+      shape: page
+    }
+
+    source -> preprocessor: "lex & parse"
+    preprocessor -> engines: "diagramas detectados"
+    engines -> pdf: "tectonic"
+  \end{d2}
+
+  % -------------------------------------------------------
+  \section{Matemáticas}\label{sec:matematicas}
+
+  \subsection{Ecuaciones en línea}
+
+  La fórmula cuadrática se expresa como $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$.
+
+  \subsection{Ecuaciones numeradas}
+
+  \begin{equation}\label{eq:gauss}
+    \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+  \end{equation}
+
+  \begin{equation}\label{eq:euler}
+    e^{i\pi} + 1 = 0
+  \end{equation}
+
+  Como se demostró en la Ecuación~\ref{eq:gauss}, la integral de Gauss
+  tiene un valor exacto conocido.
+
+  \subsection{Matrices}
+
+  \begin{equation}\label{eq:matriz}
+    \mathbf{A} = \begin{pmatrix}
+      a_{11} & a_{12} & \cdots & a_{1n} \\
+      a_{21} & a_{22} & \cdots & a_{2n} \\
+      \vdots & \vdots & \ddots & \vdots \\
+      a_{n1} & a_{n2} & \cdots & a_{nn}
+    \end{pmatrix}
+  \end{equation}
+
+  % -------------------------------------------------------
+  \section{Citas Bibliográficas}\label{sec:bib}
+
+  Texforge gestiona automáticamente las referencias BibTeX. A continuación
+  se presentan tres tipos de cita:
+
+  \begin{itemize}
+    \item Artículos de revista~\cite{example}
+    \item Libros~\cite{example2}
+    \item Recursos en línea~\cite{example3}
+  \end{itemize}
+
+  La sección~\ref{sec:matematicas} muestra el uso de referencias cruzadas,
+  mientras que la sección~\ref{sec:diagramas} describe los formatos de
+  diagramas disponibles.
+
+  % -------------------------------------------------------
+  \section{Listados de Código}\label{sec:codigo}
+
+  \subsection{Python}
+
+  \begin{lstlisting}[language=Python, caption={Ejemplo de función en Python}]
+import numpy as np
+
+def integrar_gauss(n_puntos=1000):
+    """Aproxima la integral de Gauss por cuadratura."""
+    x = np.linspace(-10, 10, n_puntos)
+    dx = x[1] - x[0]
+    y = np.exp(-x**2)
+    return np.sum(y) * dx
+
+if __name__ == "__main__":
+    resultado = integrar_gauss()
+    print(f"Integral ≈ {resultado:.6f}")
+  \end{lstlisting}
+
+  \subsection{LaTeX}
+
+  \begin{lstlisting}[language={[LaTeX]TeX}, caption={Estructura básica de Texforge}]
+\documentclass{article}
+\usepackage{graphicx}
+
+\begin{document}
+\maketitle
+
+\begin{mermaid}
+flowchart LR
+  A --> B --> C
+\end{mermaid}
+
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}
+  \end{lstlisting}
+
+  % -------------------------------------------------------
+  \section{Tablas}\label{sec:tablas}
+
+  \begin{table}[H]
+    \centering
+    \caption{Comparación de motores de renderizado de diagramas}
+    \label{tab:motores}
+    \begin{tabular}{@{}llcc@{}}
+      \toprule
+      \textbf{Formato} & \textbf{Motor} & \textbf{Externo?} & \textbf{Velocidad} \\
+      \midrule
+      Mermaid    & Rust puro         & No  & Rápido   \\
+      Graphviz   & layout-rs         & No  & Rápido   \\
+      D2         & d2-little         & No  & Rápido   \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  Como se muestra en la Tabla~\ref{tab:motores}, todos los motores son
+  embebidos y no requieren binarios externos.
+
+  % -------------------------------------------------------
+  \section{Comandos de Texforge}\label{sec:comandos}
+
+  \begin{table}[H]
+    \centering
+    \caption{Resumen de comandos principales}
+    \label{tab:comandos}
+    \begin{tabular}{@{}lp{8cm}@{}}
+      \toprule
+      \textbf{Comando} & \textbf{Descripción} \\
+      \midrule
+      \texttt{texforge new}    & Crea un proyecto nuevo con un template. \\
+      \texttt{texforge init}   & Wizard interactivo para proyectos existentes. \\
+      \texttt{texforge build}  & Compila \texttt{main.tex} a PDF en \texttt{build/}. \\
+      \texttt{texforge check}  & Linter estático: valida archivos, citas y labels. \\
+      \texttt{texforge fmt}    & Formatea archivos \texttt{.tex}. \\
+      \texttt{texforge clean}  & Elimina el directorio \texttt{build/}. \\
+      \texttt{texforge template} & Gestiona templates instalados o remotos. \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  % -------------------------------------------------------
+  \section{Conclusión}\label{sec:conclusion}
+
+  Texforge demuestra ser una herramienta completa para la edición de
+  documentos académicos en \LaTeX{}. Sus ventajas principales son:
+
+  \begin{itemize}
+    \item \textbf{Sin dependencias externas:} no requiere TeX Live ni MiKTeX.
+    \item \textbf{Diagramas embebidos:} Mermaid, Graphviz y D2 renderizados en Rust puro.
+    \item \textbf{Linter integrado:} detección temprana de errores con \texttt{texforge check}.
+    \item \textbf{Templates:} soporte para APA, IEEE, cartas y documentos generales.
+  \end{itemize}
+
+  Como se demostró en este documento, la combinación de diagramas
+  (Sección~\ref{sec:diagramas}), ecuaciones (Sección~\ref{sec:matematicas}),
+  citas (Sección~\ref{sec:bib}) y código (Sección~\ref{sec:codigo}) permite
+  crear publicaciones académicas de alta calidad con un mínimo esfuerzo.
+
+  \bibliographystyle{plain}
+  \bibliography{bib/references}
+
+\end{document}

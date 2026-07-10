@@ -434,28 +434,33 @@ fn check_diagram_pos_option(
 ) {
     const VALID_POS: &[&str] = &["H", "t", "b", "h", "p"];
 
-    if let Some(opts_start) = line.find('[') {
-        if let Some(opts_end) = line.find(']') {
-            let opts = &line[opts_start + 1..opts_end];
-            for part in opts.split(',') {
-                if let Some((k, v)) = part.split_once('=') {
-                    if k.trim() == "pos" {
-                        let pos = v.trim();
-                        if !VALID_POS.contains(&pos) {
-                            errors.push(LintError {
-                                file: rel.to_string(),
-                                line: line_num,
-                                message: format!(
-                                    "\\begin{{{}}} invalid pos='{}' — valid values: H, t, b, h, p",
-                                    env, pos
-                                ),
-                                suggestion: Some("Use pos=H, pos=t, pos=b, pos=h, or pos=p".into()),
-                            });
-                        }
-                    }
-                }
-            }
+    let Some(opts_start) = line.find('[') else {
+        return;
+    };
+    let Some(opts_end) = line.find(']') else {
+        return;
+    };
+    let opts = &line[opts_start + 1..opts_end];
+    for part in opts.split(',') {
+        let Some((k, v)) = part.split_once('=') else {
+            continue;
+        };
+        if k.trim() != "pos" {
+            continue;
         }
+        let pos = v.trim();
+        if VALID_POS.contains(&pos) {
+            continue;
+        }
+        errors.push(LintError {
+            file: rel.to_string(),
+            line: line_num,
+            message: format!(
+                "\\begin{{{}}} invalid pos='{}' — valid values: H, t, b, h, p",
+                env, pos
+            ),
+            suggestion: Some("Use pos=H, pos=t, pos=b, pos=h, or pos=p".into()),
+        });
     }
 }
 
@@ -501,24 +506,28 @@ fn extract_inputminted_files(line: &str) -> Vec<&str> {
 
 /// Parse `@type{key, ...}` entries from a .bib file.
 fn parse_bib_keys(path: &Path) -> HashSet<String> {
-    let mut keys = HashSet::new();
     let Ok(content) = std::fs::read_to_string(path) else {
-        return keys;
+        return HashSet::new();
     };
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('@') && !trimmed.starts_with("@comment") {
-            if let Some(start) = trimmed.find('{') {
-                if let Some(end) = trimmed[start..].find(',') {
-                    let key = trimmed[start + 1..start + end].trim();
-                    if !key.is_empty() {
-                        keys.insert(key.to_string());
-                    }
-                }
+    content
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            t.starts_with('@') && !t.starts_with("@comment")
+        })
+        .filter_map(|line| {
+            let t = line.trim();
+            let start = t.find('{')?;
+            let rest = &t[start + 1..];
+            let end = rest.find(',')?;
+            let key = rest[..end].trim();
+            if key.is_empty() {
+                None
+            } else {
+                Some(key.to_string())
             }
-        }
-    }
-    keys
+        })
+        .collect()
 }
 
 #[cfg(test)]
