@@ -55,6 +55,26 @@ try {
     Fail "Download failed: $_`nURL: $Url"
 }
 
+# --- verify checksum ---
+# Match against SHA256SUMS.txt from the same release. Missing sums file (older
+# releases) -> skip; a present-but-mismatched checksum is fatal.
+$SumsUrl = "https://github.com/$Repo/releases/download/$Tag/SHA256SUMS.txt"
+$SumsOk  = $false
+try {
+    Invoke-WebRequest -Uri $SumsUrl -OutFile "$Tmp\SHA256SUMS.txt" -UseBasicParsing
+    $SumsOk = $true
+} catch {
+    Info "checksum" "SHA256SUMS.txt not found for $Tag - skipping verification"
+}
+if ($SumsOk) {
+    $line = Select-String -Path "$Tmp\SHA256SUMS.txt" -Pattern ([regex]::Escape($Archive)) | Select-Object -First 1
+    if (-not $line) { Fail "No checksum listed for $Archive in SHA256SUMS.txt" }
+    $expected = ($line.Line -split '\s+')[0].ToLower()
+    $actual   = (Get-FileHash "$Tmp\$Archive" -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $expected) { Fail "Checksum mismatch for $Archive (expected $expected, got $actual)" }
+    Info "checksum" "verified"
+}
+
 # --- extract ---
 Expand-Archive -Path "$Tmp\$Archive" -DestinationPath $Tmp -Force
 $extracted = Join-Path $Tmp "texforge.exe"
@@ -75,6 +95,29 @@ if ($userPath -notlike "*$InstallDir*") {
 
 # --- cleanup ---
 Remove-Item $Tmp -Recurse -Force
+
+# --- install the texforge agent skill (optional) ---
+# Teaches AI agents how to drive texforge. Skipped when npx is unavailable or
+# $env:SKIP_SKILL is set; a failure here never fails the binary install above.
+$Skill      = "texforge"
+$SkillsRepo = "https://github.com/UniverLab/skills"
+if ($env:SKIP_SKILL) {
+    Info "skill" "skipped (SKIP_SKILL set)"
+} elseif (Get-Command npx -ErrorAction SilentlyContinue) {
+    Info "skill" "adding '$Skill' (npx skills add)"
+    try {
+        & npx -y skills add $SkillsRepo --skill $Skill
+        if ($LASTEXITCODE -eq 0) {
+            Info "skill" "installed"
+        } else {
+            Info "skill" "skipped - add later with: npx skills add $SkillsRepo --skill $Skill"
+        }
+    } catch {
+        Info "skill" "skipped - add later with: npx skills add $SkillsRepo --skill $Skill"
+    }
+} else {
+    Info "skill" "npx not found - add later with: npx skills add $SkillsRepo --skill $Skill"
+}
 
 # --- verify ---
 $ver = & "$InstallDir\texforge.exe" --version 2>$null

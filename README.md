@@ -23,12 +23,6 @@ Texforge is a unified LaTeX workspace — one tool for writing, rendering diagra
 
 ---
 
-### Demo CLI
-
-![Demo CLI](assets/texforge.gif)
-
----
-
 ## Features
 
 - **🚀 One-command setup** — Install once, everything is included (LaTeX engine, templates, diagram renderers).
@@ -39,6 +33,12 @@ Texforge is a unified LaTeX workspace — one tool for writing, rendering diagra
 - **🧭 Smart linting** — Catch missing files, broken references, bibliography keys, and unclosed environments before build.
 - **✨ Format on demand** — Normalize `.tex` files with an opinionated formatter (including `--check` mode).
 - **🔄 Placeholders and config** — Reuse project details from configuration without retyping.
+
+---
+
+### Demo with OpenCode 
+
+![Demo OpenCode](demo/dist/demo.gif)
 
 ---
 
@@ -113,10 +113,6 @@ If you want Copilot to understand texforge and help with common LaTeX tasks, ins
 npx skills add https://github.com/jheisonmb/skills --skill texforge
 ```
 
-### Demo with OpenCode agents
-
-![Demo OpenCode](assets/opencode.gif)
-
 ## Quick Start
 
 ```bash
@@ -127,6 +123,11 @@ texforge init
 texforge new mi-tesis
 texforge build
 ```
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/): installation, quick start,
+building, diagrams, templates, configuration and the complete CLI reference.
 
 ## Workflow
 
@@ -152,9 +153,9 @@ sequenceDiagram
 
     User->>CLI: texforge build
     Note over CLI: render embedded diagrams to PNG
-    CLI->>Tectonic: compile build/main.tex
+    CLI->>Tectonic: compile entry .tex
     Note over CLI,Tectonic: auto-installs tectonic on first run
-    Tectonic-->>User: build/main.pdf
+    Tectonic-->>User: my-doc.pdf
 ```
 
 ## `texforge init`
@@ -193,8 +194,8 @@ texforge init
 | `texforge config list` | Show all configured values |
 | `texforge config <key>` | Show value for key (name, email, institution, language) |
 | `texforge config <key> <value>` | Set value for key |
-| `texforge template list` | List installed templates |
-| `texforge template list --all` | List installed + available in registry |
+| `texforge template list` | List installed + available in registry |
+| `texforge template list --installed` | List only locally installed templates |
 | `texforge template add <name>` | Download template from registry |
 | `texforge template remove <name>` | Remove installed template |
 | `texforge template validate <name>` | Verify template compatibility |
@@ -243,7 +244,7 @@ Templates are managed through the [texforge-templates](https://github.com/Univer
 
 ## Diagrams
 
-`texforge build` intercepts embedded diagram environments before compilation. Originals are never modified — diagrams are rendered in `build/` copies.
+`texforge build` intercepts embedded diagram environments before compilation. Originals are never modified — diagrams are rendered in temporary build copies.
 
 ### Mermaid
 
@@ -385,4 +386,5 @@ MIT
 
 ---
 
-Made with ❤️ by [JheisonMB](https://github.com/JheisonMB) and [UniverLab](https://github.com/UniverLab)
+An experiment of [UniverLab](https://github.com/UniverLab) — an open computational laboratory.
+Made with ❤️ by [JheisonMB](https://github.com/JheisonMB)

@@ -29,7 +29,10 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
 
     // Resolve any placeholders the template declares (defaults, project/user
     // config). Missing values are left as-is rather than failing generation.
-    let values = resolve_placeholder_values(&resolved.files);
+    // The project name doubles as the document title unless overridden.
+    let mut cli_args = HashMap::new();
+    cli_args.insert("title".to_string(), name.to_string());
+    let values = resolve_placeholder_values(&resolved.files, cli_args);
 
     // Create project directory and write all template files
     for (rel_path, content) in &resolved.files {
@@ -54,15 +57,16 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
     }
 
     // Generate project.toml
+    let author = values.get("author").map_or("Author", String::as_str);
     let project_toml = format!(
-        r#"[documento]
-titulo = "{name}"
-autor = "Author"
+        r#"[document]
+title = "{name}"
+author = "{author}"
 template = "{template_name}"
 
-[compilacion]
+[build]
 entry = "main.tex"
-bibliografia = "bib/references.bib"
+bibliography = "bib/references.bib"
 "#
     );
     std::fs::write(project_dir.join("project.toml"), project_toml)?;
@@ -81,7 +85,10 @@ bibliografia = "bib/references.bib"
 /// Resolve placeholder values from a template's manifest, if present.
 /// Returns an empty map for templates without a (valid) `template.toml` or
 /// without declared placeholders.
-fn resolve_placeholder_values(files: &HashMap<String, Vec<u8>>) -> HashMap<String, String> {
+fn resolve_placeholder_values(
+    files: &HashMap<String, Vec<u8>>,
+    cli_args: HashMap<String, String>,
+) -> HashMap<String, String> {
     let mut values = HashMap::new();
 
     let Some(toml_bytes) = files.get("template.toml") else {
@@ -94,7 +101,7 @@ fn resolve_placeholder_values(files: &HashMap<String, Vec<u8>>) -> HashMap<Strin
         return values;
     };
 
-    let resolver = PlaceholderResolver::new(HashMap::new());
+    let resolver = PlaceholderResolver::new(cli_args);
     for ph in &manifest.placeholders {
         if let Ok(Some(value)) = resolver.resolve(ph) {
             values.insert(ph.name.clone(), value);

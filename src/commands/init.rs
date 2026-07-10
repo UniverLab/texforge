@@ -49,23 +49,23 @@ fn migrate(root: &Path) -> Result<()> {
     let entry = detect_entry(root).unwrap_or_else(|| "main.tex".to_string());
     let bib = detect_bib(root);
 
-    let titulo = Text::new("Document title")
+    let title = Text::new("Document title")
         .with_default(
             root.file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("documento"),
+                .unwrap_or("document"),
         )
         .prompt()?;
 
-    let autor = Text::new("Author").with_default("Author").prompt()?;
+    let author = Text::new("Author").with_default("Author").prompt()?;
 
     let bib_line = match &bib {
-        Some(b) => format!("bibliografia = \"{}\"", b),
-        None => "# bibliografia = \"refs.bib\"".to_string(),
+        Some(b) => format!("bibliography = \"{}\"", b),
+        None => "# bibliography = \"refs.bib\"".to_string(),
     };
 
     let project_toml = format!(
-        "[documento]\ntitulo = \"{titulo}\"\nautor = \"{autor}\"\ntemplate = \"general\"\n\n[compilacion]\nentry = \"{entry}\"\n{bib_line}\n"
+        "[document]\ntitle = \"{title}\"\nauthor = \"{author}\"\ntemplate = \"general\"\n\n[build]\nentry = \"{entry}\"\n{bib_line}\n"
     );
 
     std::fs::write(root.join("project.toml"), &project_toml)?;

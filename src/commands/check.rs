@@ -9,12 +9,12 @@ use crate::linter;
 pub fn execute() -> Result<()> {
     let project = Project::load()?;
 
-    println!("Checking project: {}", project.config.documento.titulo);
+    println!("Checking project: {}", project.config.document.title);
 
     let errors = linter::lint(
         &project.root,
-        &project.config.compilacion.entry,
-        project.config.compilacion.bibliografia.as_deref(),
+        &project.config.build.entry,
+        project.config.build.bibliography.as_deref(),
     )?;
 
     if errors.is_empty() {

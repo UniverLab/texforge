@@ -1,11 +1,9 @@
-%% main.tex - Plantilla General
-%% Plantilla genérica para documentos LaTeX
-
+% General Article Template
 \documentclass[a4paper,12pt]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[spanish]{babel}
-\usepackage{amsmath}
+\usepackage[{{language}}]{babel}
+\usepackage{amsmath,amssymb}
 \usepackage{float}
 \usepackage{graphicx}
 \usepackage{hyperref}
@@ -18,25 +16,31 @@
 \fancyhf{}
 \cfoot{\thepage}
 
-\title{Título del Documento}
-\author{Autor}
-\date{\today}
+\title{{{title}}}
+\author{{{author}}}
+\date{{{date}}}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-Resumen del documento.
+Write your abstract here.
 \end{abstract}
 
-\section{Sección 1}
-Contenido de la sección.
+\section{Introduction}
+Your introduction goes here.
 
-\subsection{Subsección}
-Más contenido.
+\subsection{Background}
+Provide background context.
 
-\section{Sección 2}
-Contenido adicional.
+\section{Main Content}
+Expand your main content here. Cite sources like this~\cite{example}.
+
+\section{Conclusion}
+Summarize your key findings.
+
+\bibliographystyle{plain}
+\bibliography{bib/references}
 
 \end{document}
