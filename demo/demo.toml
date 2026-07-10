@@ -1,0 +1,135 @@
+[demo]
+name = "demo"
+output_dir = "./dist"
+prompt = '\[\e[1;32m\]texForge@univerlab\[\e[0m\]:\[\e[1;34m\]~\[\e[0m\]$ '
+
+[typing]
+base_ms = 80
+salt_ms = 15
+
+[[sources]]
+id = "main"
+type = "terminal"
+
+[[sources]]
+id = "pdf"
+type = "browser"
+url = "file:///home/jheisonmblivecom/Projects/UniverLab/texforge/examples/texforge-capabilites/texforge-capabilites.pdf"
+
+[layout]
+width = 1440
+height = 1080
+fps = 15
+line_height = 1.2000000476837158
+background = "#0b0f14"
+font_family = "IBM Plex Mono"
+
+[[layout.panes]]
+id = "main"
+type = "terminal"
+x = 0
+y = 0
+width = 1440
+height = 1080
+font_family = "monospace"
+font_size = 16
+
+[[layout.panes]]
+id = "pdf-r1"
+type = "browser"
+x = 0
+y = 0
+width = 1440
+height = 1080
+url = "file:///home/jheisonmblivecom/Projects/UniverLab/texforge/examples/texforge-capabilites/texforge-capabilites.pdf"
+reveal_at = 262.448
+
+[[timeline]]
+action = "focus"
+pane = "main"
+
+[[timeline]]
+action = "type"
+text = "texforge --help"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2500
+
+[[timeline]]
+action = "type"
+text = "opencode"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait_for_quiet"
+quiet_ms = 1500
+
+[[timeline]]
+action = "type"
+text = 'Create a texforge project "texforge-capabilites" demonstrating all capabilities: Mermaid sequence diagra, Graphviz architecture digraph, D2 pipeline diagram, math equations with cross-refs, BibTeX citations, tikz diagram, examples of code listings, two booktabs tables, table of contents, and lists. Compile with texforge build.'
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait_for_quiet"
+quiet_ms = 5000
+
+[[timeline]]
+action = "type"
+text = "/exit"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait_for_quiet"
+quiet_ms = 500
+
+[[timeline]]
+action = "focus"
+pane = "pdf-r1"
+
+[[timeline]]
+action = "scroll"
+direction = "down"
+velocity = "constant"
+duration_ms = 8000
+pane = "pdf-r1"
+
+[[timeline]]
+action = "wait"
+duration_ms = 8000
+
+[[timeline]]
+action = "terminate"

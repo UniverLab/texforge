@@ -1,9 +1,12 @@
 //! `texforge new` command implementation.
 
+use std::collections::HashMap;
 use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
 
+use crate::manifest::TemplateManifest;
+use crate::placeholders::PlaceholderResolver;
 use crate::templates;
 
 /// Create a new project from a template.
@@ -24,6 +27,13 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
 
     let resolved = templates::resolve(template_name)?;
 
+    // Resolve any placeholders the template declares (defaults, project/user
+    // config). Missing values are left as-is rather than failing generation.
+    // The project name doubles as the document title unless overridden.
+    let mut cli_args = HashMap::new();
+    cli_args.insert("title".to_string(), name.to_string());
+    let values = resolve_placeholder_values(&resolved.files, cli_args);
+
     // Create project directory and write all template files
     for (rel_path, content) in &resolved.files {
         // Skip template.toml — it's metadata, not a project file
@@ -34,20 +44,29 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&dest, content)
-            .with_context(|| format!("Failed to write {}", dest.display()))?;
+        // Substitute {{placeholder}} tokens in .tex files only — other files
+        // (code samples, images) are copied verbatim.
+        if rel_path.ends_with(".tex") {
+            let text = String::from_utf8_lossy(content);
+            let substituted = apply_substitutions(&text, &values);
+            std::fs::write(&dest, substituted)
+        } else {
+            std::fs::write(&dest, content)
+        }
+        .with_context(|| format!("Failed to write {}", dest.display()))?;
     }
 
     // Generate project.toml
+    let author = values.get("author").map_or("Author", String::as_str);
     let project_toml = format!(
-        r#"[documento]
-titulo = "{name}"
-autor = "Author"
+        r#"[document]
+title = "{name}"
+author = "{author}"
 template = "{template_name}"
 
-[compilacion]
+[build]
 entry = "main.tex"
-bibliografia = "bib/references.bib"
+bibliography = "bib/references.bib"
 "#
     );
     std::fs::write(project_dir.join("project.toml"), project_toml)?;
@@ -61,6 +80,44 @@ bibliografia = "bib/references.bib"
     println!("  texforge build");
 
     Ok(())
+}
+
+/// Resolve placeholder values from a template's manifest, if present.
+/// Returns an empty map for templates without a (valid) `template.toml` or
+/// without declared placeholders.
+fn resolve_placeholder_values(
+    files: &HashMap<String, Vec<u8>>,
+    cli_args: HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+
+    let Some(toml_bytes) = files.get("template.toml") else {
+        return values;
+    };
+    let Ok(text) = std::str::from_utf8(toml_bytes) else {
+        return values;
+    };
+    let Ok(manifest) = TemplateManifest::from_str(text) else {
+        return values;
+    };
+
+    let resolver = PlaceholderResolver::new(cli_args);
+    for ph in &manifest.placeholders {
+        if let Ok(Some(value)) = resolver.resolve(ph) {
+            values.insert(ph.name.clone(), value);
+        }
+    }
+    values
+}
+
+/// Replace `{{name}}` tokens with resolved values. Unresolved tokens are left
+/// untouched (lenient — never fails generation).
+fn apply_substitutions(content: &str, values: &HashMap<String, String>) -> String {
+    let mut out = content.to_string();
+    for (key, value) in values {
+        out = out.replace(&format!("{{{{{}}}}}", key), value);
+    }
+    out
 }
 
 /// Validate project name: no empty, no path traversal, no special chars.

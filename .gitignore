@@ -29,4 +29,12 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
+# Large video files
+*.mp4
+
+# AI agent workspaces
+.mimocode/
+
 # End of https://www.toptal.com/developers/gitignore/api/rust
+
+.mimocode/

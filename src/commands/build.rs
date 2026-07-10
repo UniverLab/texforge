@@ -1,5 +1,6 @@
 //! `texforge build` command implementation.
 
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -10,21 +11,36 @@ use crate::commands::init::BANNER;
 use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::Project;
+use crate::utils::sanitize_filename;
 
-/// Compile project to PDF.
+/// Compile project to PDF using a temp directory, output named after the document title.
 pub fn execute() -> Result<()> {
     let project = Project::load()?;
-    println!("Building project: {}", project.config.documento.titulo);
-    std::fs::create_dir_all(project.root.join("build"))?;
-    diagrams::process(&project.root, &project.config.compilacion.entry)?;
-    let build_dir = project.root.join("build");
-    let entry_filename = std::path::Path::new(&project.config.compilacion.entry)
+    let titulo = &project.config.document.title;
+    println!("Building project: {titulo}");
+
+    let temp_dir = tempfile::tempdir()?;
+    let build_dir = temp_dir.path();
+    println!("  ◇ temp: {}", build_dir.display());
+
+    diagrams::process(&project.root, &project.config.build.entry, build_dir)?;
+    let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or(project.config.compilacion.entry.clone());
-    compiler::compile(&build_dir, &entry_filename)?;
-    let pdf_name = std::path::Path::new(&project.config.compilacion.entry).with_extension("pdf");
-    println!("  ◇ build/{}", pdf_name.display());
+        .unwrap_or_else(|| project.config.build.entry.clone());
+    compiler::compile(build_dir, &entry_filename)?;
+
+    let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
+    let pdf_dest = project.root.join(&pdf_name);
+    let pdf_src = build_dir.join(
+        Path::new(&project.config.build.entry)
+            .with_extension("pdf")
+            .file_name()
+            .unwrap(),
+    );
+    std::fs::copy(&pdf_src, &pdf_dest)?;
+    println!("  ◇ {}", pdf_dest.display());
+
     Ok(())
 }
 
@@ -32,13 +48,15 @@ pub fn execute() -> Result<()> {
 pub fn watch(delay_secs: u64) -> Result<()> {
     let project = Project::load()?;
     let debounce = Duration::from_secs(delay_secs);
-    // Ignore new events for this long after a build completes
     let cooldown = Duration::from_secs(2);
 
-    print_watch_header(&project.config.documento.titulo, delay_secs);
+    print_watch_header(&project.config.document.title, delay_secs);
+
+    let temp_dir = tempfile::tempdir()?;
+    let build_dir = temp_dir.path().to_path_buf();
 
     let started = std::time::Instant::now();
-    let result = run_build(&project);
+    let result = run_build(&project, &build_dir);
     redraw_status(&result, 1, started);
 
     let (tx, rx) = mpsc::channel();
@@ -50,7 +68,6 @@ pub fn watch(delay_secs: u64) -> Result<()> {
 
     watcher.watch(&project.root, RecursiveMode::Recursive)?;
 
-    let build_dir = project.root.join("build");
     let mut pending = false;
     let mut last_event = std::time::Instant::now();
     let mut last_build = std::time::Instant::now();
@@ -74,7 +91,6 @@ pub fn watch(delay_secs: u64) -> Result<()> {
             Err(_) => break,
         }
 
-        // Redraw timer every second even without a build
         if last_tick.elapsed() >= Duration::from_secs(1) {
             last_tick = std::time::Instant::now();
             redraw_status(&last_result, build_count, started);
@@ -83,7 +99,7 @@ pub fn watch(delay_secs: u64) -> Result<()> {
         if pending && last_event.elapsed() >= debounce {
             pending = false;
             build_count += 1;
-            last_result = run_build(&project);
+            last_result = run_build(&project, &build_dir);
             last_build = std::time::Instant::now();
             redraw_status(&last_result, build_count, started);
         }
@@ -99,7 +115,6 @@ fn print_watch_header(title: &str, delay_secs: u64) {
 }
 
 fn redraw_status(result: &WatchResult, build_count: u32, started: std::time::Instant) {
-    // Move to line 15 (just after header), clear from there down, redraw
     print!("\x1B[15;0H\x1B[J");
     let e = started.elapsed().as_secs();
     let session = format!("{:02}:{:02}:{:02}", e / 3600, (e % 3600) / 60, e % 60);
@@ -107,7 +122,7 @@ fn redraw_status(result: &WatchResult, build_count: u32, started: std::time::Ins
     println!("  session  \x1B[36m{session}\x1B[0m   builds  \x1B[36m{build_count}\x1B[0m");
     println!();
     match result {
-        WatchResult::Ok(pdf) => println!("  \x1B[32mbuild/{pdf}  ok\x1B[0m"),
+        WatchResult::Ok(pdf) => println!("  \x1B[32m{pdf}  ok\x1B[0m"),
         WatchResult::Err(err) => {
             println!("  \x1B[31merror:\x1B[0m");
             for line in err.lines() {
@@ -124,20 +139,29 @@ enum WatchResult {
     Err(String),
 }
 
-fn run_build(project: &Project) -> WatchResult {
-    let _ = std::fs::create_dir_all(project.root.join("build"));
-    if let Err(e) = diagrams::process(&project.root, &project.config.compilacion.entry) {
+fn run_build(project: &Project, build_dir: &Path) -> WatchResult {
+    let _ = std::fs::create_dir_all(build_dir);
+    if let Err(e) = diagrams::process(&project.root, &project.config.build.entry, build_dir) {
         return WatchResult::Err(e.to_string());
     }
-    let build_dir = project.root.join("build");
-    let entry_filename = std::path::Path::new(&project.config.compilacion.entry)
+    let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or(project.config.compilacion.entry.clone());
-    match compiler::compile(&build_dir, &entry_filename) {
+        .unwrap_or_else(|| project.config.build.entry.clone());
+    match compiler::compile(build_dir, &entry_filename) {
         Ok(()) => {
-            let pdf = std::path::Path::new(&project.config.compilacion.entry).with_extension("pdf");
-            WatchResult::Ok(pdf.display().to_string())
+            let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
+            let pdf_dest = project.root.join(&pdf_name);
+            let pdf_src = build_dir.join(
+                Path::new(&project.config.build.entry)
+                    .with_extension("pdf")
+                    .file_name()
+                    .unwrap(),
+            );
+            match std::fs::copy(&pdf_src, &pdf_dest) {
+                Ok(_) => WatchResult::Ok(pdf_name),
+                Err(e) => WatchResult::Err(e.to_string()),
+            }
         }
         Err(e) => WatchResult::Err(e.to_string()),
     }

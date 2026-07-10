@@ -59,6 +59,29 @@ info "download" "$URL"
 HTTP_CODE=$(curl -fSL -w '%{http_code}' -o "$TMPDIR/$ARCHIVE" "$URL" 2>/dev/null) || true
 [ "$HTTP_CODE" = "200" ] || error "Download failed (HTTP $HTTP_CODE). Check that $TAG exists for $TARGET at:\n  $URL"
 
+# --- verify checksum ---
+# Match against SHA256SUMS.txt from the same release. Missing sums file (older
+# releases) or no sha256 tool → skip; a present-but-mismatched checksum is fatal.
+SUMS_URL="https://github.com/$REPO/releases/download/${TAG}/SHA256SUMS.txt"
+if curl -fsSL -o "$TMPDIR/SHA256SUMS.txt" "$SUMS_URL" 2>/dev/null; then
+  EXPECTED=$(awk -v f="$ARCHIVE" '$2 == f { print $1 }' "$TMPDIR/SHA256SUMS.txt" | head -1)
+  [ -n "$EXPECTED" ] || error "No checksum listed for $ARCHIVE in SHA256SUMS.txt"
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum "$TMPDIR/$ARCHIVE" | awk '{ print $1 }')
+  elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL=$(shasum -a 256 "$TMPDIR/$ARCHIVE" | awk '{ print $1 }')
+  else
+    ACTUAL=""
+    info "checksum" "no sha256 tool found — skipping verification"
+  fi
+  if [ -n "$ACTUAL" ]; then
+    [ "$ACTUAL" = "$EXPECTED" ] || error "Checksum mismatch for $ARCHIVE (expected $EXPECTED, got $ACTUAL)"
+    info "checksum" "verified"
+  fi
+else
+  info "checksum" "SHA256SUMS.txt not found for $TAG — skipping verification"
+fi
+
 # --- extract ---
 tar xzf "$TMPDIR/$ARCHIVE" -C "$TMPDIR"
 [ -f "$TMPDIR/$BINARY" ] || error "Binary not found in archive"
@@ -97,7 +120,29 @@ if [ -n "$PATHS_TO_ADD" ]; then
 fi
 
 # ============================================================
-# 3. Verify
+# 3. Install the texforge agent skill (optional)
+# ============================================================
+# Teaches AI agents how to drive texforge. Skipped when npx is unavailable or
+# SKIP_SKILL is set; a failure here never fails the binary install above.
+
+SKILL="texforge"
+SKILLS_REPO="https://github.com/UniverLab/skills"
+
+if [ -n "${SKIP_SKILL:-}" ]; then
+  info "skill" "skipped (SKIP_SKILL set)"
+elif command -v npx >/dev/null 2>&1; then
+  info "skill" "adding '$SKILL' (npx skills add)"
+  if npx -y skills add "$SKILLS_REPO" --skill "$SKILL" </dev/null; then
+    info "skill" "installed"
+  else
+    info "skill" "skipped — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
+  fi
+else
+  info "skill" "npx not found — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
+fi
+
+# ============================================================
+# 4. Verify
 # ============================================================
 
 info "done" "$($INSTALL_DIR/$BINARY --version 2>/dev/null || echo "$BINARY installed")"
