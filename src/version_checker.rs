@@ -138,4 +138,54 @@ mod tests {
         let version = get_local_version().unwrap();
         assert!(version.major > 0 || version.minor > 0 || version.patch > 0);
     }
+
+    #[test]
+    fn test_get_release_download_url() {
+        let version = SemVer::parse("1.2.3").unwrap();
+        let url = get_release_download_url("UniverLab", "texforge", &version);
+        assert!(url.contains("github.com"));
+        assert!(url.contains("UniverLab"));
+        assert!(url.contains("texforge"));
+        assert!(url.contains("1.2.3"));
+    }
+
+    #[test]
+    fn test_get_architecture() {
+        let arch = get_architecture();
+        assert!(!arch.is_empty());
+        assert!(arch == "x86_64" || arch == "aarch64" || arch == "arm");
+    }
+
+    #[test]
+    fn test_get_os() {
+        let os = get_os();
+        assert!(!os.is_empty());
+        assert!(os == "linux" || os == "macos" || os == "windows" || os == "unknown");
+    }
+
+    #[test]
+    fn test_version_check_result_struct() {
+        let local = SemVer::parse("1.0.0").unwrap();
+        let latest = SemVer::parse("2.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local.clone(),
+            latest_stable: Some(latest.clone()),
+            update_available: true,
+        };
+        assert_eq!(result.local_version, local);
+        assert_eq!(result.latest_stable, Some(latest));
+        assert!(result.update_available);
+    }
+
+    #[test]
+    fn test_version_check_no_update() {
+        let local = SemVer::parse("2.0.0").unwrap();
+        let latest = SemVer::parse("1.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local,
+            latest_stable: Some(latest),
+            update_available: false,
+        };
+        assert!(!result.update_available);
+    }
 }

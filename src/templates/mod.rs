@@ -211,3 +211,72 @@ pub fn remove_cached(name: &str) -> Result<PathBuf> {
     std::fs::remove_dir_all(&dir)?;
     Ok(dir)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_general_has_required_files() {
+        let t = embedded_general();
+        assert!(t.files.contains_key("template.toml"));
+        assert!(t.files.contains_key("main.tex"));
+        assert!(t.files.contains_key("sections/body.tex"));
+        assert!(t.files.contains_key("bib/references.bib"));
+    }
+
+    #[test]
+    fn embedded_general_main_tex_is_valid_utf8() {
+        let t = embedded_general();
+        let main = t.files.get("main.tex").unwrap();
+        let text = std::str::from_utf8(main).expect("main.tex should be valid UTF-8");
+        assert!(text.contains("\\documentclass"));
+    }
+
+    #[test]
+    fn embedded_general_template_toml_is_valid_toml() {
+        let t = embedded_general();
+        let toml_bytes = t.files.get("template.toml").unwrap();
+        let text = std::str::from_utf8(toml_bytes).unwrap();
+        let parsed: toml::Value = toml::from_str(text).expect("template.toml should be valid TOML");
+        assert!(parsed.is_table());
+    }
+
+    #[test]
+    fn embedded_general_body_tex_not_empty() {
+        let t = embedded_general();
+        let body = t.files.get("sections/body.tex").unwrap();
+        assert!(!body.is_empty());
+    }
+
+    #[test]
+    fn embedded_general_references_bib_not_empty() {
+        let t = embedded_general();
+        let bib = t.files.get("bib/references.bib").unwrap();
+        assert!(!bib.is_empty());
+    }
+
+    #[test]
+    fn resolve_general_returns_embedded() {
+        let t = resolve("general").unwrap();
+        assert!(t.files.contains_key("main.tex"));
+    }
+
+    #[test]
+    fn list_cached_returns_vec() {
+        let result = list_cached();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn remove_cached_nonexistent_fails() {
+        let result = remove_cached("definitely-not-cached-xyz-123");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn embedded_files_count_is_four() {
+        let t = embedded_general();
+        assert_eq!(t.files.len(), 4);
+    }
+}
