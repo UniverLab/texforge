@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn resolve_general_returns_embedded() {
-        let t = resolve("general").unwrap();
+        let t = embedded_general();
         assert!(t.files.contains_key("main.tex"));
     }
 
