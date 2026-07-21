@@ -364,9 +364,8 @@ mod tests {
         let result = find_tectonic();
         // This test just verifies the function doesn't panic;
         // tectonic may or may not be installed.
-        match result {
-            Ok(path) => assert!(!path.as_os_str().is_empty()),
-            Err(_) => {} // acceptable if tectonic not installed
+        if let Ok(path) = result {
+            assert!(!path.as_os_str().is_empty());
         }
     }
 }

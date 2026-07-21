@@ -496,7 +496,7 @@ mod tests {
         };
 
         let result =
-            resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "author");
+            resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "author");
         assert_eq!(result, Some("Bob".to_string()));
     }
 
@@ -512,7 +512,7 @@ mod tests {
         };
 
         let result =
-            resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "email");
+            resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "email");
         assert_eq!(result, Some("bob@test.com".to_string()));
     }
 
@@ -528,7 +528,7 @@ mod tests {
         };
 
         let result = resolver
-            .resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "institution");
+            .resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "institution");
         assert_eq!(result, Some("Stanford".to_string()));
     }
 
@@ -544,7 +544,7 @@ mod tests {
         };
 
         let result = resolver
-            .resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "documentclass");
+            .resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "documentclass");
         assert_eq!(result, Some("report".to_string()));
     }
 
@@ -560,7 +560,7 @@ mod tests {
         };
 
         let result =
-            resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "language");
+            resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "language");
         assert_eq!(result, Some("spanish".to_string()));
     }
 
@@ -575,7 +575,7 @@ mod tests {
         };
 
         let result = resolver
-            .resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "unknown_key");
+            .resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "unknown_key");
         assert_eq!(result, None);
     }
 
