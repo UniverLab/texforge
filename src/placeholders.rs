@@ -396,7 +396,10 @@ mod tests {
     #[test]
     fn test_flatten_toml_nested() {
         let mut inner = toml::Table::new();
-        inner.insert("nested".to_string(), toml::Value::String("deep".to_string()));
+        inner.insert(
+            "nested".to_string(),
+            toml::Value::String("deep".to_string()),
+        );
         let mut table = toml::Table::new();
         table.insert("section".to_string(), toml::Value::Table(inner));
         let mut result = HashMap::new();
@@ -463,7 +466,9 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_interpolations("{{institution.name}}").unwrap();
+        let result = resolver
+            .resolve_interpolations("{{institution.name}}")
+            .unwrap();
         assert_eq!(result, "MIT");
     }
 
@@ -490,7 +495,8 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "author");
+        let result =
+            resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "author");
         assert_eq!(result, Some("Bob".to_string()));
     }
 
@@ -505,7 +511,8 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "email");
+        let result =
+            resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "email");
         assert_eq!(result, Some("bob@test.com".to_string()));
     }
 
@@ -520,7 +527,8 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "institution");
+        let result = resolver
+            .resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "institution");
         assert_eq!(result, Some("Stanford".to_string()));
     }
 
@@ -535,7 +543,8 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "documentclass");
+        let result = resolver
+            .resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "documentclass");
         assert_eq!(result, Some("report".to_string()));
     }
 
@@ -550,7 +559,8 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "language");
+        let result =
+            resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "language");
         assert_eq!(result, Some("spanish".to_string()));
     }
 
@@ -564,7 +574,8 @@ mod tests {
             user_config: Some(user_config),
         };
 
-        let result = resolver.resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "unknown_key");
+        let result = resolver
+            .resolve_from_user_config(&resolver.user_config.as_ref().unwrap(), "unknown_key");
         assert_eq!(result, None);
     }
 

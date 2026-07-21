@@ -523,7 +523,10 @@ mod tests {
 
     #[test]
     fn extract_env_name_simple() {
-        assert_eq!(extract_env_name("\\begin{figure}"), Some("figure".to_string()));
+        assert_eq!(
+            extract_env_name("\\begin{figure}"),
+            Some("figure".to_string())
+        );
     }
 
     #[test]

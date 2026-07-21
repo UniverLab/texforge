@@ -195,7 +195,10 @@ language = "spanish"
         assert_eq!(config.user.name, default.user.name);
         assert_eq!(config.user.email, default.user.email);
         assert_eq!(config.institution.name, default.institution.name);
-        assert_eq!(config.defaults.documentclass, default.defaults.documentclass);
+        assert_eq!(
+            config.defaults.documentclass,
+            default.defaults.documentclass
+        );
     }
 
     #[test]

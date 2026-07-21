@@ -759,7 +759,11 @@ mod tests {
     #[test]
     fn cite_multiple_keys() {
         let (dir, entry) = setup("\\cite{key1,key2}");
-        fs::write(dir.path().join("refs.bib"), "@article{key1,}\n@article{key2,}").unwrap();
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
         let errors = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
         assert!(!has_error(&errors, "key1"));
         assert!(!has_error(&errors, "key2"));
@@ -778,7 +782,8 @@ mod tests {
 
     #[test]
     fn nested_begin_end() {
-        let (dir, entry) = setup("\\begin{document}\n\\begin{figure}\n\\end{figure}\n\\end{document}");
+        let (dir, entry) =
+            setup("\\begin{document}\n\\begin{figure}\n\\end{figure}\n\\end{document}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(errors.is_empty());
     }
@@ -800,7 +805,8 @@ mod tests {
 
     #[test]
     fn empty_project_no_errors() {
-        let (dir, entry) = setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
+        let (dir, entry) =
+            setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(errors.is_empty());
     }
