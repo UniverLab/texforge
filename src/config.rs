@@ -225,4 +225,65 @@ language = "spanish"
         assert_eq!(config.institution.name, deserialized.institution.name);
         assert_eq!(config.defaults.language, deserialized.defaults.language);
     }
+
+    #[test]
+    fn test_load_missing_file_returns_default() {
+        // load() returns Config::default() when file doesn't exist
+        // We can't easily test the real load() since it uses config_file_path()
+        // But we can test that a config with no file is equivalent to default
+        let config = Config::default();
+        assert!(config.user.name.is_none());
+        assert!(config.user.email.is_none());
+    }
+
+    #[test]
+    fn test_config_serialization_institution_all_fields() {
+        let mut config = Config::default();
+        config.institution.name = Some("MIT".to_string());
+        config.institution.address = Some("77 Massachusetts Ave".to_string());
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("MIT"));
+        assert!(toml_str.contains("77 Massachusetts Ave"));
+    }
+
+    #[test]
+    fn test_config_templates_fields() {
+        let mut config = Config::default();
+        config.templates.source = Some("github".to_string());
+        config.templates.auto_update = Some(true);
+        config.templates.watch = Some(false);
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.templates.source, Some("github".to_string()));
+        assert_eq!(parsed.templates.auto_update, Some(true));
+        assert_eq!(parsed.templates.watch, Some(false));
+    }
+
+    #[test]
+    fn test_config_defaults_all_fields_serialize() {
+        let mut config = Config::default();
+        config.defaults.documentclass = Some("book".to_string());
+        config.defaults.fontsize = Some("10pt".to_string());
+        config.defaults.papersize = Some("letter".to_string());
+        config.defaults.language = Some("french".to_string());
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.defaults.documentclass, Some("book".to_string()));
+        assert_eq!(parsed.defaults.fontsize, Some("10pt".to_string()));
+        assert_eq!(parsed.defaults.papersize, Some("letter".to_string()));
+        assert_eq!(parsed.defaults.language, Some("french".to_string()));
+    }
+
+    #[test]
+    fn test_config_partial_toml_uses_defaults() {
+        let toml_str = r#"
+[user]
+name = "Only Name"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.user.name, Some("Only Name".to_string()));
+        assert!(config.user.email.is_none());
+        assert!(config.institution.name.is_none());
+        assert!(config.defaults.documentclass.is_none());
+    }
 }

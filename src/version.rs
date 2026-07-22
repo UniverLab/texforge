@@ -168,4 +168,65 @@ mod tests {
         let v2 = SemVer::parse("1.2.3").unwrap();
         assert_eq!(v1, v2);
     }
+
+    #[test]
+    fn test_display_simple() {
+        let v = SemVer::parse("1.2.3").unwrap();
+        assert_eq!(v.to_string(), "1.2.3");
+    }
+
+    #[test]
+    fn test_display_prerelease() {
+        let v = SemVer::parse("1.0.0-alpha").unwrap();
+        assert_eq!(v.to_string(), "1.0.0-alpha");
+    }
+
+    #[test]
+    fn test_display_with_v_prefix() {
+        let v = SemVer::parse("v2.0.1").unwrap();
+        assert_eq!(v.to_string(), "2.0.1");
+    }
+
+    #[test]
+    fn test_parse_empty_string() {
+        assert!(SemVer::parse("").is_none());
+    }
+
+    #[test]
+    fn test_parse_whitespace() {
+        assert!(SemVer::parse("  ").is_none());
+    }
+
+    #[test]
+    fn test_parse_non_numeric() {
+        assert!(SemVer::parse("1.2.x").is_none());
+    }
+
+    #[test]
+    fn test_ord_less_than() {
+        let a = SemVer::parse("1.0.0").unwrap();
+        let b = SemVer::parse("2.0.0").unwrap();
+        assert!(a < b);
+    }
+
+    #[test]
+    fn test_ord_greater_than() {
+        let a = SemVer::parse("3.0.0").unwrap();
+        let b = SemVer::parse("1.0.0").unwrap();
+        assert!(a > b);
+    }
+
+    #[test]
+    fn test_ord_equal() {
+        let a = SemVer::parse("1.2.3").unwrap();
+        let b = SemVer::parse("1.2.3").unwrap();
+        assert!(a == b);
+    }
+
+    #[test]
+    fn test_ord_prerelease_less_than_stable() {
+        let pre = SemVer::parse("1.0.0-alpha").unwrap();
+        let stable = SemVer::parse("1.0.0").unwrap();
+        assert!(pre < stable);
+    }
 }
