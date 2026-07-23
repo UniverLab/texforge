@@ -62,3 +62,69 @@ fn format_one(file: &Path, root: &Path, check: bool, fmt: fn(&str) -> String) ->
     }
     Ok(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn format_one_no_change_returns_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let file = root.join("test.tex");
+        fs::write(&file, "hello\n").unwrap();
+        let count = format_one(&file, root, false, |s| s.to_string()).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn format_one_needs_formatting_returns_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let file = root.join("test.tex");
+        fs::write(&file, "hello  \n").unwrap();
+        let count = format_one(&file, root, false, |s| format!("{}\n", s.trim_end())).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn format_one_check_mode_does_not_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let file = root.join("test.tex");
+        fs::write(&file, "hello  \n").unwrap();
+        let count = format_one(&file, root, true, |s| format!("{}\n", s.trim_end())).unwrap();
+        assert_eq!(count, 1);
+        // File should be unchanged
+        assert_eq!(fs::read_to_string(&file).unwrap(), "hello  \n");
+    }
+
+    #[test]
+    fn format_one_check_mode_writes_when_not_checking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let file = root.join("test.tex");
+        fs::write(&file, "hello  \n").unwrap();
+        let count = format_one(&file, root, false, |s| format!("{}\n", s.trim_end())).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
+    }
+
+    #[test]
+    fn execute_no_files_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Write a project.toml so Project::load() works
+        fs::write(
+            root.join("project.toml"),
+            "[document]\ntitle = \"T\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
+        )
+        .unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(root).unwrap();
+        let result = execute(false);
+        std::env::set_current_dir(&orig).unwrap();
+        result.unwrap();
+    }
+}

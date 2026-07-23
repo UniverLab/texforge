@@ -70,3 +70,51 @@ pub fn validate(name: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ensure_rustls() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    #[test]
+    fn validate_general_template() {
+        // "general" falls back to embedded, which has template.toml
+        validate("general").unwrap();
+    }
+
+    #[test]
+    fn validate_unknown_template_errors() {
+        ensure_rustls();
+        let result = validate("definitely-not-a-template-xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn remove_nonexistent_template_errors() {
+        let result = remove("definitely-not-cached-xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_local_only() {
+        // include_remote=false should succeed without network
+        list(false).unwrap();
+    }
+
+    #[test]
+    fn list_cached_returns_installed() {
+        let cached = templates::list_cached().unwrap();
+        // Should be a Vec (possibly empty)
+        let _ = cached;
+    }
+
+    #[test]
+    fn validate_general_has_all_required_files() {
+        let resolved = templates::resolve("general").unwrap();
+        assert!(resolved.files.contains_key("template.toml"));
+        assert!(resolved.files.contains_key("main.tex"));
+    }
+}
