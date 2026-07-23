@@ -193,7 +193,7 @@ mod tests {
     fn test_version_check_no_latest() {
         let local = SemVer::parse("1.0.0").unwrap();
         let result = VersionCheckResult {
-            local_version: local.clone(),
+            local_version: local,
             latest_stable: None,
             update_available: false,
         };
