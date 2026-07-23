@@ -113,6 +113,7 @@ mod tests {
 
     #[test]
     fn validate_general_has_all_required_files() {
+        ensure_rustls();
         let resolved = templates::resolve("general").unwrap();
         assert!(resolved.files.contains_key("template.toml"));
         assert!(resolved.files.contains_key("main.tex"));
