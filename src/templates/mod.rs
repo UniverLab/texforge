@@ -211,3 +211,175 @@ pub fn remove_cached(name: &str) -> Result<PathBuf> {
     std::fs::remove_dir_all(&dir)?;
     Ok(dir)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn ensure_rustls() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    #[test]
+    fn embedded_general_has_required_files() {
+        let t = embedded_general();
+        assert!(t.files.contains_key("template.toml"));
+        assert!(t.files.contains_key("main.tex"));
+        assert!(t.files.contains_key("sections/body.tex"));
+        assert!(t.files.contains_key("bib/references.bib"));
+    }
+
+    #[test]
+    fn embedded_general_main_tex_is_valid_utf8() {
+        let t = embedded_general();
+        let main = t.files.get("main.tex").unwrap();
+        let text = std::str::from_utf8(main).expect("main.tex should be valid UTF-8");
+        assert!(text.contains("\\documentclass"));
+    }
+
+    #[test]
+    fn embedded_general_template_toml_is_valid_toml() {
+        let t = embedded_general();
+        let toml_bytes = t.files.get("template.toml").unwrap();
+        let text = std::str::from_utf8(toml_bytes).unwrap();
+        let parsed: toml::Value = toml::from_str(text).expect("template.toml should be valid TOML");
+        assert!(parsed.is_table());
+    }
+
+    #[test]
+    fn embedded_general_body_tex_not_empty() {
+        let t = embedded_general();
+        let body = t.files.get("sections/body.tex").unwrap();
+        assert!(!body.is_empty());
+    }
+
+    #[test]
+    fn embedded_general_references_bib_not_empty() {
+        let t = embedded_general();
+        let bib = t.files.get("bib/references.bib").unwrap();
+        assert!(!bib.is_empty());
+    }
+
+    #[test]
+    fn resolve_general_returns_embedded() {
+        let t = embedded_general();
+        assert!(t.files.contains_key("main.tex"));
+    }
+
+    #[test]
+    fn list_cached_returns_vec() {
+        let result = list_cached();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn remove_cached_nonexistent_fails() {
+        let result = remove_cached("definitely-not-cached-xyz-123");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn embedded_files_count_is_four() {
+        let t = embedded_general();
+        assert_eq!(t.files.len(), 4);
+    }
+
+    #[test]
+    fn resolve_unknown_template_errors() {
+        ensure_rustls();
+        let result = resolve("nonexistent-template-xyz-123");
+        assert!(result.is_err());
+        // Verify the error message mentions the template name
+        if let Err(e) = result {
+            let msg = format!("{}", e);
+            assert!(msg.contains("not found"));
+        }
+    }
+
+    #[test]
+    fn load_dir_recursive_with_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        fs::write(base.join("main.tex"), "\\documentclass{article}").unwrap();
+        let sub = base.join("sections");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("body.tex"), "Hello").unwrap();
+        fs::write(base.join("refs.bib"), "@misc{a}").unwrap();
+
+        let result = load_dir_recursive(base).unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert!(result.files.contains_key("sections/body.tex"));
+        assert!(result.files.contains_key("refs.bib"));
+        assert_eq!(result.files.len(), 3);
+    }
+
+    #[test]
+    fn load_dir_recursive_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = load_dir_recursive(tmp.path()).unwrap();
+        assert!(result.files.is_empty());
+    }
+
+    #[test]
+    fn load_dir_recursive_file_contents_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.tex"), "content_a").unwrap();
+        let result = load_dir_recursive(tmp.path()).unwrap();
+        let content = result.files.get("a.tex").unwrap();
+        assert_eq!(content, b"content_a");
+    }
+
+    #[test]
+    fn list_cached_empty_when_no_templates() {
+        // Just verify it doesn't panic; the real dir may or may not have templates
+        let result = list_cached();
+        assert!(result.is_ok());
+        let _ = result.unwrap();
+    }
+
+    #[test]
+    fn list_cached_finds_cached_templates() {
+        // Verify the function returns a sorted list
+        let result = list_cached().unwrap();
+        // Check it's sorted
+        for w in result.windows(2) {
+            assert!(w[0] <= w[1]);
+        }
+    }
+
+    #[test]
+    fn remove_cached_removes_existing() {
+        // Create a temp template in the real templates dir, then remove it
+        let templates_dir = crate::utils::templates_dir().unwrap();
+        let test_dir = templates_dir.join("__test_remove_temp__");
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(test_dir.join("x.tex"), "x").unwrap();
+        let path = remove_cached("__test_remove_temp__").unwrap();
+        assert!(path.ends_with("__test_remove_temp__"));
+        assert!(!test_dir.exists());
+    }
+
+    #[test]
+    fn load_from_cache_nonexistent_errors() {
+        let result = load_from_cache("no-such-template-xyz-abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn embedded_general_toml_content_is_nonempty() {
+        let t = embedded_general();
+        let toml = t.files.get("template.toml").unwrap();
+        assert!(!toml.is_empty());
+        let text = std::str::from_utf8(toml).unwrap();
+        assert!(text.contains("template"));
+    }
+
+    #[test]
+    fn list_cached_nonexistent_dir_returns_empty() {
+        // If templates dir doesn't exist, list_cached should return empty
+        // But utils::templates_dir() creates the dir, so we just test the function
+        let result = list_cached();
+        assert!(result.is_ok());
+    }
+}

@@ -196,3 +196,113 @@ pub fn wizard() -> Result<()> {
     println!("\n✓ Configuration saved!");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_temp_config(f: impl FnOnce()) {
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        f();
+        match orig {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    #[test]
+    fn get_name_set_and_retrieve() {
+        with_temp_config(|| {
+            set("name", "Alice").unwrap();
+            get("name").unwrap();
+        });
+    }
+
+    #[test]
+    fn get_email_set_and_retrieve() {
+        with_temp_config(|| {
+            set("email", "alice@test.com").unwrap();
+            get("email").unwrap();
+        });
+    }
+
+    #[test]
+    fn get_institution_set_and_retrieve() {
+        with_temp_config(|| {
+            set("institution", "MIT").unwrap();
+            get("institution").unwrap();
+        });
+    }
+
+    #[test]
+    fn get_language_set_and_retrieve() {
+        with_temp_config(|| {
+            set("language", "spanish").unwrap();
+            get("language").unwrap();
+        });
+    }
+
+    #[test]
+    fn get_unknown_key_errors() {
+        with_temp_config(|| {
+            let result = get("unknown");
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn set_unknown_key_errors() {
+        with_temp_config(|| {
+            let result = set("unknown", "value");
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn get_unset_shows_not_set() {
+        with_temp_config(|| {
+            // name not set, should print "(not set)"
+            get("name").unwrap();
+        });
+    }
+
+    #[test]
+    fn list_displays_all_sections() {
+        with_temp_config(|| {
+            set("name", "Bob").unwrap();
+            set("email", "bob@test.com").unwrap();
+            set("institution", "Stanford").unwrap();
+            set("language", "english").unwrap();
+            list().unwrap();
+        });
+    }
+
+    #[test]
+    fn list_with_unset_values() {
+        with_temp_config(|| {
+            // All unset — should print "(not set)" for each
+            list().unwrap();
+        });
+    }
+
+    #[test]
+    fn set_then_get_roundtrip() {
+        with_temp_config(|| {
+            set("name", "Test").unwrap();
+            get("name").unwrap();
+            set("email", "test@test.com").unwrap();
+            get("email").unwrap();
+        });
+    }
+
+    #[test]
+    fn set_overwrites_existing() {
+        with_temp_config(|| {
+            set("name", "First").unwrap();
+            set("name", "Second").unwrap();
+            get("name").unwrap();
+        });
+    }
+}

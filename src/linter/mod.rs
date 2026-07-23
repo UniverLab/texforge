@@ -646,4 +646,168 @@ mod tests {
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(has_error(&errors, "without matching \\end{d2}"));
     }
+
+    #[test]
+    fn entry_not_exists_is_error() {
+        let dir = TempDir::new().unwrap();
+        let errors = lint(dir.path(), "nonexistent.tex", None).unwrap();
+        assert!(has_error(&errors, "does not exist"));
+    }
+
+    #[test]
+    fn input_missing_file_is_error() {
+        let (dir, entry) = setup("\\input{missing}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(has_error(&errors, "missing"));
+    }
+
+    #[test]
+    fn input_existing_file_no_error() {
+        let (dir, entry) = setup("\\input{chapter1}");
+        fs::write(dir.path().join("chapter1.tex"), "").unwrap();
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "chapter1"));
+    }
+
+    #[test]
+    fn begin_end_matched_no_error() {
+        let (dir, entry) = setup("\\begin{figure}\n\\end{figure}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "never closed"));
+    }
+
+    #[test]
+    fn end_without_begin_is_error() {
+        let (dir, entry) = setup("\\end{figure}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(has_error(&errors, "without matching \\begin"));
+    }
+
+    #[test]
+    fn mismatched_end_is_error() {
+        let (dir, entry) = setup("\\begin{figure}\n\\end{table}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(has_error(&errors, "does not match"));
+    }
+
+    #[test]
+    fn comment_not_linted() {
+        let (dir, entry) = setup("% \\includegraphics{missing.png}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "missing.png"));
+    }
+
+    #[test]
+    fn cite_no_bib_file_no_error() {
+        let (dir, entry) = setup("\\cite{anything}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "anything"));
+    }
+
+    #[test]
+    fn mermaid_valid_pos_no_error() {
+        let (dir, entry) = setup("\\begin{mermaid}[pos=H]\n\\end{mermaid}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "invalid pos"));
+    }
+
+    #[test]
+    fn graphviz_valid_pos_no_error() {
+        let (dir, entry) = setup("\\begin{graphviz}[pos=t]\n\\end{graphviz}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "invalid pos"));
+    }
+
+    #[test]
+    fn d2_valid_pos_no_error() {
+        let (dir, entry) = setup("\\begin{d2}[pos=b]\n\\end{d2}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "invalid pos"));
+    }
+
+    #[test]
+    fn lstinputlisting_existing_file_no_error() {
+        let (dir, entry) = setup("\\lstinputlisting{code.py}");
+        fs::write(dir.path().join("code.py"), "").unwrap();
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "code.py"));
+    }
+
+    #[test]
+    fn inputminted_existing_file_no_error() {
+        let (dir, entry) = setup("\\inputminted{python}{code.py}");
+        fs::write(dir.path().join("code.py"), "").unwrap();
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "code.py"));
+    }
+
+    #[test]
+    fn ref_with_matching_label_no_error() {
+        let (dir, entry) = setup("\\label{fig:test}\n\\ref{fig:test}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "fig:test"));
+    }
+
+    #[test]
+    fn includegraphics_with_options() {
+        let (dir, entry) = setup("\\includegraphics[width=0.5\\textwidth]{img.png}");
+        fs::write(dir.path().join("img.png"), b"").unwrap();
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "img.png"));
+    }
+
+    #[test]
+    fn cite_multiple_keys() {
+        let (dir, entry) = setup("\\cite{key1,key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let errors = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(!has_error(&errors, "key1"));
+        assert!(!has_error(&errors, "key2"));
+    }
+
+    #[test]
+    fn mixed_errors_and_valid() {
+        let tex = "\\cite{missing}\n\\includegraphics{img.png}";
+        let (dir, entry) = setup(tex);
+        fs::write(dir.path().join("img.png"), b"").unwrap();
+        fs::write(dir.path().join("refs.bib"), "").unwrap();
+        let errors = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(has_error(&errors, "missing"));
+        assert!(!has_error(&errors, "img.png"));
+    }
+
+    #[test]
+    fn nested_begin_end() {
+        let (dir, entry) =
+            setup("\\begin{document}\n\\begin{figure}\n\\end{figure}\n\\end{document}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn unclosed_inner_environment() {
+        let (dir, entry) = setup("\\begin{document}\n\\begin{figure}\n\\end{document}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(has_error(&errors, "never closed"));
+    }
+
+    #[test]
+    fn input_with_tex_extension() {
+        let (dir, entry) = setup("\\input{chapter1.tex}");
+        fs::write(dir.path().join("chapter1.tex"), "").unwrap();
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(!has_error(&errors, "chapter1"));
+    }
+
+    #[test]
+    fn empty_project_no_errors() {
+        let (dir, entry) =
+            setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(errors.is_empty());
+    }
 }

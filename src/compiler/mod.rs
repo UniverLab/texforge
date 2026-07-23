@@ -258,3 +258,192 @@ fn current_target() -> Result<&'static str> {
     )))]
     anyhow::bail!("Unsupported platform for automatic tectonic installation")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_errors_tectonic_style() {
+        let raw = "error: main.tex:42: undefined control sequence \\foo";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "main.tex");
+        assert_eq!(errors[0].line, 42);
+        assert_eq!(errors[0].message, "undefined control sequence \\foo");
+    }
+
+    #[test]
+    fn parse_errors_bang_style() {
+        let raw = "! Undefined control sequence.\nl.10 \\badcmd";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "Undefined control sequence.");
+        assert_eq!(errors[0].line, 10);
+    }
+
+    #[test]
+    fn parse_errors_bang_no_line() {
+        let raw = "! Missing $ inserted.";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "Missing $ inserted.");
+        assert_eq!(errors[0].line, 0);
+    }
+
+    #[test]
+    fn parse_errors_multiple() {
+        let raw = "error: a.tex:1: first error\nerror: b.tex:5: second error";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].file, "a.tex");
+        assert_eq!(errors[1].file, "b.tex");
+        assert_eq!(errors[1].line, 5);
+    }
+
+    #[test]
+    fn parse_errors_empty() {
+        let errors = parse_errors("");
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn parse_errors_unrecognized_line() {
+        let raw = "some random output\nnot an error";
+        let errors = parse_errors(raw);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn parse_tectonic_error_with_location() {
+        let mut errors = Vec::new();
+        parse_tectonic_error("main.tex:10: undefined control sequence", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "main.tex");
+        assert_eq!(errors[0].line, 10);
+        assert_eq!(errors[0].message, "undefined control sequence");
+    }
+
+    #[test]
+    fn parse_tectonic_error_without_colon_location() {
+        let mut errors = Vec::new();
+        parse_tectonic_error("some generic message", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "");
+        assert_eq!(errors[0].line, 0);
+        assert_eq!(errors[0].message, "some generic message");
+    }
+
+    #[test]
+    fn parse_tectonic_error_non_numeric_line() {
+        let mut errors = Vec::new();
+        parse_tectonic_error("file.tex:abc: bad", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "");
+        assert_eq!(errors[0].line, 0);
+    }
+
+    #[test]
+    fn parse_errors_mixed_styles() {
+        let raw = "error: a.tex:1: first\n! Second error.\nl.20 \\second";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].file, "a.tex");
+        assert_eq!(errors[1].line, 20);
+    }
+
+    #[test]
+    fn current_target_returns_known_value() {
+        let target = current_target().unwrap();
+        assert!(!target.is_empty());
+        assert!(target.contains("linux") || target.contains("macos") || target.contains("windows"));
+    }
+
+    #[test]
+    fn find_tectonic_returns_path() {
+        let result = find_tectonic();
+        // This test just verifies the function doesn't panic;
+        // tectonic may or may not be installed.
+        if let Ok(path) = result {
+            assert!(!path.as_os_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn tectonic_managed_path_returns_home_texforge() {
+        let result = tectonic_managed_path();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().contains(".texforge"));
+        assert!(path.to_string_lossy().contains("bin"));
+    }
+
+    #[test]
+    fn locate_tectonic_returns_option() {
+        // Should not panic; may or may not find tectonic
+        let _ = locate_tectonic();
+    }
+
+    #[test]
+    fn parse_errors_tectonic_with_complex_message() {
+        let raw = "error: main.tex:100: undefined control sequence \\foo\\bar";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "main.tex");
+        assert_eq!(errors[0].line, 100);
+        assert!(errors[0].message.contains("\\foo\\bar"));
+    }
+
+    #[test]
+    fn parse_errors_l_line_without_number() {
+        let raw = "! Error.\nl.abc \\badcmd";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "Error.");
+        // l.abc doesn't parse as a number, so line stays 0
+        assert_eq!(errors[0].line, 0);
+    }
+
+    #[test]
+    fn parse_tectonic_error_no_colon_in_rest() {
+        // "error:" followed by text with no ": " separator
+        let mut errors = Vec::new();
+        parse_tectonic_error("just a message without colon", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "just a message without colon");
+        assert_eq!(errors[0].file, "");
+        assert_eq!(errors[0].line, 0);
+    }
+
+    #[test]
+    fn parse_errors_whitespace_handling() {
+        let raw = "  error: a.tex:5: msg  \n  ! Another.\n  l.10 x";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].file, "a.tex");
+        assert_eq!(errors[1].line, 10);
+    }
+
+    #[test]
+    fn parse_errors_empty_lines_between() {
+        let raw = "\n\nerror: f.tex:1: e\n\n\n";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "f.tex");
+    }
+
+    #[test]
+    fn current_target_contains_valid_arch() {
+        let target = current_target().unwrap();
+        assert!(target.contains("x86_64") || target.contains("aarch64") || target.contains("arm"));
+    }
+
+    #[test]
+    fn parse_errors_deeply_nested_path() {
+        let raw = "error: /some/long/path/to/file.tex:42: bad thing";
+        let errors = parse_errors(raw);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "/some/long/path/to/file.tex");
+        assert_eq!(errors[0].line, 42);
+    }
+}

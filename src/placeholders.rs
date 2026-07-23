@@ -288,4 +288,312 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_resolve_project_config_priority() {
+        let mut project_config = HashMap::new();
+        project_config.insert("title".to_string(), "From Project".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config,
+            user_config: None,
+        };
+
+        let ph = make_placeholder("title", true);
+        let result = resolver.resolve(&ph).unwrap();
+        assert_eq!(result, Some("From Project".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_default_value() {
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+        };
+
+        let mut ph = make_placeholder("title", false);
+        ph.default = Some("Default Title".to_string());
+
+        let result = resolver.resolve(&ph).unwrap();
+        assert_eq!(result, Some("Default Title".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_optional_not_found() {
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+        };
+
+        let ph = make_placeholder("title", false);
+        let result = resolver.resolve(&ph).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_resolve_all_with_optional_skipped() {
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+        };
+
+        let mut required = make_placeholder("title", true);
+        required.default = Some("Default".to_string());
+        let optional = make_placeholder("author", false);
+
+        let result = resolver.resolve_all(&[required, optional]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("title"), Some(&"Default".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_all_multiple_required() {
+        let mut cli_args = HashMap::new();
+        cli_args.insert("a".to_string(), "1".to_string());
+        cli_args.insert("b".to_string(), "2".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args,
+            project_config: HashMap::new(),
+            user_config: None,
+        };
+
+        let ph_a = make_placeholder("a", true);
+        let ph_b = make_placeholder("b", true);
+        let result = resolver.resolve_all(&[ph_a, ph_b]).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("a"), Some(&"1".to_string()));
+        assert_eq!(result.get("b"), Some(&"2".to_string()));
+    }
+
+    #[test]
+    fn test_substitute_no_tokens() {
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+        };
+
+        let values = HashMap::new();
+        let content = "plain text without tokens";
+        let result = resolver.substitute(content, &values).unwrap();
+        assert_eq!(result, "plain text without tokens");
+    }
+
+    #[test]
+    fn test_flatten_toml_string() {
+        let mut table = toml::Table::new();
+        table.insert("key".to_string(), toml::Value::String("value".to_string()));
+        let mut result = HashMap::new();
+        flatten_toml(&table, "", &mut result);
+        assert_eq!(result.get("key"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_flatten_toml_nested() {
+        let mut inner = toml::Table::new();
+        inner.insert(
+            "nested".to_string(),
+            toml::Value::String("deep".to_string()),
+        );
+        let mut table = toml::Table::new();
+        table.insert("section".to_string(), toml::Value::Table(inner));
+        let mut result = HashMap::new();
+        flatten_toml(&table, "", &mut result);
+        assert_eq!(result.get("section.nested"), Some(&"deep".to_string()));
+    }
+
+    #[test]
+    fn test_flatten_toml_boolean() {
+        let mut table = toml::Table::new();
+        table.insert("flag".to_string(), toml::Value::Boolean(true));
+        let mut result = HashMap::new();
+        flatten_toml(&table, "", &mut result);
+        assert_eq!(result.get("flag"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_flatten_toml_with_prefix() {
+        let mut table = toml::Table::new();
+        table.insert("key".to_string(), toml::Value::String("val".to_string()));
+        let mut result = HashMap::new();
+        flatten_toml(&table, "pre", &mut result);
+        assert_eq!(result.get("pre.key"), Some(&"val".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_interpolation_user_name() {
+        let mut user_config = config::Config::default();
+        user_config.user.name = Some("Alice".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result = resolver.resolve_interpolations("{{user.name}}").unwrap();
+        assert_eq!(result, "Alice");
+    }
+
+    #[test]
+    fn test_resolve_interpolation_user_email() {
+        let mut user_config = config::Config::default();
+        user_config.user.email = Some("alice@test.com".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result = resolver.resolve_interpolations("{{user.email}}").unwrap();
+        assert_eq!(result, "alice@test.com");
+    }
+
+    #[test]
+    fn test_resolve_interpolation_institution() {
+        let mut user_config = config::Config::default();
+        user_config.institution.name = Some("MIT".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result = resolver
+            .resolve_interpolations("{{institution.name}}")
+            .unwrap();
+        assert_eq!(result, "MIT");
+    }
+
+    #[test]
+    fn test_resolve_interpolation_no_config() {
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+        };
+
+        let result = resolver.resolve_interpolations("{{user.name}}").unwrap();
+        assert_eq!(result, "{{user.name}}");
+    }
+
+    #[test]
+    fn test_resolve_from_user_config_author() {
+        let mut user_config = config::Config::default();
+        user_config.user.name = Some("Bob".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result =
+            resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "author");
+        assert_eq!(result, Some("Bob".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_user_config_email() {
+        let mut user_config = config::Config::default();
+        user_config.user.email = Some("bob@test.com".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result =
+            resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "email");
+        assert_eq!(result, Some("bob@test.com".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_user_config_institution() {
+        let mut user_config = config::Config::default();
+        user_config.institution.name = Some("Stanford".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result = resolver
+            .resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "institution");
+        assert_eq!(result, Some("Stanford".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_user_config_documentclass() {
+        let mut user_config = config::Config::default();
+        user_config.defaults.documentclass = Some("report".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result = resolver
+            .resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "documentclass");
+        assert_eq!(result, Some("report".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_user_config_language() {
+        let mut user_config = config::Config::default();
+        user_config.defaults.language = Some("spanish".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result =
+            resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "language");
+        assert_eq!(result, Some("spanish".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_user_config_unknown_key() {
+        let user_config = config::Config::default();
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+        };
+
+        let result = resolver
+            .resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "unknown_key");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_cli_overrides_project_config() {
+        let mut cli_args = HashMap::new();
+        cli_args.insert("title".to_string(), "CLI Value".to_string());
+        let mut project_config = HashMap::new();
+        project_config.insert("title".to_string(), "Project Value".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args,
+            project_config,
+            user_config: None,
+        };
+
+        let ph = make_placeholder("title", true);
+        let result = resolver.resolve(&ph).unwrap();
+        assert_eq!(result, Some("CLI Value".to_string()));
+    }
 }

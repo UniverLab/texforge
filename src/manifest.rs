@@ -221,4 +221,212 @@ description = "Duplicate"
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("duplicate"));
     }
+
+    #[test]
+    fn test_empty_id_is_error() {
+        let toml = r#"
+id = ""
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+"#;
+        assert!(TemplateManifest::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_empty_version_is_error() {
+        let toml = r#"
+id = "test"
+version = ""
+display_name = "Test"
+description = "Test"
+"#;
+        assert!(TemplateManifest::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_empty_display_name_is_error() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = ""
+description = "Test"
+"#;
+        assert!(TemplateManifest::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_empty_placeholder_name_is_error() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+
+[[placeholders]]
+name = ""
+type = "string"
+description = "Empty name"
+"#;
+        assert!(TemplateManifest::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_invalid_toml_is_error() {
+        let result = TemplateManifest::from_str("not valid {{{ toml");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_placeholder_not_found() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        assert!(manifest.get_placeholder("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_required_placeholders() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+
+[[placeholders]]
+name = "title"
+type = "string"
+description = "Title"
+required = true
+
+[[placeholders]]
+name = "author"
+type = "string"
+description = "Author"
+required = false
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        let required = manifest.required_placeholders();
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0].name, "title");
+    }
+
+    #[test]
+    fn test_enum_placeholder_with_choices() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+
+[[placeholders]]
+name = "language"
+type = "enum"
+description = "Document language"
+choices = ["english", "spanish"]
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        let ph = manifest.get_placeholder("language").unwrap();
+        assert_eq!(ph.r#type, PlaceholderType::Enum);
+        assert_eq!(ph.choices.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_boolean_placeholder() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+
+[[placeholders]]
+name = "draft"
+type = "boolean"
+description = "Draft mode"
+default = "true"
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        let ph = manifest.get_placeholder("draft").unwrap();
+        assert_eq!(ph.r#type, PlaceholderType::Boolean);
+    }
+
+    #[test]
+    fn test_multiple_placeholders() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+
+[[placeholders]]
+name = "a"
+type = "string"
+description = "A"
+
+[[placeholders]]
+name = "b"
+type = "string"
+description = "B"
+
+[[placeholders]]
+name = "c"
+type = "string"
+description = "C"
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        assert_eq!(manifest.placeholders.len(), 3);
+        assert!(manifest.get_placeholder("a").is_some());
+        assert!(manifest.get_placeholder("b").is_some());
+        assert!(manifest.get_placeholder("c").is_some());
+    }
+
+    #[test]
+    fn test_file_spec_defaults() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        assert!(manifest.files.include.is_empty());
+        assert!(manifest.files.exclude.is_empty());
+    }
+
+    #[test]
+    fn test_post_generate_defaults() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        assert!(manifest.post_generate.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_roundtrip() {
+        let toml = r#"
+id = "test"
+version = "1.0.0"
+display_name = "Test"
+description = "Test"
+
+[[placeholders]]
+name = "title"
+type = "string"
+description = "Title"
+required = true
+"#;
+        let manifest = TemplateManifest::from_str(toml).unwrap();
+        let serialized = toml::to_string(&manifest).unwrap();
+        let deserialized = TemplateManifest::from_str(&serialized).unwrap();
+        assert_eq!(manifest.id, deserialized.id);
+        assert_eq!(manifest.placeholders.len(), deserialized.placeholders.len());
+    }
 }

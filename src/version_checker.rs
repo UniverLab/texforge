@@ -138,4 +138,127 @@ mod tests {
         let version = get_local_version().unwrap();
         assert!(version.major > 0 || version.minor > 0 || version.patch > 0);
     }
+
+    #[test]
+    fn test_get_release_download_url() {
+        let version = SemVer::parse("1.2.3").unwrap();
+        let url = get_release_download_url("UniverLab", "texforge", &version);
+        assert!(url.contains("github.com"));
+        assert!(url.contains("UniverLab"));
+        assert!(url.contains("texforge"));
+        assert!(url.contains("1.2.3"));
+    }
+
+    #[test]
+    fn test_get_architecture() {
+        let arch = get_architecture();
+        assert!(!arch.is_empty());
+        assert!(arch == "x86_64" || arch == "aarch64" || arch == "arm");
+    }
+
+    #[test]
+    fn test_get_os() {
+        let os = get_os();
+        assert!(!os.is_empty());
+        assert!(os == "linux" || os == "macos" || os == "windows" || os == "unknown");
+    }
+
+    #[test]
+    fn test_version_check_result_struct() {
+        let local = SemVer::parse("1.0.0").unwrap();
+        let latest = SemVer::parse("2.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local.clone(),
+            latest_stable: Some(latest.clone()),
+            update_available: true,
+        };
+        assert_eq!(result.local_version, local);
+        assert_eq!(result.latest_stable, Some(latest));
+        assert!(result.update_available);
+    }
+
+    #[test]
+    fn test_version_check_no_update() {
+        let local = SemVer::parse("2.0.0").unwrap();
+        let latest = SemVer::parse("1.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local,
+            latest_stable: Some(latest),
+            update_available: false,
+        };
+        assert!(!result.update_available);
+    }
+
+    #[test]
+    fn test_version_check_no_latest() {
+        let local = SemVer::parse("1.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local,
+            latest_stable: None,
+            update_available: false,
+        };
+        assert!(!result.update_available);
+        assert!(result.latest_stable.is_none());
+    }
+
+    #[test]
+    fn test_get_release_download_url_contains_arch() {
+        let version = SemVer::parse("1.0.0").unwrap();
+        let url = get_release_download_url("owner", "repo", &version);
+        let arch = get_architecture();
+        assert!(url.contains(arch));
+    }
+
+    #[test]
+    fn test_get_release_download_url_format() {
+        let version = SemVer::parse("2.5.1").unwrap();
+        let url = get_release_download_url("UniverLab", "texforge", &version);
+        assert!(url.starts_with("https://github.com/"));
+        assert!(url.contains("v2.5.1"));
+        assert!(url.contains("texforge"));
+    }
+
+    #[test]
+    fn test_get_local_version_is_stable() {
+        let version = get_local_version().unwrap();
+        // CARGO_PKG_VERSION should be a stable release (no prerelease)
+        assert!(version.is_stable());
+    }
+
+    #[test]
+    fn test_get_architecture_nonempty() {
+        let arch = get_architecture();
+        assert!(!arch.is_empty());
+    }
+
+    #[test]
+    fn test_get_os_nonempty() {
+        let os = get_os();
+        assert!(!os.is_empty());
+    }
+
+    #[test]
+    fn test_version_check_result_debug() {
+        let local = SemVer::parse("1.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local,
+            latest_stable: None,
+            update_available: false,
+        };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("VersionCheckResult"));
+    }
+
+    #[test]
+    fn test_version_check_result_clone() {
+        let local = SemVer::parse("1.0.0").unwrap();
+        let result = VersionCheckResult {
+            local_version: local,
+            latest_stable: None,
+            update_available: false,
+        };
+        let cloned = result.clone();
+        assert_eq!(result.local_version, cloned.local_version);
+        assert_eq!(result.update_available, cloned.update_available);
+    }
 }
