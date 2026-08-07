@@ -1969,6 +1969,7 @@ dependencies = [
  "resvg",
  "rustls",
  "serde",
+ "serde_json",
  "tar",
  "tempfile",
  "toml",

@@ -51,6 +51,15 @@ enum Commands {
         #[arg(long)]
         deny_warnings: bool,
     },
+    /// Count words per section or file
+    Stats {
+        /// Output JSON instead of a human-readable breakdown
+        #[arg(long)]
+        json: bool,
+        /// Break down by .tex file instead of by section
+        #[arg(long, value_enum, default_value = "section")]
+        by: crate::commands::stats::ByMode,
+    },
     /// Manage templates
     Template {
         #[command(subcommand)]
@@ -100,6 +109,7 @@ impl Cli {
             }
             Commands::Fmt { check } => commands::fmt::execute(check),
             Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
+            Commands::Stats { json, by } => commands::stats::execute(json, by),
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
                 TemplateAction::Add { source } => commands::template::add(&source),
