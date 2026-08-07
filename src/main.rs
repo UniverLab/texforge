@@ -14,6 +14,8 @@ mod linter;
 mod manifest;
 mod placeholders;
 mod templates;
+mod texparse;
+mod texutil;
 mod utils;
 mod version;
 mod version_checker;

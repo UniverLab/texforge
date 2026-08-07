@@ -5,6 +5,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::texutil;
+
 /// Severity of a lint finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -58,8 +60,17 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     }
 
     // Collect all .tex files reachable from entry
-    let mut tex_files = Vec::new();
-    collect_tex_files(root, entry, &mut tex_files, &mut errors);
+    let collected = texutil::collect_tex_files(root, entry);
+    for (entry, path) in &collected.circular {
+        errors.push(LintFinding {
+            severity: Severity::Error,
+            file: entry.clone(),
+            line: 0,
+            message: format!("Circular \\input detected: {}", path.display()),
+            suggestion: Some("Remove the circular reference".into()),
+        });
+    }
+    let tex_files = collected.files;
 
     // Parse .bib keys if bibliography exists
     let bib_keys = match bib_file {
@@ -72,8 +83,8 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     for file in &tex_files {
         let content = std::fs::read_to_string(file)?;
         for line in content.lines() {
-            let line = strip_comment(line);
-            for label in extract_commands(&line, "label") {
+            let line = texutil::strip_comment(line);
+            for label in texutil::extract_commands(&line, "label") {
                 all_labels.insert(label.to_string());
             }
         }
@@ -118,7 +129,7 @@ fn check_references(
 ) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
-        let line = strip_comment(line);
+        let line = texutil::strip_comment(line);
 
         check_input_references(root, rel, line_num, &line, errors);
         check_includegraphics_references(root, rel, line_num, &line, errors);
@@ -137,8 +148,8 @@ fn check_input_references(
     line: &str,
     errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "input") {
-        let input_path = resolve_tex_path(root, arg);
+    for arg in texutil::extract_commands(line, "input") {
+        let input_path = texutil::resolve_tex_path(root, arg);
         if !input_path.exists() {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -159,7 +170,7 @@ fn check_includegraphics_references(
     line: &str,
     errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "includegraphics") {
+    for arg in texutil::extract_commands(line, "includegraphics") {
         let img_path = root.join(arg);
         if !img_path.exists() {
             errors.push(LintFinding {
@@ -186,7 +197,7 @@ fn check_cite_references(
         return;
     }
 
-    for arg in extract_commands(line, "cite") {
+    for arg in texutil::extract_commands(line, "cite") {
         for key in arg.split(',') {
             let key = key.trim();
             if !key.is_empty() && !bib_keys.contains(key) {
@@ -210,7 +221,7 @@ fn check_ref_references(
     all_labels: &HashSet<String>,
     errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "ref") {
+    for arg in texutil::extract_commands(line, "ref") {
         if !all_labels.contains(arg) {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -231,7 +242,7 @@ fn check_lstinputlisting_references(
     line: &str,
     errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "lstinputlisting") {
+    for arg in texutil::extract_commands(line, "lstinputlisting") {
         if !root.join(arg).exists() {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -279,11 +290,11 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintFinding>) {
             continue;
         }
 
-        for env in extract_commands(trimmed, "begin") {
+        for env in texutil::extract_commands(trimmed, "begin") {
             stack.push((env, line_num));
         }
 
-        for env in extract_commands(trimmed, "end") {
+        for env in texutil::extract_commands(trimmed, "end") {
             if let Some((open_env, _)) = stack.last() {
                 if *open_env == env {
                     stack.pop();
@@ -318,98 +329,6 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintFinding>) {
             suggestion: Some(format!("Add \\end{{{}}}", env)),
         });
     }
-}
-
-/// Extract arguments from `\command{arg}` and `\command[opts]{arg}` occurrences in a line.
-fn extract_commands<'a>(line: &'a str, cmd: &str) -> Vec<&'a str> {
-    let mut results = Vec::new();
-    let pattern = format!("\\{}", cmd);
-    let mut search = line;
-
-    while let Some(pos) = search.find(&pattern) {
-        let after = &search[pos + pattern.len()..];
-        // Skip optional args [...]
-        let after = if after.starts_with('[') {
-            match after.find(']') {
-                Some(end) => &after[end + 1..],
-                None => break,
-            }
-        } else {
-            after
-        };
-        if after.starts_with('{') {
-            if let Some(end) = after.find('}') {
-                let arg = after[1..end].trim();
-                if !arg.is_empty() {
-                    results.push(arg);
-                }
-                search = &after[end + 1..];
-                continue;
-            }
-        }
-        search = after;
-    }
-
-    results
-}
-
-/// Resolve a tex input path, adding .tex extension if missing.
-fn resolve_tex_path(root: &Path, input: &str) -> std::path::PathBuf {
-    let p = root.join(input);
-    if p.extension().is_some() {
-        p
-    } else {
-        p.with_extension("tex")
-    }
-}
-
-/// Recursively collect .tex files referenced by `\input{}`.
-fn collect_tex_files(
-    root: &Path,
-    entry: &str,
-    files: &mut Vec<std::path::PathBuf>,
-    errors: &mut Vec<LintFinding>,
-) {
-    let path = resolve_tex_path(root, entry);
-    if !path.exists() {
-        return;
-    }
-    if files.contains(&path) {
-        errors.push(LintFinding {
-            severity: Severity::Error,
-            file: entry.to_string(),
-            line: 0,
-            message: format!("Circular \\input detected: {}", path.display()),
-            suggestion: Some("Remove the circular reference".into()),
-        });
-        return;
-    }
-    files.push(path.clone());
-
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        for line in content.lines() {
-            let line = strip_comment(line);
-            for input in extract_commands(&line, "input") {
-                collect_tex_files(root, input, files, errors);
-            }
-        }
-    }
-}
-
-/// Strip LaTeX comment from a line (everything after unescaped %).
-fn strip_comment(line: &str) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut prev_backslash = false;
-
-    for c in line.chars() {
-        if c == '%' && !prev_backslash {
-            break;
-        }
-        prev_backslash = c == '\\';
-        result.push(c);
-    }
-
-    result
 }
 
 /// Check mermaid/graphviz blocks: unclosed and invalid pos option.
