@@ -1,5 +1,7 @@
 //! Static linting rules.
 
+mod glyphs;
+
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -112,6 +114,7 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         check_diagram_blocks(&rel, &content, "mermaid", &mut errors);
         check_diagram_blocks(&rel, &content, "graphviz", &mut errors);
         check_diagram_blocks(&rel, &content, "d2", &mut errors);
+        errors.extend(glyphs::lint_file(&rel, &content));
     }
 
     Ok(errors)

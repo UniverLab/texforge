@@ -5,6 +5,11 @@
 //! prose and what is not*. Word counting, spell checking and the glyph linter
 //! consume this stream instead of each growing their own parser.
 //!
+//! [`tokenize_with_spans`] is the position-aware sibling: it pairs every token
+//! with the byte range it covers in the source, and reports the byte offsets of
+//! `$`-delimited math regions that were never closed. The glyph linter needs
+//! both to map findings back to a `file:line`.
+//!
 //! # Contract
 //!
 //! * Prose appears as [`Token::Text`]. Text inside math regions, verbatim
@@ -25,10 +30,8 @@
 //! * Math content between `BeginMath`/`EndMath` and verbatim content between
 //!   `BeginVerbatim`/`EndVerbatim` is not emitted as tokens.
 
-// This module is the shared parsing contract for the upcoming word-count,
-// spell-check and glyph-linter features and is deliberately not yet wired into
-// the binary; its whole API surface is exercised by the tests below.
-#![allow(dead_code)]
+// This module is the shared parsing contract consumed by word counting
+// ([`crate::wordcount`]) and the glyph linter ([`crate::linter::glyphs`]).
 
 use std::path::{Path, PathBuf};
 
@@ -87,14 +90,23 @@ pub enum Token {
     Environment { name: String },
 }
 
-/// Math environments handled by the tokenizer.
+/// Math environments handled by the tokenizer (including the `*`-variants,
+/// which are the same environments in unnumbered form).
 const MATH_ENVIRONMENTS: &[&str] = &[
     "equation",
+    "equation*",
     "align",
+    "align*",
+    "alignat",
+    "alignat*",
     "gather",
+    "gather*",
     "multline",
+    "multline*",
     "flalign",
+    "flalign*",
     "eqnarray",
+    "eqnarray*",
     "displaymath",
 ];
 
@@ -113,9 +125,57 @@ pub struct TokenizedFile {
     pub tokens: Vec<Token>,
 }
 
+/// A token paired with the byte span it covers in the source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpannedToken {
+    /// The token itself.
+    pub token: Token,
+    /// Byte offset of the first character of the construct, inclusive.
+    pub start: usize,
+    /// Byte offset just past the last character of the construct, exclusive.
+    pub end: usize,
+}
+
+/// The outcome of a position-aware tokenization.
+#[derive(Debug)]
+pub struct TokenizedSource {
+    /// The flat token stream, each with its source span.
+    pub tokens: Vec<SpannedToken>,
+    /// Byte offset of every `$`/`$$` delimiter that opened a math region with
+    /// no matching close in the source (the tokenizer synthesized the closing
+    /// delimiter at end of input).
+    pub unclosed_math: Vec<usize>,
+}
+
 /// Tokenize a single LaTeX source buffer.
 pub fn tokenize(source: &str) -> Vec<Token> {
+    tokenize_with_spans(source)
+        .tokens
+        .into_iter()
+        .map(|spanned| spanned.token)
+        .collect()
+}
+
+/// Tokenize a single LaTeX source buffer, pairing each token with its span.
+///
+/// The spans of prose-command arguments (`\textit{...}` and friends) and of
+/// `\href` link text are absolute offsets into `source`, so consumers can map
+/// any finding back to a `file:line` without re-scanning the buffer.
+pub fn tokenize_with_spans(source: &str) -> TokenizedSource {
     Parser::new(source).run()
+}
+
+/// Shift a tokenized buffer by `offset` bytes, as used when prose-command
+/// arguments are re-tokenized inside the enclosing source.
+fn offset_tokens(tokens: Vec<SpannedToken>, offset: usize) -> Vec<SpannedToken> {
+    tokens
+        .into_iter()
+        .map(|mut spanned| {
+            spanned.start += offset;
+            spanned.end += offset;
+            spanned
+        })
+        .collect()
 }
 
 /// Tokenize every `.tex` file reachable from `entry` via `\input{}`.
@@ -159,11 +219,17 @@ fn section_level(name: &str) -> Option<u8> {
 struct Parser<'a> {
     src: &'a str,
     pos: usize,
+    /// Byte offsets of `$`/`$$` math delimiters that were never closed.
+    unclosed_math: Vec<usize>,
 }
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str) -> Self {
-        Parser { src, pos: 0 }
+        Parser {
+            src,
+            pos: 0,
+            unclosed_math: Vec::new(),
+        }
     }
 
     fn peek(&self) -> Option<char> {
@@ -185,37 +251,51 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn run(mut self) -> Vec<Token> {
+    fn push(&self, tokens: &mut Vec<SpannedToken>, token: Token, start: usize, end: usize) {
+        tokens.push(SpannedToken { token, start, end });
+    }
+
+    fn run(mut self) -> TokenizedSource {
         let mut tokens = Vec::new();
         let mut text = String::new();
+        let mut text_start = 0usize;
 
         while let Some(c) = self.peek() {
             match c {
                 '%' => {
-                    self.flush_text(&mut tokens, &mut text);
-                    tokens.push(Token::Comment(self.read_comment()));
+                    self.flush_text(&mut tokens, &mut text, text_start);
+                    let start = self.pos;
+                    let comment = self.read_comment();
+                    self.push(&mut tokens, Token::Comment(comment), start, self.pos);
                 }
                 '\\' => {
-                    self.flush_text(&mut tokens, &mut text);
+                    self.flush_text(&mut tokens, &mut text, text_start);
                     self.handle_backslash(&mut tokens);
                 }
                 '$' => {
-                    self.flush_text(&mut tokens, &mut text);
+                    self.flush_text(&mut tokens, &mut text, text_start);
                     self.read_dollar_math(&mut tokens);
                 }
                 _ => {
+                    if text.is_empty() {
+                        text_start = self.pos;
+                    }
                     text.push(c);
                     self.bump();
                 }
             }
         }
-        self.flush_text(&mut tokens, &mut text);
-        tokens
+        self.flush_text(&mut tokens, &mut text, text_start);
+        TokenizedSource {
+            tokens,
+            unclosed_math: self.unclosed_math,
+        }
     }
 
-    fn flush_text(&self, tokens: &mut Vec<Token>, text: &mut String) {
+    fn flush_text(&self, tokens: &mut Vec<SpannedToken>, text: &mut String, start: usize) {
         if !text.is_empty() {
-            tokens.push(Token::Text(std::mem::take(text)));
+            let end = self.pos;
+            self.push(tokens, Token::Text(std::mem::take(text)), start, end);
         }
     }
 
@@ -231,48 +311,61 @@ impl<'a> Parser<'a> {
         self.src[start..self.pos].to_string()
     }
 
-    fn handle_backslash(&mut self, tokens: &mut Vec<Token>) {
+    fn handle_backslash(&mut self, tokens: &mut Vec<SpannedToken>) {
+        let start = self.pos;
         self.bump(); // consume the backslash
         let Some(c) = self.peek() else {
-            tokens.push(Token::Command {
-                name: "\\".to_string(),
-                args: Vec::new(),
-            });
+            self.push(
+                tokens,
+                Token::Command {
+                    name: "\\".to_string(),
+                    args: Vec::new(),
+                },
+                start,
+                self.pos,
+            );
             return;
         };
 
         match c {
             '[' => {
                 self.bump();
-                tokens.push(Token::BeginMath);
+                self.push(tokens, Token::BeginMath, start, start + 2);
+                let close_start = self.pos;
                 self.skip_to_control_close(']');
-                tokens.push(Token::EndMath);
+                self.push(tokens, Token::EndMath, close_start, close_start + 2);
             }
             ']' => {
                 self.bump();
-                tokens.push(Token::EndMath);
+                self.push(tokens, Token::EndMath, start, start + 2);
             }
             '(' => {
                 self.bump();
-                tokens.push(Token::BeginMath);
+                self.push(tokens, Token::BeginMath, start, start + 2);
+                let close_start = self.pos;
                 self.skip_to_control_close(')');
-                tokens.push(Token::EndMath);
+                self.push(tokens, Token::EndMath, close_start, close_start + 2);
             }
             ')' => {
                 self.bump();
-                tokens.push(Token::EndMath);
+                self.push(tokens, Token::EndMath, start, start + 2);
             }
             _ if is_command_char(c) => {
                 let name = self.read_command_name();
-                self.handle_command(&name, tokens);
+                self.handle_command(&name, start, tokens);
             }
             _ => {
                 // Control symbol: `\\`, `\$`, `\%`, `\{`, `\&`, ...
                 self.bump();
-                tokens.push(Token::Command {
-                    name: c.to_string(),
-                    args: Vec::new(),
-                });
+                self.push(
+                    tokens,
+                    Token::Command {
+                        name: c.to_string(),
+                        args: Vec::new(),
+                    },
+                    start,
+                    self.pos,
+                );
             }
         }
     }
@@ -289,66 +382,118 @@ impl<'a> Parser<'a> {
         self.src[start..self.pos].to_string()
     }
 
-    fn handle_command(&mut self, name: &str, tokens: &mut Vec<Token>) {
+    fn handle_command(&mut self, name: &str, start: usize, tokens: &mut Vec<SpannedToken>) {
         match name {
-            "begin" => self.handle_begin(tokens),
-            "end" => self.handle_end(tokens),
+            "begin" => self.handle_begin(start, tokens),
+            "end" => self.handle_end(start, tokens),
+            "verb" | "lstinline" => self.handle_verb_command(name, start, tokens),
             _ => {
                 if let Some(level) = section_level(name) {
                     self.eat('*');
                     let _ = self.read_bracket_group();
                     let title = self.read_braced_group().unwrap_or_default();
-                    tokens.push(Token::Section { level, title });
+                    self.push(tokens, Token::Section { level, title }, start, self.pos);
                 } else if name == "href" {
-                    self.handle_href(tokens);
+                    self.handle_href(start, tokens);
                 } else if PROSE_COMMANDS.contains(&name) {
-                    self.handle_prose_command(name, tokens);
+                    self.handle_prose_command(name, start, tokens);
                 } else {
-                    self.handle_plain_command(name, tokens);
+                    self.handle_plain_command(name, start, tokens);
                 }
             }
         }
     }
 
-    fn handle_begin(&mut self, tokens: &mut Vec<Token>) {
+    /// `\verb[char][...]` and `\lstinline[opts][char][...]`: the delimiter is
+    /// the first non-letter after the name (and any options); everything up to
+    /// the next occurrence of that delimiter is verbatim and never prose.
+    fn handle_verb_command(&mut self, name: &str, start: usize, tokens: &mut Vec<SpannedToken>) {
+        let mut args = Vec::new();
+        if name == "lstinline" {
+            while let Some(optional) = self.read_bracket_group() {
+                args.push(optional);
+            }
+        }
+        if self.peek() == Some('*') {
+            self.bump();
+        }
+        let Some(delim) = self.bump() else {
+            self.push(
+                tokens,
+                Token::Command {
+                    name: name.to_string(),
+                    args,
+                },
+                start,
+                self.pos,
+            );
+            return;
+        };
+        let mut content = String::new();
+        while let Some(c) = self.peek() {
+            if c == delim || c == '\n' {
+                break;
+            }
+            content.push(c);
+            self.bump();
+        }
+        args.push(content);
+        self.push(
+            tokens,
+            Token::Command {
+                name: name.to_string(),
+                args,
+            },
+            start,
+            self.pos,
+        );
+    }
+
+    fn handle_begin(&mut self, start: usize, tokens: &mut Vec<SpannedToken>) {
         let env = self.read_braced_group().unwrap_or_default();
         // Discard float placement etc.: `\begin{figure}[htbp]`.
         let _ = self.read_bracket_group();
+        let mid = self.pos;
 
         if env == "document" {
-            tokens.push(Token::BeginDocument);
+            self.push(tokens, Token::BeginDocument, start, mid);
             return;
         }
         if MATH_ENVIRONMENTS.contains(&env.as_str()) {
-            tokens.push(Token::BeginMath);
+            self.push(tokens, Token::BeginMath, start, mid);
             self.skip_to_env_end(&env);
-            tokens.push(Token::EndMath);
+            self.push(tokens, Token::EndMath, mid, self.pos);
             return;
         }
         if VERBATIM_ENVIRONMENTS.contains(&env.as_str()) {
-            tokens.push(Token::BeginVerbatim { env: env.clone() });
+            self.push(
+                tokens,
+                Token::BeginVerbatim { env: env.clone() },
+                start,
+                mid,
+            );
             self.skip_to_env_end(&env);
-            tokens.push(Token::EndVerbatim { env });
+            self.push(tokens, Token::EndVerbatim { env }, mid, self.pos);
             return;
         }
-        tokens.push(Token::Environment { name: env });
+        self.push(tokens, Token::Environment { name: env }, start, self.pos);
     }
 
-    fn handle_end(&mut self, tokens: &mut Vec<Token>) {
+    fn handle_end(&mut self, start: usize, tokens: &mut Vec<SpannedToken>) {
         let env = self.read_braced_group().unwrap_or_default();
         if env == "document" {
-            tokens.push(Token::EndDocument);
+            self.push(tokens, Token::EndDocument, start, self.pos);
         } else if MATH_ENVIRONMENTS.contains(&env.as_str()) {
-            tokens.push(Token::EndMath);
+            self.push(tokens, Token::EndMath, start, self.pos);
         } else if VERBATIM_ENVIRONMENTS.contains(&env.as_str()) {
-            tokens.push(Token::EndVerbatim { env });
+            self.push(tokens, Token::EndVerbatim { env }, start, self.pos);
         } else {
-            tokens.push(Token::Environment { name: env });
+            self.push(tokens, Token::Environment { name: env }, start, self.pos);
         }
     }
 
     /// `\href{url}{text}`: the URL is a non-prose argument, the link text is prose.
-    fn handle_href(&mut self, tokens: &mut Vec<Token>) {
+    fn handle_href(&mut self, start: usize, tokens: &mut Vec<SpannedToken>) {
         let mut args = Vec::new();
         while let Some(optional) = self.read_bracket_group() {
             args.push(optional);
@@ -356,32 +501,48 @@ impl<'a> Parser<'a> {
         if let Some(url) = self.read_braced_group() {
             args.push(url);
         }
-        tokens.push(Token::Command {
-            name: "href".to_string(),
-            args,
-        });
-        if let Some(text) = self.read_braced_group() {
-            tokens.extend(tokenize(&text));
+        self.push(
+            tokens,
+            Token::Command {
+                name: "href".to_string(),
+                args,
+            },
+            start,
+            self.pos,
+        );
+        if let Some((text, text_start, _text_end)) = self.read_braced_group_spanned() {
+            let sub = tokenize_with_spans(&text);
+            self.unclosed_math
+                .extend(sub.unclosed_math.iter().map(|offset| offset + text_start));
+            tokens.extend(offset_tokens(sub.tokens, text_start));
         }
     }
 
     /// A command whose braced argument is prose, emitted as [`Token::Text`].
-    fn handle_prose_command(&mut self, name: &str, tokens: &mut Vec<Token>) {
+    fn handle_prose_command(&mut self, name: &str, start: usize, tokens: &mut Vec<SpannedToken>) {
         let mut args = Vec::new();
         while let Some(optional) = self.read_bracket_group() {
             args.push(optional);
         }
-        tokens.push(Token::Command {
-            name: name.to_string(),
-            args,
-        });
-        if let Some(prose) = self.read_braced_group() {
-            tokens.extend(tokenize(&prose));
+        self.push(
+            tokens,
+            Token::Command {
+                name: name.to_string(),
+                args,
+            },
+            start,
+            self.pos,
+        );
+        if let Some((prose, prose_start, _prose_end)) = self.read_braced_group_spanned() {
+            let sub = tokenize_with_spans(&prose);
+            self.unclosed_math
+                .extend(sub.unclosed_math.iter().map(|offset| offset + prose_start));
+            tokens.extend(offset_tokens(sub.tokens, prose_start));
         }
     }
 
     /// Any other command: greedily collect optional and braced arguments.
-    fn handle_plain_command(&mut self, name: &str, tokens: &mut Vec<Token>) {
+    fn handle_plain_command(&mut self, name: &str, start: usize, tokens: &mut Vec<SpannedToken>) {
         let mut args = Vec::new();
         loop {
             if let Some(optional) = self.read_bracket_group() {
@@ -394,18 +555,30 @@ impl<'a> Parser<'a> {
             }
             break;
         }
-        tokens.push(Token::Command {
-            name: name.to_string(),
-            args,
-        });
+        self.push(
+            tokens,
+            Token::Command {
+                name: name.to_string(),
+                args,
+            },
+            start,
+            self.pos,
+        );
     }
 
     /// Read a balanced `{...}` group, returning its raw content (escaped
     /// braces `\{`/`\}` do not affect nesting).
     fn read_braced_group(&mut self) -> Option<String> {
+        self.read_braced_group_spanned().map(|(text, _, _)| text)
+    }
+
+    /// Like [`Parser::read_braced_group`], also returning the byte span of the
+    /// inner content so consumers can map re-tokenized prose back to the source.
+    fn read_braced_group_spanned(&mut self) -> Option<(String, usize, usize)> {
         if !self.eat('{') {
             return None;
         }
+        let content_start = self.pos;
         let mut depth = 1usize;
         let mut out = String::new();
         while let Some(c) = self.peek() {
@@ -426,7 +599,7 @@ impl<'a> Parser<'a> {
                     depth -= 1;
                     self.bump();
                     if depth == 0 {
-                        break;
+                        return Some((out, content_start, self.pos - 1));
                     }
                     out.push('}');
                 }
@@ -436,7 +609,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Some(out)
+        Some((out, content_start, self.pos))
     }
 
     /// Read a balanced `[...]` optional-argument group.
@@ -477,24 +650,33 @@ impl<'a> Parser<'a> {
         Some(out)
     }
 
-    fn read_dollar_math(&mut self, tokens: &mut Vec<Token>) {
+    fn read_dollar_math(&mut self, tokens: &mut Vec<SpannedToken>) {
+        let start = self.pos; // at the opening `$`
         self.bump(); // consume the opening `$`
         let display = self.eat('$');
-        tokens.push(Token::BeginMath);
-        if display {
-            self.skip_to_display_close();
+        let delim_len = if display { 2 } else { 1 };
+        self.push(tokens, Token::BeginMath, start, start + delim_len);
+        let closed = if display {
+            self.skip_to_display_close()
         } else {
-            self.skip_to_inline_dollar();
+            self.skip_to_inline_dollar()
+        };
+        if !closed {
+            self.unclosed_math.push(start);
         }
-        tokens.push(Token::EndMath);
+        let end = self.pos;
+        self.push(tokens, Token::EndMath, end.saturating_sub(delim_len), end);
     }
 
-    /// Advance past a `$$` close (or to end of input).
-    fn skip_to_display_close(&mut self) {
+    /// Advance past a `$$` close (or to end of input). Returns whether a close
+    /// was actually found.
+    fn skip_to_display_close(&mut self) -> bool {
         if let Some(idx) = self.src[self.pos..].find("$$") {
             self.pos += idx + 2;
+            true
         } else {
             self.pos = self.src.len();
+            false
         }
     }
 
@@ -508,8 +690,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Advance past the closing inline `$`, honoring escaped `\$`.
-    fn skip_to_inline_dollar(&mut self) {
+    /// Advance past the closing inline `$`, honoring escaped `\$`. Returns
+    /// whether a close was actually found.
+    fn skip_to_inline_dollar(&mut self) -> bool {
         let bytes = self.src.as_bytes();
         let mut i = self.pos;
         let mut backslashes = 0usize;
@@ -522,7 +705,7 @@ impl<'a> Parser<'a> {
                 b'$' => {
                     if backslashes % 2 == 0 {
                         self.pos = i + 1;
-                        return;
+                        return true;
                     }
                     backslashes = 0;
                     i += 1;
@@ -534,6 +717,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.pos = self.src.len();
+        false
     }
 
     /// Advance past the matching `\end{env}` terminator (or to end of input,
@@ -1060,5 +1244,147 @@ mod tests {
             .tokens
             .iter()
             .any(|t| matches!(t, Token::BeginDocument)));
+    }
+
+    #[test]
+    fn tokenize_agrees_with_tokenize_with_spans() {
+        let src = r"before $x+1$ after \textit{emph} 50% done";
+        let plain = tokenize(src);
+        let spanned = tokenize_with_spans(src);
+        let projected: Vec<Token> = spanned.tokens.iter().map(|s| s.token.clone()).collect();
+        assert_eq!(plain, projected);
+    }
+
+    #[test]
+    fn spans_cover_text_comments_and_commands() {
+        let src = "hola % c\n\\ref{fig:1}";
+        let spanned = tokenize_with_spans(src).tokens;
+        assert_eq!(
+            spanned,
+            vec![
+                SpannedToken {
+                    token: Token::Text("hola ".to_string()),
+                    start: 0,
+                    end: 5,
+                },
+                SpannedToken {
+                    token: Token::Comment("% c".to_string()),
+                    start: 5,
+                    end: 8,
+                },
+                SpannedToken {
+                    token: Token::Text("\n".to_string()),
+                    start: 8,
+                    end: 9,
+                },
+                SpannedToken {
+                    token: Token::Command {
+                        name: "ref".to_string(),
+                        args: vec!["fig:1".to_string()],
+                    },
+                    start: 9,
+                    end: 20,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn prose_command_args_get_absolute_spans() {
+        let src = "\\textit{hello world}";
+        let spanned = tokenize_with_spans(src).tokens;
+        let text = spanned
+            .iter()
+            .find(|s| matches!(s.token, Token::Text(_)))
+            .unwrap();
+        assert_eq!(
+            *text,
+            SpannedToken {
+                token: Token::Text("hello world".to_string()),
+                start: 8,
+                end: 19,
+            }
+        );
+        assert_eq!(&src[text.start..text.end], "hello world");
+    }
+
+    #[test]
+    fn href_link_text_gets_absolute_spans() {
+        let src = r"\href{https://example.com}{Example}";
+        let spanned = tokenize_with_spans(src).tokens;
+        let text = spanned
+            .iter()
+            .find(|s| matches!(s.token, Token::Text(_)))
+            .unwrap();
+        assert_eq!(&src[text.start..text.end], "Example");
+    }
+
+    #[test]
+    fn verb_commands_are_not_prose() {
+        let src = r"a \verb|b_c & d| e \verb*#$x$# f \lstinline|l_m| g";
+        let tokens = tokenize(src);
+        let has_prose = tokens
+            .iter()
+            .any(|t| matches!(t, Token::Text(s) if s.contains('_')));
+        assert!(!has_prose);
+        assert!(tokens.iter().any(|t| matches!(
+            t,
+            Token::Command { name, args } if name == "verb" && args.contains(&"b_c & d".to_string())
+        )));
+        assert!(tokens.iter().any(|t| matches!(
+            t,
+            Token::Command { name, args } if name == "verb" && args.contains(&"$x$".to_string())
+        )));
+        assert!(tokens.iter().any(|t| matches!(
+            t,
+            Token::Command { name, args } if name == "lstinline" && args.contains(&"l_m".to_string())
+        )));
+    }
+
+    #[test]
+    fn starred_math_environments_are_stripped() {
+        for env in [
+            "equation*",
+            "align*",
+            "alignat*",
+            "gather*",
+            "multline*",
+            "flalign*",
+        ] {
+            let src = format!("before \\begin{{{env}}}a &= b_{{0}}\\end{{{env}}} after");
+            let tokens = tokenize(&src);
+            assert_eq!(
+                tokens,
+                vec![
+                    Token::Text("before ".to_string()),
+                    Token::BeginMath,
+                    Token::EndMath,
+                    Token::Text(" after".to_string()),
+                ],
+                "starred math env: {env}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclosed_dollar_math_is_reported() {
+        let src = "costo: $5 dolares\nfin";
+        let tokenized = tokenize_with_spans(src);
+        assert_eq!(tokenized.unclosed_math, vec![7]);
+        assert_eq!(&src[7..8], "$");
+    }
+
+    #[test]
+    fn closed_dollar_math_is_not_reported() {
+        let tokenized = tokenize_with_spans(r"El valor es $x^2$");
+        assert!(tokenized.unclosed_math.is_empty());
+    }
+
+    #[test]
+    fn unclosed_dollar_in_prose_command_is_reported_absolutely() {
+        let src = r"\textit{costo $5}";
+        let tokenized = tokenize_with_spans(src);
+        assert_eq!(tokenized.unclosed_math, vec![14]);
+        assert_eq!(&src[14..15], "$");
     }
 }
