@@ -60,6 +60,12 @@ enum Commands {
         #[arg(long, value_enum, default_value = "section")]
         by: crate::commands::stats::ByMode,
     },
+    /// Print the document's section tree
+    Outline {
+        /// Output JSON instead of a human-readable tree
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage templates
     Template {
         #[command(subcommand)]
@@ -110,6 +116,7 @@ impl Cli {
             Commands::Fmt { check } => commands::fmt::execute(check),
             Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
             Commands::Stats { json, by } => commands::stats::execute(json, by),
+            Commands::Outline { json } => commands::outline::execute(json),
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
                 TemplateAction::Add { source } => commands::template::add(&source),
