@@ -38,6 +38,11 @@ enum Commands {
         /// Print every engine warning instead of a per-file summary
         #[arg(long)]
         verbose: bool,
+        /// Build reproducibly: pin `SOURCE_DATE_EPOCH` so identical source plus
+        /// the same Tectonic version yields an identical PDF. An optional epoch
+        /// (seconds since the Unix epoch) overrides the fixed default.
+        #[arg(long, num_args = 0..=1)]
+        reproducible: Option<Option<u64>>,
     },
     /// Format .tex files
     Fmt {
@@ -106,11 +111,12 @@ impl Cli {
                 watch,
                 delay,
                 verbose,
+                reproducible,
             } => {
                 if watch {
-                    commands::build::watch(delay, verbose)
+                    commands::build::watch(delay, verbose, reproducible)
                 } else {
-                    commands::build::execute(verbose)
+                    commands::build::execute(verbose, reproducible)
                 }
             }
             Commands::Fmt { check } => commands::fmt::execute(check),

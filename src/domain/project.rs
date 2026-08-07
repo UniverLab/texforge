@@ -24,6 +24,20 @@ pub struct BuildConfig {
     pub entry: String,
     #[serde(default)]
     pub bibliography: Option<String>,
+    #[serde(default)]
+    pub reproducible: Option<Reproducible>,
+}
+
+/// Reproducible-build setting from `project.toml` (`[build] reproducible`).
+///
+/// Accepts `true` to pin a fixed default epoch, `false` to disable, or a
+/// number to pin an explicit `SOURCE_DATE_EPOCH` value. Absent means the build
+/// is not reproducible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Reproducible {
+    Enabled(bool),
+    Epoch(u64),
 }
 
 /// Represents a `TexForge` project.
@@ -100,6 +114,7 @@ entry = "main.tex"
             build: BuildConfig {
                 entry: "main.tex".to_string(),
                 bibliography: Some("refs.bib".to_string()),
+                reproducible: None,
             },
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -119,6 +134,7 @@ entry = "main.tex"
             build: BuildConfig {
                 entry: "main.tex".to_string(),
                 bibliography: None,
+                reproducible: None,
             },
         };
         let cloned = config.clone();
@@ -164,5 +180,96 @@ entry = "main.tex"
         let result = Project::load();
         std::env::set_current_dir(&orig).unwrap();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn project_config_reproducible_true() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+reproducible = true
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.build.reproducible, Some(Reproducible::Enabled(true)));
+    }
+
+    #[test]
+    fn project_config_reproducible_false() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+reproducible = false
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.build.reproducible,
+            Some(Reproducible::Enabled(false))
+        );
+    }
+
+    #[test]
+    fn project_config_reproducible_explicit_epoch() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+reproducible = 1700000000
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.build.reproducible,
+            Some(Reproducible::Epoch(1700000000))
+        );
+    }
+
+    #[test]
+    fn project_config_reproducible_absent_is_off() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.build.reproducible, None);
+    }
+
+    #[test]
+    fn project_config_reproducible_roundtrip() {
+        let config = ProjectConfig {
+            document: DocumentConfig {
+                title: "T".to_string(),
+                author: "A".to_string(),
+                template: "general".to_string(),
+            },
+            build: BuildConfig {
+                entry: "main.tex".to_string(),
+                bibliography: None,
+                reproducible: Some(Reproducible::Epoch(1700000000)),
+            },
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let parsed: ProjectConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            parsed.build.reproducible,
+            Some(Reproducible::Epoch(1700000000))
+        );
     }
 }

@@ -8,22 +8,25 @@ use anyhow::{Context, Result};
 
 use crate::linter::Severity;
 
+/// Fixed `SOURCE_DATE_EPOCH` value used when reproducible mode is enabled
+/// without an explicit epoch. Deliberately not "now": a fixed value is what
+/// makes the same source compile to the same PDF.
+pub const DEFAULT_EPOCH: u64 = 1700000000;
+
 /// Compile a LaTeX project to PDF using Tectonic.
 /// `root` is the working directory; output PDF goes into `root/` itself.
+///
+/// When `epoch` is `Some`, the `SOURCE_DATE_EPOCH` environment variable is set
+/// for the Tectonic invocation so that identical source plus an identical
+/// Tectonic version yields an identical PDF. `None` leaves the build as-is.
 ///
 /// On a successful build, warnings emitted by the engine are parsed and
 /// printed to the console — summarized per file, or every occurrence with
 /// `verbose` — without changing the success exit code.
-pub fn compile(root: &Path, entry: &str, verbose: bool) -> Result<()> {
+pub fn compile(root: &Path, entry: &str, verbose: bool, epoch: Option<u64>) -> Result<()> {
     let tectonic = find_tectonic()?;
-    let entry_path = root.join(entry);
 
-    let output = Command::new(&tectonic)
-        .arg(&entry_path)
-        .arg("--outdir")
-        .arg(root)
-        .arg("--keep-logs")
-        .current_dir(root)
+    let output = tectonic_command(&tectonic, root, entry, epoch)
         .output()
         .with_context(|| format!("Failed to run tectonic at {}", tectonic.display()))?;
 
@@ -51,6 +54,26 @@ pub fn compile(root: &Path, entry: &str, verbose: bool) -> Result<()> {
         ));
     }
     anyhow::bail!("{}", msg.trim());
+}
+
+/// Build the Tectonic invocation. Reproducible builds set `SOURCE_DATE_EPOCH`;
+/// everything else in the invocation is identical either way.
+fn tectonic_command(
+    tectonic: &std::path::Path,
+    root: &Path,
+    entry: &str,
+    epoch: Option<u64>,
+) -> Command {
+    let mut cmd = Command::new(tectonic);
+    cmd.arg(root.join(entry))
+        .arg("--outdir")
+        .arg(root)
+        .arg("--keep-logs")
+        .current_dir(root);
+    if let Some(epoch) = epoch {
+        cmd.env("SOURCE_DATE_EPOCH", epoch.to_string());
+    }
+    cmd
 }
 
 struct CompileError {
@@ -266,7 +289,7 @@ fn find_tectonic() -> Result<std::path::PathBuf> {
 }
 
 /// Locate tectonic in PATH or known install locations without installing.
-fn locate_tectonic() -> Option<std::path::PathBuf> {
+pub(crate) fn locate_tectonic() -> Option<std::path::PathBuf> {
     // Check PATH using platform-appropriate which/where
     #[cfg(unix)]
     let which_cmd = "which";
@@ -415,6 +438,49 @@ fn current_target() -> Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_sets_source_date_epoch_when_pinned() {
+        let cmd = tectonic_command(
+            Path::new("tectonic"),
+            Path::new("/tmp/root"),
+            "main.tex",
+            Some(DEFAULT_EPOCH),
+        );
+        let epochs: Vec<_> = cmd
+            .get_envs()
+            .filter_map(|(key, value)| {
+                if key == "SOURCE_DATE_EPOCH" {
+                    value.map(|b| b.to_os_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            epochs,
+            vec![std::ffi::OsString::from(DEFAULT_EPOCH.to_string())]
+        );
+    }
+
+    #[test]
+    fn command_omits_source_date_epoch_when_not_pinned() {
+        let cmd = tectonic_command(
+            Path::new("tectonic"),
+            Path::new("/tmp/root"),
+            "main.tex",
+            None,
+        );
+        let has_epoch = cmd.get_envs().any(|(key, _)| key == "SOURCE_DATE_EPOCH");
+        assert!(!has_epoch);
+    }
+
+    #[test]
+    fn default_epoch_is_fixed_and_not_zero() {
+        // Reproducibility needs a fixed value, not "now" — and not the
+        // pre-1970-style sentinel that would be indistinguishable from unset.
+        assert_eq!(DEFAULT_EPOCH, 1700000000);
+    }
 
     #[test]
     fn parse_errors_tectonic_style() {

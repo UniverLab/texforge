@@ -20,6 +20,8 @@ texforge <command> [options]
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |
 | `texforge build --watch --delay <s>` | Custom debounce delay (default: 2s) |
+| `texforge build --reproducible` | Pin `SOURCE_DATE_EPOCH` to a fixed epoch so identical source yields an identical PDF |
+| `texforge build --reproducible=<epoch>` | Reproducible build with an explicit epoch (seconds since the Unix epoch) |
 | `texforge clean` | Remove build artifacts |
 
 ## Quality

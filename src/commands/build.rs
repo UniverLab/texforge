@@ -10,14 +10,34 @@ use notify::{RecursiveMode, Watcher};
 use crate::commands::init::BANNER;
 use crate::compiler;
 use crate::diagrams;
-use crate::domain::project::Project;
+use crate::domain::project::{Project, Reproducible};
 use crate::utils::sanitize_filename;
 
+/// Resolve the `SOURCE_DATE_EPOCH` value for a build. The CLI flag wins over
+/// `project.toml`; a flag with no value pins the fixed default epoch; a config
+/// value pins its own epoch or the default when enabled without one.
+fn resolve_epoch(cli: Option<Option<u64>>, config: Option<Reproducible>) -> Option<u64> {
+    match cli {
+        Some(Some(epoch)) => Some(epoch),
+        Some(None) => Some(compiler::DEFAULT_EPOCH),
+        None => match config {
+            Some(Reproducible::Enabled(true)) => Some(compiler::DEFAULT_EPOCH),
+            Some(Reproducible::Epoch(epoch)) => Some(epoch),
+            Some(Reproducible::Enabled(false)) | None => None,
+        },
+    }
+}
+
 /// Compile project to PDF using a temp directory, output named after the document title.
-pub fn execute(verbose: bool) -> Result<()> {
+pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     let project = Project::load()?;
     let titulo = &project.config.document.title;
     println!("Building project: {titulo}");
+
+    let epoch = resolve_epoch(reproducible, project.config.build.reproducible);
+    if epoch.is_some() {
+        println!("  ◇ reproducible build (SOURCE_DATE_EPOCH pinned)");
+    }
 
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path();
@@ -28,7 +48,7 @@ pub fn execute(verbose: bool) -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    compiler::compile(build_dir, &entry_filename, verbose)?;
+    compiler::compile(build_dir, &entry_filename, verbose, epoch)?;
 
     let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
     let pdf_dest = project.root.join(&pdf_name);
@@ -45,8 +65,9 @@ pub fn execute(verbose: bool) -> Result<()> {
 }
 
 /// Watch for .tex file changes and rebuild with debounce.
-pub fn watch(delay_secs: u64, verbose: bool) -> Result<()> {
+pub fn watch(delay_secs: u64, verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     let project = Project::load()?;
+    let epoch = resolve_epoch(reproducible, project.config.build.reproducible);
     let debounce = Duration::from_secs(delay_secs);
     let cooldown = Duration::from_secs(2);
 
@@ -56,7 +77,7 @@ pub fn watch(delay_secs: u64, verbose: bool) -> Result<()> {
     let build_dir = temp_dir.path().to_path_buf();
 
     let started = std::time::Instant::now();
-    let result = run_build(&project, &build_dir, verbose);
+    let result = run_build(&project, &build_dir, verbose, epoch);
     redraw_status(&result, 1, started);
 
     let (tx, rx) = mpsc::channel();
@@ -99,7 +120,7 @@ pub fn watch(delay_secs: u64, verbose: bool) -> Result<()> {
         if pending && last_event.elapsed() >= debounce {
             pending = false;
             build_count += 1;
-            last_result = run_build(&project, &build_dir, verbose);
+            last_result = run_build(&project, &build_dir, verbose, epoch);
             last_build = std::time::Instant::now();
             redraw_status(&last_result, build_count, started);
         }
@@ -139,7 +160,12 @@ enum WatchResult {
     Err(String),
 }
 
-fn run_build(project: &Project, build_dir: &Path, verbose: bool) -> WatchResult {
+fn run_build(
+    project: &Project,
+    build_dir: &Path,
+    verbose: bool,
+    epoch: Option<u64>,
+) -> WatchResult {
     let _ = std::fs::create_dir_all(build_dir);
     if let Err(e) = diagrams::process(&project.root, &project.config.build.entry, build_dir) {
         return WatchResult::Err(e.to_string());
@@ -148,7 +174,7 @@ fn run_build(project: &Project, build_dir: &Path, verbose: bool) -> WatchResult 
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    match compiler::compile(build_dir, &entry_filename, verbose) {
+    match compiler::compile(build_dir, &entry_filename, verbose, epoch) {
         Ok(()) => {
             let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
             let pdf_dest = project.root.join(&pdf_name);
@@ -164,5 +190,105 @@ fn run_build(project: &Project, build_dir: &Path, verbose: bool) -> WatchResult 
             }
         }
         Err(e) => WatchResult::Err(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flag_without_value_wins_with_default_epoch() {
+        assert_eq!(
+            resolve_epoch(Some(None), Some(Reproducible::Epoch(123))),
+            Some(compiler::DEFAULT_EPOCH)
+        );
+    }
+
+    #[test]
+    fn flag_with_value_wins_over_config() {
+        assert_eq!(
+            resolve_epoch(Some(Some(123)), Some(Reproducible::Enabled(true))),
+            Some(123)
+        );
+    }
+
+    #[test]
+    fn config_enabled_uses_default_epoch() {
+        assert_eq!(
+            resolve_epoch(None, Some(Reproducible::Enabled(true))),
+            Some(compiler::DEFAULT_EPOCH)
+        );
+    }
+
+    #[test]
+    fn config_explicit_epoch_used_when_no_flag() {
+        assert_eq!(
+            resolve_epoch(None, Some(Reproducible::Epoch(1700000000))),
+            Some(1700000000)
+        );
+    }
+
+    #[test]
+    fn config_disabled_or_absent_is_off() {
+        assert_eq!(
+            resolve_epoch(None, Some(Reproducible::Enabled(false))),
+            None
+        );
+        assert_eq!(resolve_epoch(None, None), None);
+    }
+
+    fn tectonic_available() -> bool {
+        crate::compiler::locate_tectonic().is_some()
+    }
+
+    /// A minimal project fixture: a single self-contained .tex file.
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\nReproducible world.\n\\end{document}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn reproducible_builds_are_byte_identical() {
+        if !tectonic_available() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let dir = fixture();
+        compiler::compile(dir.path(), "main.tex", false, Some(compiler::DEFAULT_EPOCH)).unwrap();
+        let first = std::fs::read(dir.path().join("main.pdf")).unwrap();
+        compiler::compile(dir.path(), "main.tex", false, Some(compiler::DEFAULT_EPOCH)).unwrap();
+        let second = std::fs::read(dir.path().join("main.pdf")).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn explicit_epoch_builds_are_byte_identical() {
+        if !tectonic_available() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let dir = fixture();
+        compiler::compile(dir.path(), "main.tex", false, Some(1700000000)).unwrap();
+        let first = std::fs::read(dir.path().join("main.pdf")).unwrap();
+        compiler::compile(dir.path(), "main.tex", false, Some(1700000000)).unwrap();
+        let second = std::fs::read(dir.path().join("main.pdf")).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn non_reproducible_build_still_succeeds() {
+        if !tectonic_available() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let dir = fixture();
+        compiler::compile(dir.path(), "main.tex", false, None).unwrap();
+        assert!(dir.path().join("main.pdf").exists());
     }
 }
