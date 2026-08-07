@@ -119,6 +119,30 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         errors.extend(glyphs::lint_file(&rel, &content));
         file_contents.push((rel, content));
     }
+
+    // TF12: report .bib keys that are never cited. `\nocite{*}` cites every key.
+    let mut cited_keys = HashSet::new();
+    let mut nocite_star = false;
+    collect_cited_keys(&file_contents, &mut cited_keys, &mut nocite_star);
+    if !nocite_star {
+        let mut unused: Vec<&str> = bib_keys
+            .difference(&cited_keys)
+            .map(String::as_str)
+            .collect();
+        if !unused.is_empty() {
+            unused.sort();
+            errors.push(LintFinding {
+                severity: Severity::Warning,
+                file: bib_file.unwrap_or("").to_string(),
+                line: 0,
+                message: format!("Unused .bib entries (never cited): {}", unused.join(", ")),
+                suggestion: Some(
+                    "Cite them with \\cite or remove them from the bibliography".into(),
+                ),
+            });
+        }
+    }
+
     errors.extend(engine::lint_files(&file_contents));
 
     Ok(errors)
@@ -215,6 +239,42 @@ fn check_cite_references(
                     message: format!("\\cite{{{}}} — key not found in .bib", key),
                     suggestion: None,
                 });
+            }
+        }
+    }
+}
+
+/// Collect every cited key from in-memory file contents for the unused-bib check.
+///
+/// `\cite{...}` and `\nocite{...}` mark their keys as cited; `\nocite{*}` cites
+/// every key in the bibliography, so it sets `nocite_star` instead.
+fn collect_cited_keys(
+    file_contents: &[(String, String)],
+    cited_keys: &mut HashSet<String>,
+    nocite_star: &mut bool,
+) {
+    for (_, content) in file_contents {
+        for line in content.lines() {
+            let line = texutil::strip_comment(line);
+            for arg in texutil::extract_commands(&line, "cite") {
+                for key in arg.split(',') {
+                    let key = key.trim();
+                    if !key.is_empty() {
+                        cited_keys.insert(key.to_string());
+                    }
+                }
+            }
+            for arg in texutil::extract_commands(&line, "nocite") {
+                if arg == "*" {
+                    *nocite_star = true;
+                } else {
+                    for key in arg.split(',') {
+                        let key = key.trim();
+                        if !key.is_empty() {
+                            cited_keys.insert(key.to_string());
+                        }
+                    }
+                }
             }
         }
     }
@@ -812,5 +872,92 @@ mod tests {
         std::fs::write(dir.path().join("refs.bib"), "@article{real,}").unwrap();
         let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
         assert!(findings.iter().any(|f| f.severity == Severity::Error));
+    }
+
+    // --- Unused .bib entries (TF12) ---
+
+    /// Unused bib keys are reported once, as a Warning naming the .bib file.
+    #[test]
+    fn unused_bib_entries_warn_as_single_finding() {
+        let (dir, entry) = setup("\\cite{key1}\n\\cite{key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}\n@article{unused3,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        let unused: Vec<_> = findings
+            .iter()
+            .filter(|f| f.message.starts_with("Unused"))
+            .collect();
+        assert_eq!(unused.len(), 1, "grouped into one finding, not one per key");
+        let finding = unused[0];
+        assert_eq!(finding.severity, Severity::Warning);
+        assert_eq!(finding.file, "refs.bib");
+        assert!(finding.message.contains("unused3"));
+        assert!(!finding.message.contains("key1"));
+        assert!(!finding.message.contains("key2"));
+    }
+
+    /// `\nocite{*}` cites every key, so nothing is reported as unused.
+    #[test]
+    fn nocite_star_suppresses_unused_warning() {
+        let (dir, entry) = setup("\\nocite{*}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.starts_with("Unused")),
+            "\\nocite{{*}} reaches every key; none are unused"
+        );
+    }
+
+    /// Keys listed in `\nocite{...}` count as cited for the unused check.
+    #[test]
+    fn nocite_key_counts_as_cited() {
+        let (dir, entry) = setup("\\nocite{key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        let unused: Vec<_> = findings
+            .iter()
+            .filter(|f| f.message.starts_with("Unused"))
+            .collect();
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].message.contains("key1"));
+        assert!(!unused[0].message.contains("key2"));
+    }
+
+    /// A bibliography whose keys are all cited produces no unused warning.
+    #[test]
+    fn all_bib_entries_cited_no_unused_warning() {
+        let (dir, entry) = setup("\\cite{key1,key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.starts_with("Unused")),
+            "all keys are cited"
+        );
+    }
+
+    /// No bibliography means no unused-key warning.
+    #[test]
+    fn no_bib_file_no_unused_warning() {
+        let (dir, entry) = setup("\\cite{key1}");
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.starts_with("Unused")),
+            "no .bib, nothing to check"
+        );
     }
 }
