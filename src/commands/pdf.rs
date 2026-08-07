@@ -119,10 +119,12 @@ fn cmd_pages(project: &Project, pdf_path: &Path) -> Result<()> {
 }
 
 fn cmd_check(project: &Project, pdf_path: &Path) -> Result<()> {
-    let findings = pdftext::check_fidelity(&project.root, &project.config.build.entry, pdf_path)?;
+    let mut findings =
+        pdftext::check_fidelity(&project.root, &project.config.build.entry, pdf_path)?;
+    findings.extend(pdftext::check_quality(pdf_path)?);
 
     if findings.is_empty() {
-        println!("  ◇ PDF fidelity: all significant source words found");
+        println!("  ◇ PDF check: fidelity, fonts, and metadata look good");
         return Ok(());
     }
 
@@ -141,7 +143,7 @@ fn cmd_check(project: &Project, pdf_path: &Path) -> Result<()> {
         println!();
     }
 
-    // Fidelity findings are warnings only — exit zero unless the caller
+    // Findings are warnings only — exit zero unless the caller
     // pipes through `check --deny-warnings`. Distinct words, not flood.
     Ok(())
 }
