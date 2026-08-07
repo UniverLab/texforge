@@ -13,6 +13,7 @@ mod formatter;
 mod linter;
 mod manifest;
 mod placeholders;
+mod raster;
 mod templates;
 mod texparse;
 mod texutil;

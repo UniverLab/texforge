@@ -1,5 +1,7 @@
 //! CLI argument parsing and command dispatch.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -71,6 +73,18 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Rasterize the compiled PDF to PNG pages
+    Preview {
+        /// Page number to rasterize (1-based; default: all pages)
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Rasterization scale in pixels per PDF point (default: 1.0)
+        #[arg(long, default_value_t = 1.0)]
+        scale: f32,
+        /// Directory to write PNGs to (default: <project>/preview)
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+    },
     /// Manage templates
     Template {
         #[command(subcommand)]
@@ -123,6 +137,7 @@ impl Cli {
             Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
             Commands::Stats { json, by } => commands::stats::execute(json, by),
             Commands::Outline { json } => commands::outline::execute(json),
+            Commands::Preview { page, scale, out } => commands::preview::execute(page, scale, out),
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
                 TemplateAction::Add { source } => commands::template::add(&source),

@@ -2,7 +2,8 @@
 name = "texforge"
 version = "0.7.0"
 edition = "2021"
-rust-version = "1.75"
+# Raised from 1.75: `hayro` (the pure-Rust PDF rasterizer) requires 1.92.
+rust-version = "1.92"
 description = "Self-contained LaTeX to PDF compiler CLI"
 license = "MIT"
 repository = "https://github.com/UniverLab/texforge"
@@ -66,6 +67,12 @@ layout-rs = "0.1"
 # D2 diagram rendering (pure-Rust port of the d2lang pipeline, MPL-2.0)
 d2-little = "0.7.1-1"
 
+# Pure-Rust PDF rasterization (no C toolchain, no -sys crates)
+hayro = "0.7.1"
+
+# PNG encoding for `texforge preview` output (already in the lock via resvg)
+png = "0.17"
+
 # Temporary directories for build
 tempfile = "3.8"
 
@@ -78,6 +85,9 @@ manual_let_else = "warn"
 semicolon_if_nothing_returned = "warn"
 inconsistent_struct_constructor = "warn"
 doc_markdown = "warn"
+# Keep the established `% 2 == 0` parser expression until its owning spec
+# changes it; Clippy's newer suggestion is deliberately out of scope for TF6.
+manual_is_multiple_of = "allow"
 
 [profile.release]
 opt-level = 3
