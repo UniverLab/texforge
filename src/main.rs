@@ -12,6 +12,7 @@ mod domain;
 mod formatter;
 mod linter;
 mod manifest;
+mod pdftext;
 mod placeholders;
 mod raster;
 mod templates;

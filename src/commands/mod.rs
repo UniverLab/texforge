@@ -8,6 +8,7 @@ pub mod fmt;
 pub mod init;
 pub mod new;
 pub mod outline;
+pub mod pdf;
 pub mod preview;
 pub mod stats;
 pub mod template;

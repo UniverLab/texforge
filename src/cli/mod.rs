@@ -96,6 +96,11 @@ enum Commands {
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
+    /// Inspect the compiled PDF (text, info, pages, fidelity)
+    Pdf {
+        #[command(subcommand)]
+        action: PdfAction,
+    },
     /// Manage templates
     Template {
         #[command(subcommand)]
@@ -108,6 +113,22 @@ enum Commands {
         /// Value to set (optional - if omitted, shows current value)
         value: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum PdfAction {
+    /// Print text as a reader or ATS would see it
+    Text {
+        /// Keep ligature codepoints unnormalized
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Report pages, fonts (embedded?), and metadata
+    Info,
+    /// Report which section opens each page (diff-friendly)
+    Pages,
+    /// Check significant source words appear in the PDF text
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -156,6 +177,15 @@ impl Cli {
             Commands::Stats { json, by } => commands::stats::execute(json, by),
             Commands::Outline { json } => commands::outline::execute(json),
             Commands::Preview { page, scale, out } => commands::preview::execute(page, scale, out),
+            Commands::Pdf { action } => {
+                let action = match action {
+                    PdfAction::Text { raw } => commands::pdf::PdfAction::Text { raw },
+                    PdfAction::Info => commands::pdf::PdfAction::Info,
+                    PdfAction::Pages => commands::pdf::PdfAction::Pages,
+                    PdfAction::Check => commands::pdf::PdfAction::Check,
+                };
+                commands::pdf::execute(action)
+            }
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
                 TemplateAction::Add { source } => commands::template::add(&source),

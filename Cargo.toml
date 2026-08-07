@@ -76,6 +76,10 @@ png = "0.17"
 # Temporary directories for build
 tempfile = "3.8"
 
+# Pure-Rust PDF text extraction (no C toolchain; same constraint as hayro)
+pdf-extract = "0.12"
+lopdf = "0.42"
+
 [lints.clippy]
 needless_pass_by_value = "warn"
 redundant_closure = "warn"
