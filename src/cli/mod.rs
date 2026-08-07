@@ -45,6 +45,17 @@ enum Commands {
         /// (seconds since the Unix epoch) overrides the fixed default.
         #[arg(long, num_args = 0..=1)]
         reproducible: Option<Option<u64>>,
+        /// After each successful rebuild, write a PNG of one page to a fixed
+        /// path so any file-watching image viewer becomes a live preview
+        /// (requires `--watch`)
+        #[arg(long, requires = "watch")]
+        preview: bool,
+        /// Page to rasterize for `--preview` (1-based; default: 1)
+        #[arg(long, default_value_t = 1, requires = "preview")]
+        preview_page: usize,
+        /// Fixed path for the `--preview` PNG (default: preview.png)
+        #[arg(long, value_name = "PATH", requires = "preview")]
+        preview_out: Option<PathBuf>,
     },
     /// Format .tex files
     Fmt {
@@ -126,9 +137,16 @@ impl Cli {
                 delay,
                 verbose,
                 reproducible,
+                preview,
+                preview_page,
+                preview_out,
             } => {
                 if watch {
-                    commands::build::watch(delay, verbose, reproducible)
+                    let live_preview = preview.then_some(commands::build::LivePreview {
+                        page: preview_page,
+                        out: preview_out,
+                    });
+                    commands::build::watch(delay, verbose, reproducible, live_preview.as_ref())
                 } else {
                     commands::build::execute(verbose, reproducible)
                 }
