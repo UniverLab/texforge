@@ -1,5 +1,6 @@
 //! Static linting rules.
 
+mod engine;
 mod glyphs;
 
 use std::collections::HashSet;
@@ -93,6 +94,7 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     }
 
     // Run checks on each file
+    let mut file_contents: Vec<(String, String)> = Vec::new();
     for file in &tex_files {
         let rel = file
             .strip_prefix(root)
@@ -115,7 +117,9 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         check_diagram_blocks(&rel, &content, "graphviz", &mut errors);
         check_diagram_blocks(&rel, &content, "d2", &mut errors);
         errors.extend(glyphs::lint_file(&rel, &content));
+        file_contents.push((rel, content));
     }
+    errors.extend(engine::lint_files(&file_contents));
 
     Ok(errors)
 }
