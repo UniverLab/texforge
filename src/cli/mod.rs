@@ -43,7 +43,11 @@ enum Commands {
         check: bool,
     },
     /// Lint project without compiling
-    Check,
+    Check {
+        /// Treat warnings as errors (exit non-zero if any warning is present)
+        #[arg(long)]
+        deny_warnings: bool,
+    },
     /// Manage templates
     Template {
         #[command(subcommand)]
@@ -88,7 +92,7 @@ impl Cli {
                 }
             }
             Commands::Fmt { check } => commands::fmt::execute(check),
-            Commands::Check => commands::check::execute(),
+            Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
                 TemplateAction::Add { source } => commands::template::add(&source),

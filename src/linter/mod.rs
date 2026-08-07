@@ -5,16 +5,33 @@ use std::path::Path;
 
 use anyhow::Result;
 
-/// A linting error with location and suggestion.
+/// Severity of a lint finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Severity::Error => write!(f, "ERROR"),
+            Severity::Warning => write!(f, "WARNING"),
+        }
+    }
+}
+
+/// A lint finding with location, severity, and suggestion.
 #[derive(Debug)]
-pub struct LintError {
+pub struct LintFinding {
     pub file: String,
     pub line: usize,
+    pub severity: Severity,
     pub message: String,
     pub suggestion: Option<String>,
 }
 
-impl std::fmt::Display for LintError {
+impl std::fmt::Display for LintFinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "  {}:{} — {}", self.file, self.line, self.message)?;
         if let Some(ref s) = self.suggestion {
@@ -25,14 +42,15 @@ impl std::fmt::Display for LintError {
 }
 
 /// Run all lint rules on a project directory.
-pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<LintError>> {
+pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<LintFinding>> {
     let mut errors = Vec::new();
 
     let entry_path = root.join(entry);
     if !entry_path.exists() {
-        errors.push(LintError {
+        errors.push(LintFinding {
             file: entry.to_string(),
             line: 0,
+            severity: Severity::Error,
             message: "Entry point file does not exist".into(),
             suggestion: Some(format!("Create {}", entry)),
         });
@@ -96,7 +114,7 @@ fn check_references(
     bib_file: Option<&str>,
     bib_keys: &HashSet<String>,
     all_labels: &HashSet<String>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
@@ -117,12 +135,13 @@ fn check_input_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_commands(line, "input") {
         let input_path = resolve_tex_path(root, arg);
         if !input_path.exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\input{{{}}} — file not found", arg),
@@ -138,12 +157,13 @@ fn check_includegraphics_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_commands(line, "includegraphics") {
         let img_path = root.join(arg);
         if !img_path.exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\includegraphics{{{}}} — file not found", arg),
@@ -160,7 +180,7 @@ fn check_cite_references(
     line: &str,
     bib_file: Option<&str>,
     bib_keys: &HashSet<String>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     if bib_file.is_none() {
         return;
@@ -170,7 +190,8 @@ fn check_cite_references(
         for key in arg.split(',') {
             let key = key.trim();
             if !key.is_empty() && !bib_keys.contains(key) {
-                errors.push(LintError {
+                errors.push(LintFinding {
+                    severity: Severity::Error,
                     file: rel.to_string(),
                     line: line_num,
                     message: format!("\\cite{{{}}} — key not found in .bib", key),
@@ -187,11 +208,12 @@ fn check_ref_references(
     line_num: usize,
     line: &str,
     all_labels: &HashSet<String>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_commands(line, "ref") {
         if !all_labels.contains(arg) {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\ref{{{}}} — no matching \\label found", arg),
@@ -207,11 +229,12 @@ fn check_lstinputlisting_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_commands(line, "lstinputlisting") {
         if !root.join(arg).exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\lstinputlisting{{{}}} — file not found", arg),
@@ -227,11 +250,12 @@ fn check_inputminted_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_inputminted_files(line) {
         if !root.join(arg).exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\inputminted{{{}}} — file not found", arg),
@@ -242,7 +266,7 @@ fn check_inputminted_references(
 }
 
 /// Check for unclosed \begin{env} environments.
-fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
+fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintFinding>) {
     // Stack of (env_name, line_number)
     let mut stack: Vec<(&str, usize)> = Vec::new();
 
@@ -264,7 +288,8 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
                 if *open_env == env {
                     stack.pop();
                 } else {
-                    errors.push(LintError {
+                    errors.push(LintFinding {
+                        severity: Severity::Error,
                         file: rel.to_string(),
                         line: line_num,
                         message: format!("\\end{{{}}} does not match \\begin{{{}}}", env, open_env),
@@ -272,7 +297,8 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
                     });
                 }
             } else {
-                errors.push(LintError {
+                errors.push(LintFinding {
+                    severity: Severity::Error,
                     file: rel.to_string(),
                     line: line_num,
                     message: format!("\\end{{{}}} without matching \\begin", env),
@@ -284,7 +310,8 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
 
     // Report unclosed environments
     for (env, line_num) in stack {
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: rel.to_string(),
             line: line_num,
             message: format!("\\begin{{{}}} never closed", env),
@@ -341,14 +368,15 @@ fn collect_tex_files(
     root: &Path,
     entry: &str,
     files: &mut Vec<std::path::PathBuf>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     let path = resolve_tex_path(root, entry);
     if !path.exists() {
         return;
     }
     if files.contains(&path) {
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: entry.to_string(),
             line: 0,
             message: format!("Circular \\input detected: {}", path.display()),
@@ -385,7 +413,7 @@ fn strip_comment(line: &str) -> String {
 }
 
 /// Check mermaid/graphviz blocks: unclosed and invalid pos option.
-fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<LintError>) {
+fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<LintFinding>) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
@@ -406,7 +434,7 @@ fn check_unclosed_diagram_block(
     env: &str,
     line_num: usize,
     line_index: usize,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     let end_tag = format!("\\end{{{}}}", env);
     let rest = &content[content
@@ -415,7 +443,8 @@ fn check_unclosed_diagram_block(
         .map(|l| l.len() + 1)
         .sum::<usize>()..];
     if !rest.contains(&*end_tag) {
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: rel.to_string(),
             line: line_num,
             message: format!("\\begin{{{}}} without matching \\end{{{}}}", env, env),
@@ -430,7 +459,7 @@ fn check_diagram_pos_option(
     line: &str,
     env: &str,
     line_num: usize,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     const VALID_POS: &[&str] = &["H", "t", "b", "h", "p"];
 
@@ -452,7 +481,8 @@ fn check_diagram_pos_option(
         if VALID_POS.contains(&pos) {
             continue;
         }
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: rel.to_string(),
             line: line_num,
             message: format!(
@@ -542,8 +572,14 @@ mod tests {
         (dir, "main.tex".to_string())
     }
 
-    fn has_error(errors: &[LintError], fragment: &str) -> bool {
+    fn has_error(errors: &[LintFinding], fragment: &str) -> bool {
         errors.iter().any(|e| e.message.contains(fragment))
+    }
+
+    fn has_finding_with_severity(errors: &[LintFinding], fragment: &str, sev: Severity) -> bool {
+        errors
+            .iter()
+            .any(|e| e.message.contains(fragment) && e.severity == sev)
     }
 
     #[test]
@@ -809,5 +845,46 @@ mod tests {
             setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(errors.is_empty());
+    }
+
+    // --- Severity tests ---
+
+    /// All current rules produce Error-severity findings.
+    #[test]
+    fn existing_findings_have_error_severity() {
+        let (dir, entry) = setup("\\includegraphics{missing.png}");
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(!findings.is_empty());
+        assert!(has_finding_with_severity(
+            &findings,
+            "missing.png",
+            Severity::Error
+        ));
+    }
+
+    /// A clean project with no errors contains no findings.
+    #[test]
+    fn clean_project_has_no_findings() {
+        let (dir, entry) =
+            setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        // No errors → check command would exit 0 regardless of --deny-warnings
+        assert!(
+            findings
+                .iter()
+                .filter(|f| f.severity == Severity::Error)
+                .count()
+                == 0
+        );
+    }
+
+    /// Error-severity findings are detected independently of any deny-warnings flag
+    /// (flag logic lives in the command layer; the linter just tags severity).
+    #[test]
+    fn error_severity_finding_present_when_error_rule_fires() {
+        let (dir, entry) = setup("\\cite{ghost}");
+        std::fs::write(dir.path().join("refs.bib"), "@article{real,}").unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(findings.iter().any(|f| f.severity == Severity::Error));
     }
 }
