@@ -14,7 +14,7 @@ use crate::domain::project::Project;
 use crate::utils::sanitize_filename;
 
 /// Compile project to PDF using a temp directory, output named after the document title.
-pub fn execute() -> Result<()> {
+pub fn execute(verbose: bool) -> Result<()> {
     let project = Project::load()?;
     let titulo = &project.config.document.title;
     println!("Building project: {titulo}");
@@ -28,7 +28,7 @@ pub fn execute() -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    compiler::compile(build_dir, &entry_filename)?;
+    compiler::compile(build_dir, &entry_filename, verbose)?;
 
     let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
     let pdf_dest = project.root.join(&pdf_name);
@@ -45,7 +45,7 @@ pub fn execute() -> Result<()> {
 }
 
 /// Watch for .tex file changes and rebuild with debounce.
-pub fn watch(delay_secs: u64) -> Result<()> {
+pub fn watch(delay_secs: u64, verbose: bool) -> Result<()> {
     let project = Project::load()?;
     let debounce = Duration::from_secs(delay_secs);
     let cooldown = Duration::from_secs(2);
@@ -56,7 +56,7 @@ pub fn watch(delay_secs: u64) -> Result<()> {
     let build_dir = temp_dir.path().to_path_buf();
 
     let started = std::time::Instant::now();
-    let result = run_build(&project, &build_dir);
+    let result = run_build(&project, &build_dir, verbose);
     redraw_status(&result, 1, started);
 
     let (tx, rx) = mpsc::channel();
@@ -99,7 +99,7 @@ pub fn watch(delay_secs: u64) -> Result<()> {
         if pending && last_event.elapsed() >= debounce {
             pending = false;
             build_count += 1;
-            last_result = run_build(&project, &build_dir);
+            last_result = run_build(&project, &build_dir, verbose);
             last_build = std::time::Instant::now();
             redraw_status(&last_result, build_count, started);
         }
@@ -139,7 +139,7 @@ enum WatchResult {
     Err(String),
 }
 
-fn run_build(project: &Project, build_dir: &Path) -> WatchResult {
+fn run_build(project: &Project, build_dir: &Path, verbose: bool) -> WatchResult {
     let _ = std::fs::create_dir_all(build_dir);
     if let Err(e) = diagrams::process(&project.root, &project.config.build.entry, build_dir) {
         return WatchResult::Err(e.to_string());
@@ -148,7 +148,7 @@ fn run_build(project: &Project, build_dir: &Path) -> WatchResult {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    match compiler::compile(build_dir, &entry_filename) {
+    match compiler::compile(build_dir, &entry_filename, verbose) {
         Ok(()) => {
             let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
             let pdf_dest = project.root.join(&pdf_name);

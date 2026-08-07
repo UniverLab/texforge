@@ -35,6 +35,9 @@ enum Commands {
         /// Debounce delay in seconds before rebuilding (default: 10)
         #[arg(long, default_value = "2")]
         delay: u64,
+        /// Print every engine warning instead of a per-file summary
+        #[arg(long)]
+        verbose: bool,
     },
     /// Format .tex files
     Fmt {
@@ -84,11 +87,15 @@ impl Cli {
             Commands::Clean => commands::clean::execute(),
             Commands::Init => commands::init::execute(),
             Commands::New { name, template } => commands::new::execute(&name, template.as_deref()),
-            Commands::Build { watch, delay } => {
+            Commands::Build {
+                watch,
+                delay,
+                verbose,
+            } => {
                 if watch {
-                    commands::build::watch(delay)
+                    commands::build::watch(delay, verbose)
                 } else {
-                    commands::build::execute()
+                    commands::build::execute(verbose)
                 }
             }
             Commands::Fmt { check } => commands::fmt::execute(check),

@@ -1,13 +1,20 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
 
+use crate::linter::Severity;
+
 /// Compile a LaTeX project to PDF using Tectonic.
 /// `root` is the working directory; output PDF goes into `root/` itself.
-pub fn compile(root: &Path, entry: &str) -> Result<()> {
+///
+/// On a successful build, warnings emitted by the engine are parsed and
+/// printed to the console — summarized per file, or every occurrence with
+/// `verbose` — without changing the success exit code.
+pub fn compile(root: &Path, entry: &str, verbose: bool) -> Result<()> {
     let tectonic = find_tectonic()?;
     let entry_path = root.join(entry);
 
@@ -20,13 +27,16 @@ pub fn compile(root: &Path, entry: &str) -> Result<()> {
         .output()
         .with_context(|| format!("Failed to run tectonic at {}", tectonic.display()))?;
 
-    if output.status.success() {
-        return Ok(());
-    }
-
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let raw = format!("{}{}", stdout, stderr);
+
+    let warnings = parse_warnings(&raw);
+
+    if output.status.success() {
+        print_warnings(&warnings, verbose);
+        return Ok(());
+    }
 
     let errors = parse_errors(&raw);
     if errors.is_empty() {
@@ -99,6 +109,149 @@ fn parse_tectonic_error(rest: &str, errors: &mut Vec<CompileError>) {
         line: 0,
         message: rest.to_string(),
     });
+}
+
+/// A single TeX/Tectonic warning parsed from compiler output.
+#[derive(Debug, PartialEq, Eq)]
+struct CompileWarning {
+    file: String,
+    line: usize,
+    severity: Severity,
+    kind: &'static str,
+    message: String,
+}
+
+/// Recognized warning shapes: (substring fragment, canonical kind name).
+/// Keep this list in one place so new shapes are a one-line extension.
+const WARNING_PATTERNS: &[(&str, &str)] = &[
+    ("Underfull \\hbox (badness", "underfull hbox"),
+    ("Underfull \\vbox (badness", "underfull vbox"),
+    ("Overfull \\hbox", "overfull hbox"),
+    ("Overfull \\vbox", "overfull vbox"),
+    ("LaTeX Warning:", "latex warning"),
+];
+
+/// Classify a single line into a warning kind, or `None` when it does not
+/// match any known shape. Unrecognized lines are ignored silently.
+fn warning_kind(line: &str) -> Option<&'static str> {
+    for (fragment, kind) in WARNING_PATTERNS {
+        if line.contains(fragment) {
+            return Some(kind);
+        }
+    }
+    if line.starts_with("Package ") && line.contains(" Warning:") {
+        return Some("package warning");
+    }
+    None
+}
+
+/// Pull a line number out of TeX warning markers: `at lines 41--42` and
+/// `on input line 42`. Returns 0 when none is reported.
+fn extract_line(line: &str) -> usize {
+    for marker in ["at lines ", "on input line "] {
+        if let Some(idx) = line.find(marker) {
+            let rest = &line[idx + marker.len()..];
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = num.parse() {
+                return n;
+            }
+        }
+    }
+    0
+}
+
+/// Heuristic: is a `(path` token an engine file-open marker (as opposed to
+/// other parenthesized chatter)? Files end in a known TeX extension.
+fn is_source_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".tex", ".sty", ".cls", ".def", ".cfg", ".bib"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// Parse TeX/Tectonic stdout/stderr into structured warnings.
+///
+/// Attribution: the engine prints file opens as `(path` and closes as `)`;
+/// warnings seen while a file is open are credited to that file. Line numbers
+/// come from `at lines N--M` / `on input line N` markers when the engine
+/// reports them.
+fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
+    let mut warnings = Vec::new();
+    let mut file_stack: Vec<String> = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed == ")" {
+            file_stack.pop();
+            continue;
+        }
+        if let Some(path) = trimmed.strip_prefix('(') {
+            if is_source_path(path) {
+                file_stack.push(path.to_string());
+                continue;
+            }
+        }
+        let Some(kind) = warning_kind(trimmed) else {
+            continue;
+        };
+        warnings.push(CompileWarning {
+            file: file_stack.last().cloned().unwrap_or_default(),
+            line: extract_line(trimmed),
+            severity: Severity::Warning,
+            kind,
+            message: trimmed.to_string(),
+        });
+    }
+
+    warnings
+}
+
+/// Render warnings for the console: one line per file with counts by kind,
+/// or every occurrence when `verbose` is set.
+fn format_warnings(warnings: &[CompileWarning], verbose: bool) -> String {
+    if warnings.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("WARNINGS ({})\n", warnings.len());
+    if verbose {
+        for w in warnings {
+            let loc = if w.line == 0 {
+                format!("[{}]", w.file)
+            } else {
+                format!("[{}:{}]", w.file, w.line)
+            };
+            out.push_str(&format!(
+                "  {} {loc} {}: {}\n",
+                w.severity, w.kind, w.message
+            ));
+        }
+    } else {
+        let mut by_file: BTreeMap<&str, BTreeMap<&str, usize>> = BTreeMap::new();
+        for w in warnings {
+            let file = if w.file.is_empty() {
+                "(unknown)"
+            } else {
+                w.file.as_str()
+            };
+            *by_file.entry(file).or_default().entry(w.kind).or_default() += 1;
+        }
+        for (file, kinds) in by_file {
+            let counts: Vec<String> = kinds
+                .into_iter()
+                .map(|(kind, n)| format!("{n} {kind}"))
+                .collect();
+            out.push_str(&format!("  {file}: {}\n", counts.join(", ")));
+        }
+    }
+    out
+}
+
+/// Print warnings to the console on a successful build.
+fn print_warnings(warnings: &[CompileWarning], verbose: bool) {
+    let formatted = format_warnings(warnings, verbose);
+    if !formatted.is_empty() {
+        println!("\n{}", formatted.trim_end());
+    }
 }
 
 /// Find the tectonic binary in PATH or known locations, auto-installing if needed.
@@ -445,5 +598,133 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].file, "/some/long/path/to/file.tex");
         assert_eq!(errors[0].line, 42);
+    }
+
+    #[test]
+    fn parse_warnings_underfull_hbox() {
+        let raw = "(main.tex\nUnderfull \\hbox (badness 1856) in paragraph at lines 58--59\n)";
+        let warnings = parse_warnings(raw);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].file, "main.tex");
+        assert_eq!(warnings[0].line, 58);
+        assert_eq!(warnings[0].severity, Severity::Warning);
+        assert_eq!(warnings[0].kind, "underfull hbox");
+        assert!(warnings[0].message.contains("badness 1856"));
+    }
+
+    #[test]
+    fn parse_warnings_overfull_hbox() {
+        let raw = "Overfull \\hbox (12.0pt too wide) in paragraph at lines 41--42";
+        let warnings = parse_warnings(raw);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, "overfull hbox");
+        assert_eq!(warnings[0].line, 41);
+        assert_eq!(warnings[0].file, "");
+    }
+
+    #[test]
+    fn parse_warnings_package_warning() {
+        let raw =
+            "Package hyperref Warning: Token not allowed in a PDF string (Unicode) on input line 12.";
+        let warnings = parse_warnings(raw);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, "package warning");
+        assert_eq!(warnings[0].line, 12);
+        assert!(warnings[0].message.contains("hyperref"));
+    }
+
+    #[test]
+    fn parse_warnings_latex_warning() {
+        let raw = "LaTeX Warning: Reference `fig1' on page 1 undefined on input line 22.";
+        let warnings = parse_warnings(raw);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, "latex warning");
+        assert_eq!(warnings[0].line, 22);
+    }
+
+    #[test]
+    fn parse_warnings_ignores_unrecognized_lines() {
+        let raw = "some random output\n[]\\OT1/cmr/m/n/10 foo\nnot a warning";
+        let warnings = parse_warnings(raw);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_warnings_empty_input() {
+        assert!(parse_warnings("").is_empty());
+    }
+
+    #[test]
+    fn parse_warnings_file_tracking() {
+        let raw = "(main.tex\n(chapter.tex\nUnderfull \\hbox (badness 1000) in paragraph at lines 1--2\n)\nUnderfull \\hbox (badness 2000) in paragraph at lines 3--4\n)";
+        let warnings = parse_warnings(raw);
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(warnings[0].file, "chapter.tex");
+        assert_eq!(warnings[1].file, "main.tex");
+    }
+
+    #[test]
+    fn parse_warnings_badness_variant_ignored_when_not_badness() {
+        let raw = "Underfull \\hbox (2.0pt too wide) in paragraph at lines 5--6";
+        let warnings = parse_warnings(raw);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn extract_line_from_markers() {
+        assert_eq!(extract_line("in paragraph at lines 41--42"), 41);
+        assert_eq!(extract_line("on input line 7."), 7);
+        assert_eq!(extract_line("no marker here"), 0);
+    }
+
+    #[test]
+    fn format_warnings_summary_groups_by_file() {
+        let warnings = vec![
+            CompileWarning {
+                file: "main.tex".into(),
+                line: 58,
+                severity: Severity::Warning,
+                kind: "underfull hbox",
+                message: "Underfull \\hbox (badness 1856)".into(),
+            },
+            CompileWarning {
+                file: "main.tex".into(),
+                line: 90,
+                severity: Severity::Warning,
+                kind: "underfull hbox",
+                message: "Underfull \\hbox (badness 2000)".into(),
+            },
+            CompileWarning {
+                file: "skills.tex".into(),
+                line: 12,
+                severity: Severity::Warning,
+                kind: "package warning",
+                message: "Package hyperref Warning: ...".into(),
+            },
+        ];
+        let out = format_warnings(&warnings, false);
+        assert!(out.starts_with("WARNINGS (3)\n"));
+        assert!(out.contains("  main.tex: 2 underfull hbox"));
+        assert!(out.contains("  skills.tex: 1 package warning"));
+    }
+
+    #[test]
+    fn format_warnings_verbose_lists_every_occurrence() {
+        let warnings = vec![CompileWarning {
+            file: "main.tex".into(),
+            line: 58,
+            severity: Severity::Warning,
+            kind: "underfull hbox",
+            message: "Underfull \\hbox (badness 1856) in paragraph at lines 58--59".into(),
+        }];
+        let out = format_warnings(&warnings, true);
+        assert!(out.contains("WARNING [main.tex:58] underfull hbox:"));
+        assert!(out.contains("badness 1856"));
+    }
+
+    #[test]
+    fn format_warnings_empty_is_empty() {
+        assert!(format_warnings(&[], false).is_empty());
+        assert!(format_warnings(&[], true).is_empty());
     }
 }
