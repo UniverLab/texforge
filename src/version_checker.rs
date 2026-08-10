@@ -91,14 +91,43 @@ fn fetch_latest_stable_release(owner: &str, repo: &str) -> Result<Option<SemVer>
 
 /// Get the download URL for a specific release
 pub fn get_release_download_url(owner: &str, repo: &str, version: &SemVer) -> String {
-    let arch = get_architecture();
-    let _os = get_os();
-    let filename = format!("{}-{}-{}", repo, version, arch);
+    // The release workflow names its assets `<repo>-v<version>-<target>.<ext>`,
+    // e.g. `texforge-v0.7.0-x86_64-unknown-linux-musl.tar.gz`. Three things
+    // have to line up or the URL 404s: the `v` before the version, the FULL
+    // target triple (not the bare architecture), and the archive extension.
+    // Verified against the published assets of v0.7.0 on 2026-08-10.
+    let (target, ext) = release_target();
+    let filename = format!("{repo}-v{version}-{target}.{ext}");
 
     format!(
         "https://github.com/{}/{}/releases/download/v{}/{}",
         owner, repo, version, filename
     )
+}
+
+/// The rust target triple the release workflow builds for this platform, and
+/// the archive extension it uses. Kept next to `get_architecture`/`get_os`
+/// because those two answer a different question — what machine we are on —
+/// and neither is enough to name a release asset on its own.
+fn release_target() -> (&'static str, &'static str) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return ("x86_64-unknown-linux-musl", "tar.gz");
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    return ("aarch64-unknown-linux-musl", "tar.gz");
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    return ("x86_64-apple-darwin", "tar.gz");
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    return ("aarch64-apple-darwin", "tar.gz");
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    return ("x86_64-pc-windows-msvc", "zip");
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+    )))]
+    return ("unknown", "tar.gz");
 }
 
 fn get_architecture() -> &'static str {
@@ -207,6 +236,24 @@ mod tests {
         let url = get_release_download_url("owner", "repo", &version);
         let arch = get_architecture();
         assert!(url.contains(arch));
+    }
+
+    /// The asset name has to match what the release workflow publishes,
+    /// byte for byte, or the printed URL 404s. It did, until 2026-08-10.
+    #[test]
+    fn download_url_matches_the_published_asset_name() {
+        let version = SemVer::parse("0.7.0").unwrap();
+        let url = get_release_download_url("UniverLab", "texforge", &version);
+        let (target, ext) = release_target();
+
+        assert!(
+            url.ends_with(&format!("/texforge-v0.7.0-{target}.{ext}")),
+            "asset name drifted from the release workflow: {url}"
+        );
+        assert!(
+            url.contains("/releases/download/v0.7.0/"),
+            "tag path lost its v prefix: {url}"
+        );
     }
 
     #[test]
