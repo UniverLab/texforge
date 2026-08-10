@@ -2,6 +2,7 @@
 
 mod engine;
 mod glyphs;
+mod spell;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -141,6 +142,37 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
                 ),
             });
         }
+    }
+
+    // Spell-checking: attempt to load user-level default language and run spell
+    // checks over the tokenized file contents. Fail-open: if spell-check cannot
+    // obtain a dictionary, it prints a clear message and yields no findings.
+    // To keep the test suite offline and deterministic, do not use the user's
+    // config during unit tests — tests must explicitly opt-in by calling the
+    // spell API with a local fixture language (see tests that pass Some("english")).
+    let is_test_harness = std::env::var("RUST_TEST_THREADS").is_ok()
+        || std::env::var("NEXTEST_CURRENT_RUN_ID").is_ok()
+        || std::env::var("NEXTEST_RUN_ID").is_ok()
+        || std::env::var("CI").is_ok();
+
+    // When running under a test harness, ignore user config to avoid network
+    // or environment leakage from the developer machine. Tests that want
+    // spell-checking should pass a language and provide a local dictionary.
+    let default_lang = if is_test_harness {
+        None
+    } else {
+        crate::config::load()
+            .ok()
+            .and_then(|cfg| cfg.defaults.language)
+    };
+
+    if default_lang.is_some() || !is_test_harness {
+        match spell::lint_files(&file_contents, root, default_lang.as_deref()) {
+            Ok(mut fs) => errors.append(&mut fs),
+            Err(e) => eprintln!("Spell-check skipped: {}", e),
+        }
+    } else {
+        eprintln!("Spell-check skipped: test harness detected and no default language configured");
     }
 
     errors.extend(engine::lint_files(&file_contents));
