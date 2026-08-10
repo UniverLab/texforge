@@ -4,6 +4,8 @@ mod engine;
 mod glyphs;
 mod spell;
 
+pub use spell::installed_dictionaries;
+
 use std::collections::HashSet;
 use std::path::Path;
 

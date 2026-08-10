@@ -106,6 +106,8 @@ enum Commands {
         #[command(subcommand)]
         action: TemplateAction,
     },
+    /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
+    Doctor,
     /// Manage global configuration
     Config {
         /// Key to get/set (name, email, institution, language)
@@ -192,6 +194,7 @@ impl Cli {
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
             },
+            Commands::Doctor => commands::doctor::execute(),
             Commands::Config { key, value } => match (key, value) {
                 (None, None) => commands::config::wizard(),
                 (Some(k), None) if k == "list" => commands::config::list(),

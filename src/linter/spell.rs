@@ -143,6 +143,37 @@ fn load_dictionary(path: &Path) -> Result<HashSet<String>> {
     Ok(set)
 }
 
+/// List installed dictionaries as `(language, path)` pairs, sorted by language.
+///
+/// Reports only what is actually present under `dir` — verified state, not
+/// the set of languages texforge merely knows how to fetch remotely.
+fn installed_dictionaries_in(dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut dicts: Vec<(String, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("txt") {
+                return None;
+            }
+            let lang = path.file_stem()?.to_str()?.to_string();
+            Some((lang, path))
+        })
+        .collect();
+    dicts.sort_by(|a, b| a.0.cmp(&b.0));
+    dicts
+}
+
+/// List dictionaries installed under the managed `~/.texforge/dicts` directory.
+pub fn installed_dictionaries() -> Vec<(String, PathBuf)> {
+    match dictionaries_dir() {
+        Some(dir) => installed_dictionaries_in(&dir),
+        None => Vec::new(),
+    }
+}
+
 fn load_project_whitelist(root: &Path) -> HashSet<String> {
     let mut set = HashSet::new();
     for name in PROJECT_WHITELIST_FILES {
@@ -303,6 +334,32 @@ Hello world. This is some text. \label{sec:intro} More text.
             "Expected no findings, got: {:?}",
             findings
         );
+    }
+
+    #[test]
+    fn installed_dictionaries_in_empty_dir_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let dicts = installed_dictionaries_in(tmp.path());
+        assert!(dicts.is_empty());
+    }
+
+    #[test]
+    fn installed_dictionaries_in_missing_dir_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        let dicts = installed_dictionaries_in(&missing);
+        assert!(dicts.is_empty());
+    }
+
+    #[test]
+    fn installed_dictionaries_in_lists_txt_files_sorted() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("spanish.txt"), "hola\nmundo\n").unwrap();
+        fs::write(tmp.path().join("english.txt"), "hello\nworld\n").unwrap();
+        fs::write(tmp.path().join("notes.md"), "ignored").unwrap();
+        let dicts = installed_dictionaries_in(tmp.path());
+        let langs: Vec<&str> = dicts.iter().map(|(lang, _)| lang.as_str()).collect();
+        assert_eq!(langs, vec!["english", "spanish"]);
     }
 
     #[test]

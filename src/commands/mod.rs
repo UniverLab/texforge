@@ -4,6 +4,7 @@ pub mod build;
 pub mod check;
 pub mod clean;
 pub mod config;
+pub mod doctor;
 pub mod fmt;
 pub mod init;
 pub mod new;
