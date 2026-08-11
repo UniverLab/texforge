@@ -119,7 +119,7 @@ fn count_files(files: &[TokenizedFile]) -> RawCounts {
         for token in &file.tokens {
             match token {
                 Token::BeginDocument => in_document = true,
-                Token::Section { level, title } => {
+                Token::Section { level, title, .. } => {
                     if !in_document {
                         continue;
                     }

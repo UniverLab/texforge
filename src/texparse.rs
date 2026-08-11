@@ -58,10 +58,26 @@ pub enum Token {
     ///
     /// `level` follows the standard hierarchy: part = 0, chapter = 1, section
     /// = 2, subsection = 3, subsubsection = 4, paragraph = 5, subparagraph =
-    /// 6. `title` is the first braced argument with any wrapping macros
-    /// (`\textit`, `\href`, `\textcolor`, dot-leader constructs, ...)
-    /// resolved to plain text — see [`resolve_section_title`].
-    Section { level: u8, title: String },
+    /// 6.
+    ///
+    /// Two consumers need opposite forms of the title, so it is carried
+    /// twice:
+    ///
+    /// * `title` is the first braced argument with any wrapping macros
+    ///   (`\textit`, `\href`, `\textcolor`, dot-leader constructs, ...)
+    ///   resolved to plain text and escaped specials (`\&`, `\%`, ...)
+    ///   unescaped to their literal character — see
+    ///   [`resolve_section_title`]. This is what `outline`, `wordcount` and
+    ///   `pdftext` display: human-readable prose.
+    /// * `raw_title` is the verbatim source text of that same braced
+    ///   argument, escapes and macros intact. This is what the glyph linter
+    ///   reads: it needs to see `\&` as still escaped to judge whether a
+    ///   special character is protected.
+    Section {
+        level: u8,
+        title: String,
+        raw_title: String,
+    },
 
     /// Beginning of a math region: `$...$`, `$$...$$`, `\(...\)`, `\[...\]`,
     /// or a math environment (`equation`, `align`, `gather`, `multline`,
@@ -622,7 +638,16 @@ impl<'a> Parser<'a> {
                     let _ = self.read_bracket_group();
                     let raw_title = self.read_braced_group().unwrap_or_default();
                     let title = resolve_section_title(&raw_title);
-                    self.push(tokens, Token::Section { level, title }, start, self.pos);
+                    self.push(
+                        tokens,
+                        Token::Section {
+                            level,
+                            title,
+                            raw_title,
+                        },
+                        start,
+                        self.pos,
+                    );
                 } else if name == "href" {
                     self.handle_href(start, tokens);
                 } else if PROSE_COMMANDS.contains(&name) {
@@ -1233,6 +1258,7 @@ mod tests {
             Token::Section {
                 level: 2,
                 title: "Three".to_string(),
+                raw_title: "Three".to_string(),
             }
         );
     }
@@ -1245,6 +1271,7 @@ mod tests {
             vec![Token::Section {
                 level: 2,
                 title: "Intro".to_string(),
+                raw_title: "Intro".to_string(),
             }]
         );
     }
@@ -1257,6 +1284,7 @@ mod tests {
             vec![Token::Section {
                 level: 2,
                 title: "Full title".to_string(),
+                raw_title: "Full title".to_string(),
             }]
         );
     }
@@ -1739,6 +1767,7 @@ mod tests {
             vec![Token::Section {
                 level: 2,
                 title: "UniverLab.org".to_string(),
+                raw_title: r"\href{https://univerlab.org}{UniverLab.org}".to_string(),
             }]
         );
     }
@@ -1794,6 +1823,7 @@ mod tests {
             vec![Token::Section {
                 level: 3,
                 title: "Fundador & Lead Engineer".to_string(),
+                raw_title: r"\textit{Fundador \& Lead Engineer}".to_string(),
             }]
         );
     }

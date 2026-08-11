@@ -70,8 +70,8 @@ pub fn lint_file(rel: &str, source: &str) -> Vec<LintFinding> {
                     &mut findings,
                 );
             }
-            Token::Section { title, .. } => {
-                check_section_title(rel, source, title, spanned.start, &mut findings);
+            Token::Section { raw_title, .. } => {
+                check_section_title(rel, source, raw_title, spanned.start, &mut findings);
             }
             Token::Comment(_) => check_percent(rel, source, spanned.start, &mut findings),
             _ => {}
@@ -209,14 +209,19 @@ fn check_prose(
 
 /// Lint a section title, which is prose but carries commands and math of its
 /// own; re-tokenize it so `\ldots`, math and the like stay inert.
+///
+/// Takes the raw (unresolved) title so escaped specials like `\&` are still
+/// visible as escaped — the resolved `title` field has already turned them
+/// into their literal character and would make every escape look like a
+/// mistake.
 fn check_section_title(
     rel: &str,
     source: &str,
-    title: &str,
+    raw_title: &str,
     command_start: usize,
     findings: &mut Vec<LintFinding>,
 ) {
-    let tokenized = tokenize_with_spans(title);
+    let tokenized = tokenize_with_spans(raw_title);
     let mut in_math = 0usize;
     let mut in_quote = false;
     for spanned in &tokenized.tokens {
@@ -484,6 +489,46 @@ mod tests {
             r"\section{Introduccion \ldots y \dots}",
             "three periods"
         ));
+    }
+
+    // --- regression: TE8, escaped specials in section titles ---
+    //
+    // 9ab9d86 made `Token::Section::title` the resolved (unescaped) form for
+    // `outline`. `check_section_title` kept reading `title`, so it saw a
+    // bare `&` where the source had `\&` and reported a false Error. It must
+    // read `raw_title` instead.
+
+    #[test]
+    fn regression_escaped_ampersand_in_section_title_is_silent() {
+        assert!(lint(r"\subsection*{\textit{Fundador \& Lead Engineer}}").is_empty());
+    }
+
+    #[test]
+    fn unescaped_ampersand_in_section_title_still_fires() {
+        assert!(error(r"\section{A & B}", "literal ampersand"));
+    }
+
+    #[test]
+    fn escaped_percent_in_section_title_does_not_fire() {
+        assert!(!silent(
+            r"\section{Progreso 20\% completo}",
+            "silently deletes"
+        ));
+    }
+
+    #[test]
+    fn escaped_dollar_in_section_title_does_not_fire() {
+        assert!(lint(r"\section{Costo \$5}").is_empty());
+    }
+
+    #[test]
+    fn escaped_hash_in_section_title_does_not_fire() {
+        assert!(!silent(r"\section{Ref \#1}", "literal hash"));
+    }
+
+    #[test]
+    fn escaped_underscore_in_section_title_does_not_fire() {
+        assert!(!silent(r"\section{foo\_bar}", "literal underscore"));
     }
 
     // --- wiring through the whole linter ---

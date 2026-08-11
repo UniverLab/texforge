@@ -100,7 +100,7 @@ fn walk(
 
     for spanned in tokens {
         match &spanned.token {
-            Token::Section { level, title } => {
+            Token::Section { level, title, .. } => {
                 let number = tracker.enter(*level);
                 if *level <= MAX_LEVEL {
                     sections.push(OutlineSection {
