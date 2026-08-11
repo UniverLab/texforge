@@ -15,6 +15,7 @@ use lopdf::{Dictionary, Document, Object, ObjectId};
 
 use crate::linter::{LintFinding, Severity};
 use crate::texparse::{tokenize, tokenize_document, Token, TokenizedFile};
+use crate::texutil::strip_empty_groups;
 
 /// PDF Info date shape required by ISO 32000 (`D:YYYYMMDDHHmmSS` plus optional TZ).
 pub const PDF_DATE_EXPECTED: &str = "D:YYYYMMDDHHmmSS";
@@ -213,14 +214,6 @@ fn words_in_text(text: &str) -> impl Iterator<Item = String> + '_ {
 
 fn trim_punct(word: &str) -> &str {
     word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '\'')
-}
-
-/// Remove empty LaTeX groups (`{}`) from a source token. They produce no
-/// glyph — `workf{}lows` is the recommended fix for the ligature `workflows`,
-/// so it must be searched for as `workflows`, not penalized for following
-/// the tool's own suggestion.
-fn strip_empty_groups(word: &str) -> String {
-    word.replace("{}", "")
 }
 
 /// Compare significant source words against normalized PDF text.

@@ -12,6 +12,7 @@ fn line_of(source: &str, offset: usize) -> usize {
     1 + source[..offset].matches('\n').count()
 }
 use crate::texparse::{tokenize_with_spans, Token};
+use crate::texutil::strip_empty_groups;
 
 /// Project-local whitelist filenames to check, in order.
 const PROJECT_WHITELIST_FILES: &[&str] = &["spell-whitelist.txt", ".texforge/spell-words"];
@@ -686,6 +687,11 @@ pub fn lint_files(
         let tokenized = tokenize_with_spans(source);
         for sp in &tokenized.tokens {
             if let Token::Text(text) = &sp.token {
+                // Empty LaTeX groups ({}) are a ligature workaround that
+                // produces no glyph (e.g. `workf{}lows` renders as
+                // `workflows`); strip them before splitting so the joined
+                // word is checked, not its fragments.
+                let text = strip_empty_groups(text);
                 // Extract candidate words by splitting on non-alpha characters
                 for word in text.split(|c: char| !c.is_alphabetic()) {
                     let w = word.trim();
@@ -1494,6 +1500,119 @@ Hello world. This is some text. \label{sec:intro} More text.
                 .iter()
                 .any(|f| f.message.contains("xilofonoinventado")),
             "a genuine misspelling must still be flagged: {:?}",
+            findings
+        );
+    }
+
+    // --- TE12: ligature-workaround empty groups must not split words ---
+
+    /// The four real tokens from the reported document must each be checked
+    /// as their joined form, not fragmented on the `{}` empty-group ligature
+    /// workaround.
+    #[test]
+    fn ligature_workaround_empty_groups_are_checked_as_joined_words() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(
+            dicts_dir.join("english.txt"),
+            "artificial\nworkflows\nmlflow\nlocal\nfirst\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\begin{document}\nArtif{}icial workf{}lows MLf{}low local-f{}irst\n\
+                   \\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "empty-group ligature workarounds must be checked as joined words, not fragments: {:?}",
+            findings
+        );
+    }
+
+    /// A genuine misspelling written with the empty-group idiom must still
+    /// be reported, exactly once, as the joined word — never as fragments,
+    /// since a fragment is not something the author can search for.
+    #[test]
+    fn misspelled_word_with_empty_group_is_reported_as_joined_word() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(dicts_dir.join("english.txt"), "hello\nworld\n").unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\begin{document}\nHello Wrongwo{}rd world\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert_eq!(
+            findings.len(),
+            1,
+            "expected exactly one finding for the joined misspelling: {:?}",
+            findings
+        );
+        assert!(
+            findings[0].message.contains("wrongword"),
+            "must report the joined word: {:?}",
+            findings
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.message.contains("wrongwo'") || f.message.contains("'rd")),
+            "must not report fragments of the joined word: {:?}",
+            findings
+        );
+    }
+
+    /// A `{}` at the start or end of a word, and two empty groups inside one
+    /// word, must all be stripped correctly rather than merely the common
+    /// mid-word case.
+    #[test]
+    fn empty_group_at_start_end_and_doubled_behave_sanely() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(dicts_dir.join("english.txt"), "begin\nend\nmiddlepoint\n").unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\begin{document}\n{}Begin End{} Middle{}Po{}int\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "leading/trailing/doubled empty groups must all be stripped: {:?}",
             findings
         );
     }

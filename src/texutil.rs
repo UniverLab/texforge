@@ -26,6 +26,15 @@ pub fn resolve_tex_path(root: &Path, input: &str) -> PathBuf {
     }
 }
 
+/// Remove empty LaTeX groups (`{}`) from a source token. They produce no
+/// glyph — `workf{}lows` is the recommended fix for the ligature `workflows`,
+/// so it must be searched for as `workflows`, not penalized for following
+/// the tool's own suggestion. Shared by the PDF fidelity check and the spell
+/// checker so both treat the idiom the same way.
+pub fn strip_empty_groups(word: &str) -> String {
+    word.replace("{}", "")
+}
+
 /// Strip a LaTeX comment from a line: everything after an unescaped `%`.
 pub fn strip_comment(line: &str) -> String {
     let mut result = String::with_capacity(line.len());
@@ -100,5 +109,30 @@ fn collect_tex_files_inner(root: &Path, entry: &str, collection: &mut TexFileCol
                 collect_tex_files_inner(root, input, collection);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_empty_groups_joins_the_ligature_workaround() {
+        assert_eq!(strip_empty_groups("workf{}lows"), "workflows");
+        assert_eq!(strip_empty_groups("Artif{}icial"), "Artificial");
+        assert_eq!(strip_empty_groups("MLf{}low"), "MLflow");
+    }
+
+    #[test]
+    fn strip_empty_groups_handles_leading_trailing_and_doubled_groups() {
+        assert_eq!(strip_empty_groups("{}Word"), "Word");
+        assert_eq!(strip_empty_groups("Word{}"), "Word");
+        assert_eq!(strip_empty_groups("Mid{}dle{}Point"), "MiddlePoint");
+    }
+
+    #[test]
+    fn strip_empty_groups_leaves_non_empty_groups_alone() {
+        assert_eq!(strip_empty_groups("\\textit{foo}"), "\\textit{foo}");
+        assert_eq!(strip_empty_groups("plain"), "plain");
     }
 }
