@@ -198,12 +198,13 @@ pub fn significant_words(files: &[TokenizedFile]) -> BTreeMap<String, usize> {
 }
 
 /// Words from a prose run: non-space spans with ≥1 alphabetic character,
-/// with leading/trailing punctuation stripped for PDF matching.
+/// with leading/trailing punctuation stripped and empty groups removed for
+/// PDF matching.
 fn words_in_text(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split_whitespace().filter_map(|raw| {
-        let trimmed = trim_punct(raw);
+        let trimmed = strip_empty_groups(trim_punct(raw));
         if trimmed.chars().any(char::is_alphabetic) {
-            Some(trimmed.to_string())
+            Some(trimmed)
         } else {
             None
         }
@@ -212,6 +213,14 @@ fn words_in_text(text: &str) -> impl Iterator<Item = String> + '_ {
 
 fn trim_punct(word: &str) -> &str {
     word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '\'')
+}
+
+/// Remove empty LaTeX groups (`{}`) from a source token. They produce no
+/// glyph — `workf{}lows` is the recommended fix for the ligature `workflows`,
+/// so it must be searched for as `workflows`, not penalized for following
+/// the tool's own suggestion.
+fn strip_empty_groups(word: &str) -> String {
+    word.replace("{}", "")
 }
 
 /// Compare significant source words against normalized PDF text.
@@ -966,6 +975,61 @@ mod tests {
         assert!(words.contains_key("Artificial"));
         assert!(words.contains_key("MLflow"));
         assert!(!words.contains_key("IgnorePreamble"));
+    }
+
+    #[test]
+    fn tabular_column_spec_is_excluded_from_significant_words() {
+        let source = "\\begin{document}\n\\begin{tabular}{@{}>{\\bfseries}p{3cm}>{\\raggedright\\arraybackslash}p{5.5cm}@{}}\nName & Alice \\\\\n\\end{tabular}\n\\end{document}\n";
+        let files = vec![TokenizedFile {
+            path: PathBuf::from("main.tex"),
+            tokens: crate::texparse::tokenize(source),
+        }];
+        let words = significant_words(&files);
+        assert!(!words.contains_key("p{3cm"), "{words:?}");
+        assert!(!words.contains_key("p{5.5cm"), "{words:?}");
+        assert!(words.contains_key("Name"), "{words:?}");
+        assert!(words.contains_key("Alice"), "{words:?}");
+    }
+
+    #[test]
+    fn ligature_workaround_empty_group_matches_rendered_word() {
+        let source =
+            "\\begin{document}\nWe streamlined the workf{}lows for the team.\n\\end{document}\n";
+        let files = vec![TokenizedFile {
+            path: PathBuf::from("main.tex"),
+            tokens: crate::texparse::tokenize(source),
+        }];
+        let words = significant_words(&files);
+        assert!(words.contains_key("workflows"), "{words:?}");
+        assert!(!words.contains_key("workf{}lows"), "{words:?}");
+
+        let missing = fidelity_missing_words(&words, "We streamlined the workflows for the team.");
+        assert!(missing.is_empty(), "{missing:?}");
+    }
+
+    #[test]
+    fn genuinely_missing_word_still_warns() {
+        let mut source = BTreeMap::new();
+        source.insert("Nonexistent".into(), 1);
+        let missing = fidelity_missing_words(&source, "some other text entirely");
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].word, "Nonexistent");
+    }
+
+    #[test]
+    fn package_options_and_hypersetup_keys_are_excluded_from_significant_words() {
+        let source = "\\usepackage[hyphens]{url}\n\\hypersetup{pdfcreationdate={\\today}, colorlinks=true}\n\\setlength{\\parindent}{0pt}\n\\begin{document}\nHello world.\n\\end{document}\n";
+        let files = vec![TokenizedFile {
+            path: PathBuf::from("main.tex"),
+            tokens: crate::texparse::tokenize(source),
+        }];
+        let words = significant_words(&files);
+        assert!(words.contains_key("Hello"), "{words:?}");
+        assert!(words.contains_key("world"), "{words:?}");
+        assert!(!words.contains_key("hyphens"), "{words:?}");
+        assert!(!words.contains_key("pdfcreationdate"), "{words:?}");
+        assert!(!words.contains_key("colorlinks"), "{words:?}");
+        assert!(!words.contains_key("parindent"), "{words:?}");
     }
 
     #[test]

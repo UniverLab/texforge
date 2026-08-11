@@ -113,6 +113,20 @@ const MATH_ENVIRONMENTS: &[&str] = &[
 /// Verbatim environments handled by the tokenizer.
 const VERBATIM_ENVIRONMENTS: &[&str] = &["verbatim", "Verbatim", "lstlisting", "minted"];
 
+/// Table environments whose `\begin{...}` is followed by a column
+/// specification (and, for the starred/extended forms, a width) rather than
+/// content. These arguments are typography, not prose — e.g.
+/// `\begin{tabular}{@{}>{\bfseries}p{3cm}...}` — and must never reach the
+/// significant-word stream that the fidelity check draws from.
+const TABLE_PREAMBLE_ENVIRONMENTS: &[&str] = &[
+    "tabular",
+    "tabular*",
+    "longtable",
+    "tabularx",
+    "tabulary",
+    "array",
+];
+
 /// Commands whose braced arguments are prose.
 const PROSE_COMMANDS: &[&str] = &["textit", "textbf", "emph", "footnote", "caption"];
 
@@ -514,7 +528,23 @@ impl<'a> Parser<'a> {
             self.push(tokens, Token::EndVerbatim { env }, mid, self.pos);
             return;
         }
+        if TABLE_PREAMBLE_ENVIRONMENTS.contains(&env.as_str()) {
+            self.consume_table_preamble(&env);
+        }
         self.push(tokens, Token::Environment { name: env }, start, self.pos);
+    }
+
+    /// Consume the non-prose arguments that follow `\begin{tabular}` and its
+    /// relatives. The `[pos]` shared by all of them was already discarded by
+    /// the caller as "float placement"; this reads what plain discard leaves
+    /// behind: `tabular*`/`tabularx`/`tabulary` take `{width}` before the
+    /// column spec, all of them take a mandatory `{cols}`.
+    fn consume_table_preamble(&mut self, env: &str) {
+        if matches!(env, "tabular*" | "tabularx" | "tabulary") {
+            let _ = self.read_braced_group(); // {width}
+            let _ = self.read_bracket_group(); // [pos] (tabular* only)
+        }
+        let _ = self.read_braced_group(); // {cols}
     }
 
     fn handle_end(&mut self, start: usize, tokens: &mut Vec<SpannedToken>) {
@@ -1147,6 +1177,43 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn tabular_column_spec_is_not_prose() {
+        let tokens = tokenize(
+            r"\begin{tabular}{@{}>{\bfseries}p{3cm}>{\raggedright\arraybackslash}p{5.5cm}@{}}Name & Alice \\\end{tabular}",
+        );
+        for t in &tokens {
+            if let Token::Text(text) = t {
+                assert!(!text.contains("p{3cm"), "column spec leaked: {text:?}");
+                assert!(!text.contains("p{5.5cm"), "column spec leaked: {text:?}");
+            }
+        }
+        assert!(tokens.iter().any(
+            |t| matches!(t, Token::Text(text) if text.contains("Name") || text.contains("Alice"))
+        ));
+    }
+
+    #[test]
+    fn tabular_star_and_x_and_y_column_specs_are_not_prose() {
+        for source in [
+            r"\begin{tabular*}{\textwidth}[t]{lcr}x\end{tabular*}",
+            r"\begin{tabularx}{\textwidth}{lX}x\end{tabularx}",
+            r"\begin{tabulary}{\textwidth}{lC}x\end{tabulary}",
+            r"\begin{longtable}[c]{ll}x\end{longtable}",
+            r"\begin{array}{cc}x\end{array}",
+        ] {
+            let tokens = tokenize(source);
+            for t in &tokens {
+                if let Token::Text(text) = t {
+                    assert!(
+                        !text.contains('{') && !text.contains('}'),
+                        "preamble leaked from {source:?}: {text:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
