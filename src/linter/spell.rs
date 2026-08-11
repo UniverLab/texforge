@@ -14,8 +14,31 @@ fn line_of(source: &str, offset: usize) -> usize {
 use crate::texparse::{tokenize_with_spans, Token};
 use crate::texutil::strip_empty_groups;
 
-/// Project-local whitelist filenames to check, in order.
-const PROJECT_WHITELIST_FILES: &[&str] = &["spell-whitelist.txt", ".texforge/spell-words"];
+/// Project-local whitelist filenames to check, in order. Also the order
+/// `texforge spell add` picks a target file in: the first that already
+/// exists wins (decision 4).
+pub const PROJECT_WHITELIST_FILES: &[&str] = &["spell-whitelist.txt", ".texforge/spell-words"];
+
+/// The personal dictionary shared by every project: `~/.texforge/spell-words`.
+/// `None` when the home directory cannot be determined.
+pub fn global_whitelist_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".texforge").join("spell-words"))
+}
+
+/// Parse one whitelist file's contents into a lowercase word set. Blank
+/// lines and `#`-prefixed comment lines are skipped. Comparison elsewhere is
+/// case-insensitive because entries are lowercased here on load.
+pub fn parse_whitelist_words(content: &str) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for line in content.lines() {
+        let w = line.trim();
+        if w.is_empty() || w.starts_with('#') {
+            continue;
+        }
+        set.insert(w.to_lowercase());
+    }
+    set
+}
 
 /// Managed dictionary directory under the user's home (`~/.texforge/dicts`).
 fn dictionaries_dir() -> Option<PathBuf> {
@@ -594,20 +617,23 @@ pub fn installed_dictionaries() -> Vec<InstalledDictionary> {
     }
 }
 
+/// Words accepted for this project: the union of whichever
+/// `PROJECT_WHITELIST_FILES` exist under `root`, plus the user's global
+/// personal dictionary (`global_whitelist_path`). Neither scope shadows the
+/// other — a word accepted anywhere is accepted (decision 3). Reading either
+/// source is best-effort: a missing or unreadable file (including a global
+/// dictionary that was never created, or a home directory that can't be
+/// determined) is the normal case, not an error.
 fn load_project_whitelist(root: &Path) -> HashSet<String> {
     let mut set = HashSet::new();
     for name in PROJECT_WHITELIST_FILES {
-        let p = root.join(name);
-        if p.exists() {
-            if let Ok(text) = fs::read_to_string(&p) {
-                for line in text.lines() {
-                    let w = line.trim();
-                    if w.is_empty() || w.starts_with('#') {
-                        continue;
-                    }
-                    set.insert(w.to_lowercase());
-                }
-            }
+        if let Ok(text) = fs::read_to_string(root.join(name)) {
+            set.extend(parse_whitelist_words(&text));
+        }
+    }
+    if let Some(global) = global_whitelist_path() {
+        if let Ok(text) = fs::read_to_string(&global) {
+            set.extend(parse_whitelist_words(&text));
         }
     }
     set
@@ -721,7 +747,8 @@ pub fn lint_files(
             severity: Severity::Warning,
             message: format!("Unknown word: '{}'", word),
             suggestion: Some(
-                "Add to project spell-whitelist.txt or .texforge/spell-words to accept this word"
+                "Add to your personal dictionary with `texforge spell add <word>` \
+                 (add --global to accept it in every project) to accept this word"
                     .into(),
             ),
         });
@@ -1614,6 +1641,202 @@ Hello world. This is some text. \label{sec:intro} More text.
             findings.is_empty(),
             "leading/trailing/doubled empty groups must all be stripped: {:?}",
             findings
+        );
+    }
+
+    // --- TE13: global personal dictionary unions with the project whitelist ---
+
+    /// `global_whitelist_path` must be `~/.texforge/spell-words` — the exact
+    /// path a user already tried before this feature existed (decision 2).
+    #[test]
+    fn global_whitelist_path_is_home_texforge_spell_words() {
+        let home = TempDir::new().unwrap();
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let path = global_whitelist_path().unwrap();
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(path, home.path().join(".texforge").join("spell-words"));
+    }
+
+    #[test]
+    fn parse_whitelist_words_skips_blank_and_comment_lines_and_lowercases() {
+        let content = "Docker\n# a comment\n\nAcme\n";
+        let words = parse_whitelist_words(content);
+        assert_eq!(words.len(), 2);
+        assert!(words.contains("docker"));
+        assert!(words.contains("acme"));
+    }
+
+    /// A word present only in the global personal dictionary must be
+    /// accepted in a project that has no whitelist file at all
+    /// (requirement 6).
+    #[test]
+    fn a_global_only_word_is_accepted_in_a_project_with_no_whitelist_file() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+        fs::write(
+            home.path().join(".texforge").join("spell-words"),
+            "docker\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\begin{document}\nHello docker world\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        // No whitelist file at all under the project root.
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "'docker' is in the global personal dictionary and must be accepted: {:?}",
+            findings
+        );
+    }
+
+    /// A missing (or unreadable) global personal dictionary must not fail
+    /// `check`, and must not change which findings are produced — reading it
+    /// is best-effort, same as the project-local files.
+    #[test]
+    fn missing_global_whitelist_yields_no_error_and_no_findings_change() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+        // Deliberately do NOT create ~/.texforge/spell-words.
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\begin{document}\nHello docker world\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert_eq!(
+            findings.len(),
+            1,
+            "no global dictionary present: 'docker' should still be flagged, and lint_files \
+             must not error: {:?}",
+            findings
+        );
+        assert!(findings[0].message.contains("docker"));
+    }
+
+    /// Both scopes union rather than either shadowing the other: a word only
+    /// in the project file, and a different word only in the global file,
+    /// are both accepted together (decision 3).
+    #[test]
+    fn project_and_global_whitelists_union_rather_than_override() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+        fs::write(home.path().join(".texforge").join("spell-words"), "acme\n").unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let project_root = TempDir::new().unwrap();
+        fs::write(project_root.path().join("spell-whitelist.txt"), "docker\n").unwrap();
+
+        let src = "\\begin{document}\nHello docker acme world\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "words from both the project and global lists must be accepted together: {:?}",
+            findings
+        );
+    }
+
+    /// The `Unknown word` finding's suggestion must point at the new command,
+    /// not at hand-editing files (requirement 9).
+    #[test]
+    fn unknown_word_suggestion_names_spell_add_and_global_flag() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\begin{document}\nHello zzzznotaword world\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert_eq!(findings.len(), 1);
+        let suggestion = findings[0].suggestion.as_deref().unwrap_or("");
+        assert!(
+            suggestion.contains("texforge spell add"),
+            "suggestion must name the new command: {}",
+            suggestion
+        );
+        assert!(
+            suggestion.contains("--global"),
+            "suggestion must mention --global: {}",
+            suggestion
         );
     }
 }

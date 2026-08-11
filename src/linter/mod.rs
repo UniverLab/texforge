@@ -2,9 +2,12 @@
 
 mod engine;
 mod glyphs;
-mod spell;
+pub(crate) mod spell;
 
-pub use spell::{installed_dictionaries, InstalledDictionary};
+pub use spell::{
+    global_whitelist_path, installed_dictionaries, parse_whitelist_words, InstalledDictionary,
+    PROJECT_WHITELIST_FILES,
+};
 
 use std::collections::HashSet;
 use std::path::Path;

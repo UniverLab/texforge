@@ -106,6 +106,11 @@ enum Commands {
         #[command(subcommand)]
         action: TemplateAction,
     },
+    /// Manage the personal spell-check whitelist (dictionary)
+    Spell {
+        #[command(subcommand)]
+        action: SpellAction,
+    },
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
     /// Manage global configuration
@@ -131,6 +136,34 @@ enum PdfAction {
     Pages,
     /// Check significant source words appear in the PDF text
     Check,
+}
+
+#[derive(Subcommand)]
+enum SpellAction {
+    /// Add one or more words to the whitelist (default: project scope)
+    Add {
+        /// Word(s) to add
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// Target the global personal dictionary (~/.texforge/spell-words) instead of the project's
+        #[arg(long)]
+        global: bool,
+    },
+    /// List the effective whitelist words for the scope
+    List {
+        /// List the global personal dictionary instead of the project's
+        #[arg(long)]
+        global: bool,
+    },
+    /// Remove one or more words from the whitelist (default: project scope)
+    Remove {
+        /// Word(s) to remove
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// Target the global personal dictionary (~/.texforge/spell-words) instead of the project's
+        #[arg(long)]
+        global: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -194,6 +227,18 @@ impl Cli {
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
             },
+            Commands::Spell { action } => {
+                let action = match action {
+                    SpellAction::Add { words, global } => {
+                        commands::spell::SpellAction::Add { words, global }
+                    }
+                    SpellAction::List { global } => commands::spell::SpellAction::List { global },
+                    SpellAction::Remove { words, global } => {
+                        commands::spell::SpellAction::Remove { words, global }
+                    }
+                };
+                commands::spell::execute(action)
+            }
             Commands::Doctor => commands::doctor::execute(),
             Commands::Config { key, value } => match (key, value) {
                 (None, None) => commands::config::wizard(),
