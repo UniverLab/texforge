@@ -25,28 +25,80 @@ fn dictionary_path_for(lang: &str) -> Option<PathBuf> {
     dictionaries_dir().map(|d| d.join(format!("{}.txt", lang)))
 }
 
-/// Language -> remote wordlist URL mapping (best-effort). Missing entries
-/// mean the language is not supported remotely and spell-check will be
-/// skipped with a clear message.
-fn remote_for_language(lang: &str) -> Option<&'static str> {
+fn dictionary_dic_path_for(lang: &str) -> Option<PathBuf> {
+    dictionaries_dir().map(|d| d.join(format!("{}.dic", lang)))
+}
+
+fn dictionary_aff_path_for(lang: &str) -> Option<PathBuf> {
+    dictionaries_dir().map(|d| d.join(format!("{}.aff", lang)))
+}
+
+/// Where a language's dictionary source lives remotely: a single wordlist
+/// file, or a Hunspell `.dic` + `.aff` pair. English keeps the wordlist it
+/// has always used; Spanish gets a Hunspell pair because a plain wordlist
+/// cannot represent Hunspell's affix-generated forms (see spec rationale).
+enum RemoteSource {
+    Wordlist(&'static str),
+    Hunspell {
+        dic_url: &'static str,
+        aff_url: &'static str,
+    },
+}
+
+/// Language -> remote dictionary source mapping (best-effort). Missing
+/// entries mean the language is not supported remotely and spell-check will
+/// be skipped with a clear message.
+fn remote_for_language(lang: &str) -> Option<RemoteSource> {
     match lang {
-        "english" => Some("https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"),
-        "en" => Some("https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"),
+        "english" | "en" => Some(RemoteSource::Wordlist(
+            "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",
+        )),
+        "spanish" | "es" => Some(RemoteSource::Hunspell {
+            dic_url: "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/es/index.dic",
+            aff_url: "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/es/index.aff",
+        }),
         _ => None,
     }
 }
 
+/// Where a language's dictionary lives on disk once `ensure_dictionary` has
+/// confirmed or fetched it. Two shapes because a plain wordlist is one file
+/// and a Hunspell dictionary is a `.dic`/`.aff` pair.
+enum DictionaryLocation {
+    Wordlist(PathBuf),
+    Hunspell { dic: PathBuf, aff: PathBuf },
+}
+
 /// Ensure a dictionary for `lang` is present, downloading and caching it on
-/// first use. Returns the local path to the wordlist on success.
-fn ensure_dictionary(lang: &str) -> Result<PathBuf> {
-    let path = dictionary_path_for(lang).ok_or_else(|| {
-        anyhow::anyhow!("Could not determine home directory for dictionary cache")
-    })?;
-    if path.exists() {
-        return Ok(path);
+/// first use. Returns its on-disk location on success.
+fn ensure_dictionary(lang: &str) -> Result<DictionaryLocation> {
+    let dic_path = dictionary_dic_path_for(lang);
+    let aff_path = dictionary_aff_path_for(lang);
+    let txt_path = dictionary_path_for(lang);
+
+    // The Hunspell pair wins when both backends are already present on disk
+    // for this language — it is the better checker. Both files must exist:
+    // a lone `.dic` (or lone `.aff`) is not usable and falls through below.
+    if let (Some(dic), Some(aff)) = (dic_path.as_ref(), aff_path.as_ref()) {
+        if dic.exists() && aff.exists() {
+            return Ok(DictionaryLocation::Hunspell {
+                dic: dic.clone(),
+                aff: aff.clone(),
+            });
+        }
     }
 
-    let Some(url) = remote_for_language(lang) else {
+    if let Some(txt) = txt_path.as_ref() {
+        if txt.exists() {
+            return Ok(DictionaryLocation::Wordlist(txt.clone()));
+        }
+    }
+
+    let dicts_dir = dictionaries_dir().ok_or_else(|| {
+        anyhow::anyhow!("Could not determine home directory for dictionary cache")
+    })?;
+
+    let Some(source) = remote_for_language(lang) else {
         anyhow::bail!(
             "no {} dictionary is available from the configured source",
             lang
@@ -70,30 +122,82 @@ fn ensure_dictionary(lang: &str) -> Result<PathBuf> {
         );
     }
 
-    eprintln!(
-        "Dictionary for '{}' not found locally. Downloading...",
-        lang
-    );
+    fs::create_dir_all(&dicts_dir).context("Failed to create dictionary cache directory")?;
 
     // Prefer the system 'curl' or 'wget' binary to avoid pulling in reqwest/
     // rustls at runtime (which has previously caused panics in some test
     // environments). If neither tool is available, degrade to a clear message
     // and do not attempt network activity.
-    let bytes = match download_with_tools(url, "curl", "wget") {
-        Ok(bytes) => bytes,
-        Err(failure) => anyhow::bail!(failure.describe(lang, url)),
-    };
+    match source {
+        RemoteSource::Wordlist(url) => {
+            eprintln!(
+                "Dictionary for '{}' not found locally. Downloading...",
+                lang
+            );
+            let bytes = match download_with_tools(url, "curl", "wget") {
+                Ok(bytes) => bytes,
+                Err(failure) => anyhow::bail!(failure.describe(lang, url)),
+            };
 
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).context("Failed to create dictionary cache directory")?;
+            let path = txt_path.expect("dictionaries_dir() succeeded above");
+            let mut f = fs::File::create(&path)
+                .with_context(|| format!("Failed to create dictionary file: {}", path.display()))?;
+            f.write_all(&bytes)?;
+            eprintln!("  ◇ Dictionary cached to {}", path.display());
+
+            Ok(DictionaryLocation::Wordlist(path))
+        }
+        RemoteSource::Hunspell { dic_url, aff_url } => {
+            eprintln!(
+                "Dictionary for '{}' not found locally. Downloading Hunspell dictionary...",
+                lang
+            );
+
+            // Fetch both files before writing anything to their final
+            // location: a partially downloaded language must never be left
+            // on disk (a stray `<lang>.dic` with no `.aff`, or vice versa,
+            // would make every later run fail with nothing obviously wrong).
+            let dic_bytes = match download_with_tools(dic_url, "curl", "wget") {
+                Ok(bytes) => bytes,
+                Err(failure) => anyhow::bail!(failure.describe(lang, dic_url)),
+            };
+            let aff_bytes = match download_with_tools(aff_url, "curl", "wget") {
+                Ok(bytes) => bytes,
+                Err(failure) => anyhow::bail!(failure.describe(lang, aff_url)),
+            };
+
+            let dic_final = dic_path.expect("dictionaries_dir() succeeded above");
+            let aff_final = aff_path.expect("dictionaries_dir() succeeded above");
+            let dic_tmp = dicts_dir.join(format!("{}.dic.part", lang));
+            let aff_tmp = dicts_dir.join(format!("{}.aff.part", lang));
+
+            fs::write(&dic_tmp, &dic_bytes)
+                .with_context(|| format!("Failed to write {}", dic_tmp.display()))?;
+            fs::write(&aff_tmp, &aff_bytes)
+                .with_context(|| format!("Failed to write {}", aff_tmp.display()))?;
+
+            fs::rename(&dic_tmp, &dic_final)
+                .with_context(|| format!("Failed to install {}", dic_final.display()))?;
+            if let Err(e) = fs::rename(&aff_tmp, &aff_final) {
+                // Undo the first half of the move rather than leave a `.dic`
+                // with no matching `.aff` on disk.
+                let _ = fs::remove_file(&dic_final);
+                return Err(e)
+                    .with_context(|| format!("Failed to install {}", aff_final.display()));
+            }
+
+            eprintln!(
+                "  ◇ Dictionary cached to {} and {}",
+                dic_final.display(),
+                aff_final.display()
+            );
+
+            Ok(DictionaryLocation::Hunspell {
+                dic: dic_final,
+                aff: aff_final,
+            })
+        }
     }
-
-    let mut f = fs::File::create(&path)
-        .with_context(|| format!("Failed to create dictionary file: {}", path.display()))?;
-    f.write_all(&bytes)?;
-    eprintln!("  ◇ Dictionary cached to {}", path.display());
-
-    Ok(path)
 }
 
 /// Outcome of running a single download tool (curl or wget).
@@ -313,6 +417,16 @@ fn language_disagreement_message(configured: &str, declared: &str) -> String {
     )
 }
 
+/// Best-effort path to name in the skip message before it's known which
+/// backend (if any) would have served `lang` — the `.dic` half of a
+/// Hunspell pair, or the wordlist path otherwise.
+fn expected_dictionary_hint(lang: &str) -> Option<PathBuf> {
+    match remote_for_language(lang) {
+        Some(RemoteSource::Hunspell { .. }) => dictionary_dic_path_for(lang),
+        _ => dictionary_path_for(lang),
+    }
+}
+
 /// Single-line message printed when spell-check must be skipped because the
 /// dictionary for the resolved language is unavailable. Names the language,
 /// the dictionary path that was expected, and why it could not be obtained —
@@ -328,53 +442,151 @@ fn skip_message(lang: &str, expected_path: Option<&Path>, reason: &str) -> Strin
 }
 
 /// Single-line message printed when spell-check runs, naming the language
-/// and dictionary file actually used.
-fn using_message(lang: &str, dict_path: &Path) -> String {
-    format!(
-        "Spell-check: checking '{}' prose against {}",
-        lang,
-        dict_path.display()
-    )
-}
-
-fn load_dictionary(path: &Path) -> Result<HashSet<String>> {
-    let content = fs::read_to_string(path).context("Failed to read dictionary file")?;
-    let mut set = HashSet::new();
-    for line in content.lines() {
-        let w = line.trim();
-        if w.is_empty() {
-            continue;
-        }
-        set.insert(w.to_lowercase());
+/// and what it is being checked against, for either backend.
+fn using_message(lang: &str, loc: &DictionaryLocation) -> String {
+    match loc {
+        DictionaryLocation::Wordlist(path) => format!(
+            "Spell-check: checking '{}' prose against {}",
+            lang,
+            path.display()
+        ),
+        DictionaryLocation::Hunspell { dic, aff } => format!(
+            "Spell-check: checking '{}' prose against Hunspell dictionary {} + {}",
+            lang,
+            dic.display(),
+            aff.display()
+        ),
     }
-    Ok(set)
 }
 
-/// List installed dictionaries as `(language, path)` pairs, sorted by language.
+/// A dictionary asked exactly one question by every caller: "is this word
+/// known?" Two backends answer it — a plain wordlist and a Hunspell
+/// `.dic`/`.aff` pair — and nothing upstream learns which one did.
+enum WordDictionary {
+    Wordlist(HashSet<String>),
+    Hunspell(Box<spellbook::Dictionary>),
+}
+
+impl WordDictionary {
+    fn contains(&self, word: &str) -> bool {
+        match self {
+            WordDictionary::Wordlist(set) => set.contains(word),
+            WordDictionary::Hunspell(dict) => dict.check(word),
+        }
+    }
+}
+
+fn load_dictionary(loc: &DictionaryLocation) -> Result<WordDictionary> {
+    match loc {
+        DictionaryLocation::Wordlist(path) => {
+            let content = fs::read_to_string(path).context("Failed to read dictionary file")?;
+            let mut set = HashSet::new();
+            for line in content.lines() {
+                let w = line.trim();
+                if w.is_empty() {
+                    continue;
+                }
+                set.insert(w.to_lowercase());
+            }
+            Ok(WordDictionary::Wordlist(set))
+        }
+        DictionaryLocation::Hunspell { dic, aff } => {
+            let aff_content = fs::read_to_string(aff).with_context(|| {
+                format!("Failed to read Hunspell affix file: {}", aff.display())
+            })?;
+            let dic_content = fs::read_to_string(dic).with_context(|| {
+                format!("Failed to read Hunspell dictionary file: {}", dic.display())
+            })?;
+            // A parse error here means a corrupt or truncated download, not
+            // a bug in the caller — surface it through the existing skip
+            // path with the language named, never as a panic.
+            let dict = spellbook::Dictionary::new(&aff_content, &dic_content).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to parse Hunspell dictionary ({}, {}): {}",
+                    dic.display(),
+                    aff.display(),
+                    e
+                )
+            })?;
+            Ok(WordDictionary::Hunspell(Box::new(dict)))
+        }
+    }
+}
+
+/// A dictionary found under the managed `~/.texforge/dicts` directory,
+/// naming which backend it is so callers (e.g. `texforge doctor`) can report
+/// on it without assuming a single-file wordlist.
+pub enum InstalledDictionary {
+    Wordlist {
+        lang: String,
+        path: PathBuf,
+    },
+    Hunspell {
+        lang: String,
+        dic_path: PathBuf,
+        aff_path: PathBuf,
+    },
+}
+
+impl InstalledDictionary {
+    pub fn lang(&self) -> &str {
+        match self {
+            InstalledDictionary::Wordlist { lang, .. } => lang,
+            InstalledDictionary::Hunspell { lang, .. } => lang,
+        }
+    }
+}
+
+/// List installed dictionaries, sorted by language.
 ///
 /// Reports only what is actually present under `dir` — verified state, not
-/// the set of languages texforge merely knows how to fetch remotely.
-fn installed_dictionaries_in(dir: &Path) -> Vec<(String, PathBuf)> {
+/// the set of languages texforge merely knows how to fetch remotely. A lone
+/// `.dic` with no matching `.aff` is not usable and is not reported.
+fn installed_dictionaries_in(dir: &Path) -> Vec<InstalledDictionary> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut dicts: Vec<(String, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter_map(|e| {
-            let path = e.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("txt") {
-                return None;
+
+    let mut dicts: Vec<InstalledDictionary> = Vec::new();
+    let mut hunspell_langs: Vec<String> = Vec::new();
+
+    for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+        match path.extension().and_then(|s| s.to_str()) {
+            Some("txt") => {
+                if let Some(lang) = path.file_stem().and_then(|s| s.to_str()) {
+                    dicts.push(InstalledDictionary::Wordlist {
+                        lang: lang.to_string(),
+                        path: path.clone(),
+                    });
+                }
             }
-            let lang = path.file_stem()?.to_str()?.to_string();
-            Some((lang, path))
-        })
-        .collect();
-    dicts.sort_by(|a, b| a.0.cmp(&b.0));
+            Some("dic") => {
+                if let Some(lang) = path.file_stem().and_then(|s| s.to_str()) {
+                    hunspell_langs.push(lang.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for lang in hunspell_langs {
+        let aff_path = dir.join(format!("{}.aff", lang));
+        if aff_path.exists() {
+            let dic_path = dir.join(format!("{}.dic", lang));
+            dicts.push(InstalledDictionary::Hunspell {
+                lang,
+                dic_path,
+                aff_path,
+            });
+        }
+    }
+
+    dicts.sort_by(|a, b| a.lang().cmp(b.lang()));
     dicts
 }
 
 /// List dictionaries installed under the managed `~/.texforge/dicts` directory.
-pub fn installed_dictionaries() -> Vec<(String, PathBuf)> {
+pub fn installed_dictionaries() -> Vec<InstalledDictionary> {
     match dictionaries_dir() {
         Some(dir) => installed_dictionaries_in(&dir),
         None => Vec::new(),
@@ -433,39 +645,39 @@ pub fn lint_files(
         }
     }
 
-    // Ensure dictionary exists and load it. Never fall back to a dictionary
+    // Ensure a dictionary exists and load it. Never fall back to a dictionary
     // for a different language: a missing dictionary means spell-check is
     // skipped for this run, not silently degraded.
-    let dict_path = match ensure_dictionary(&lang) {
-        Ok(p) => p,
+    let dict_loc = match ensure_dictionary(&lang) {
+        Ok(loc) => loc,
         Err(e) => {
             eprintln!(
                 "{}",
-                skip_message(&lang, dictionary_path_for(&lang).as_deref(), &e.to_string())
+                skip_message(
+                    &lang,
+                    expected_dictionary_hint(&lang).as_deref(),
+                    &e.to_string()
+                )
             );
             return Ok(findings);
         }
     };
 
-    let dict = match load_dictionary(&dict_path) {
+    let dict_hint = match &dict_loc {
+        DictionaryLocation::Wordlist(path) => path.clone(),
+        DictionaryLocation::Hunspell { dic, .. } => dic.clone(),
+    };
+    let dict = match load_dictionary(&dict_loc) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!(
-                "{}",
-                skip_message(&lang, Some(dict_path.as_path()), &e.to_string())
-            );
+            eprintln!("{}", skip_message(&lang, Some(&dict_hint), &e.to_string()));
             return Ok(findings);
         }
     };
 
-    eprintln!("{}", using_message(&lang, &dict_path));
+    eprintln!("{}", using_message(&lang, &dict_loc));
 
-    let mut allowed = dict;
-    // Add project whitelist
-    let project_whitelist = load_project_whitelist(root);
-    for w in project_whitelist {
-        allowed.insert(w);
-    }
+    let whitelist = load_project_whitelist(root);
 
     // Map unknown word -> first (file, line) occurrence
     let mut unknowns: HashMap<String, (String, usize)> = HashMap::new();
@@ -485,7 +697,7 @@ pub fn lint_files(
                         // skip short tokens to avoid noisy single-letter misses
                         continue;
                     }
-                    if !allowed.contains(&wl) {
+                    if !dict.contains(&wl) && !whitelist.contains(&wl) {
                         // record first occurrence only
                         unknowns
                             .entry(wl)
@@ -566,8 +778,54 @@ Hello world. This is some text. \label{sec:intro} More text.
         fs::write(tmp.path().join("english.txt"), "hello\nworld\n").unwrap();
         fs::write(tmp.path().join("notes.md"), "ignored").unwrap();
         let dicts = installed_dictionaries_in(tmp.path());
-        let langs: Vec<&str> = dicts.iter().map(|(lang, _)| lang.as_str()).collect();
+        let langs: Vec<&str> = dicts.iter().map(InstalledDictionary::lang).collect();
         assert_eq!(langs, vec!["english", "spanish"]);
+    }
+
+    /// A Hunspell pair (both `.dic` and `.aff` present) is reported as an
+    /// installed dictionary in its own right (requirement 8) — `texforge
+    /// doctor` must not go blind to a language once its Hunspell pair lands.
+    #[test]
+    fn installed_dictionaries_in_reports_hunspell_pair() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("spanish.dic"), "1\nsol/S\n").unwrap();
+        fs::write(tmp.path().join("spanish.aff"), "SFX S Y 1\nSFX S 0 es .\n").unwrap();
+        let dicts = installed_dictionaries_in(tmp.path());
+        assert_eq!(dicts.len(), 1);
+        match &dicts[0] {
+            InstalledDictionary::Hunspell {
+                lang,
+                dic_path,
+                aff_path,
+            } => {
+                assert_eq!(lang, "spanish");
+                assert!(dic_path.ends_with("spanish.dic"));
+                assert!(aff_path.ends_with("spanish.aff"));
+            }
+            InstalledDictionary::Wordlist { path, .. } => {
+                panic!(
+                    "expected a Hunspell entry, got a Wordlist entry: {}",
+                    path.display()
+                )
+            }
+        }
+    }
+
+    /// A lone `.dic` with no matching `.aff` is not a usable dictionary and
+    /// must not be reported as installed.
+    #[test]
+    fn installed_dictionaries_in_ignores_dic_without_aff() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("spanish.dic"), "1\nsol/S\n").unwrap();
+        let dicts = installed_dictionaries_in(tmp.path());
+        assert!(
+            dicts.is_empty(),
+            "a .dic with no .aff must not be reported as installed: got entries for {:?}",
+            dicts
+                .iter()
+                .map(InstalledDictionary::lang)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -575,6 +833,9 @@ Hello world. This is some text. \label{sec:intro} More text.
         // Simulate being run under a test harness like nextest by setting a
         // recognized environment variable. ensure_dictionary must not attempt
         // network activity in this case and should return an Err.
+        let home = TempDir::new().unwrap();
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
         std::env::set_var("NEXTEST_RUN_ID", "1");
         let res = ensure_dictionary("spanish");
         assert!(
@@ -582,6 +843,10 @@ Hello world. This is some text. \label{sec:intro} More text.
             "Expected ensure_dictionary to error when under test harness"
         );
         std::env::remove_var("NEXTEST_RUN_ID");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     /// Neither binary exists in PATH: must report that plainly, naming both
@@ -746,10 +1011,28 @@ Hello world. This is some text. \label{sec:intro} More text.
         );
     }
 
+    /// TE11: Spanish gets a Hunspell `.dic`+`.aff` pair (not a plain
+    /// wordlist, and not the "no source" state TE10 left it in), for both
+    /// spellings of the language.
     #[test]
-    fn remote_for_language_has_no_spanish_source() {
-        assert_eq!(remote_for_language("spanish"), None);
-        assert_eq!(remote_for_language("es"), None);
+    fn remote_for_language_returns_hunspell_pair_for_spanish() {
+        assert!(matches!(
+            remote_for_language("spanish"),
+            Some(RemoteSource::Hunspell { .. })
+        ));
+        assert!(matches!(
+            remote_for_language("es"),
+            Some(RemoteSource::Hunspell { .. })
+        ));
+    }
+
+    /// English keeps its single-URL wordlist source, unmigrated (decision 3).
+    #[test]
+    fn remote_for_language_returns_single_url_for_english() {
+        assert!(matches!(
+            remote_for_language("english"),
+            Some(RemoteSource::Wordlist(_))
+        ));
     }
 
     #[test]
@@ -774,14 +1057,32 @@ Hello world. This is some text. \label{sec:intro} More text.
     }
 
     #[test]
-    fn using_message_is_one_line_and_names_language_and_path() {
+    fn using_message_is_one_line_and_names_language_and_path_for_wordlist() {
         let msg = using_message(
             "spanish",
-            Path::new("/home/user/.texforge/dicts/spanish.txt"),
+            &DictionaryLocation::Wordlist(PathBuf::from("/home/user/.texforge/dicts/spanish.txt")),
         );
         assert_eq!(msg.lines().count(), 1, "must be exactly one line: {}", msg);
         assert!(msg.contains("spanish"));
         assert!(msg.contains("/home/user/.texforge/dicts/spanish.txt"));
+    }
+
+    /// Requirement 7: `using_message` names the language and what it is
+    /// checking against for the Hunspell backend too — both files, not just
+    /// one, since the pair together is what "checking against" means here.
+    #[test]
+    fn using_message_names_both_files_for_hunspell() {
+        let msg = using_message(
+            "spanish",
+            &DictionaryLocation::Hunspell {
+                dic: PathBuf::from("/home/user/.texforge/dicts/spanish.dic"),
+                aff: PathBuf::from("/home/user/.texforge/dicts/spanish.aff"),
+            },
+        );
+        assert_eq!(msg.lines().count(), 1, "must be exactly one line: {}", msg);
+        assert!(msg.contains("spanish"));
+        assert!(msg.contains("/home/user/.texforge/dicts/spanish.dic"));
+        assert!(msg.contains("/home/user/.texforge/dicts/spanish.aff"));
     }
 
     /// Reproduces the reported defect end-to-end: a Spanish document, no
@@ -1026,6 +1327,173 @@ Hello world. This is some text. \label{sec:intro} More text.
             warnings.len(),
             1,
             "two files declaring the same language must produce one warning, not two: {:?}",
+            findings
+        );
+    }
+
+    // --- TE11: Hunspell backend via `spellbook`, hand-written fixture pair ---
+
+    /// Absolute paths to the minimal, hand-written fixture pair committed
+    /// under `tests/fixtures/hunspell/`. Deliberately not a copy of a real
+    /// dictionary: a handful of stems and exactly one affix rule.
+    fn hunspell_fixture_paths() -> (PathBuf, PathBuf) {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        (
+            root.join("tests/fixtures/hunspell/mini.dic"),
+            root.join("tests/fixtures/hunspell/mini.aff"),
+        )
+    }
+
+    #[test]
+    fn hunspell_backend_accepts_a_stem() {
+        let (dic, aff) = hunspell_fixture_paths();
+        let dict = load_dictionary(&DictionaryLocation::Hunspell { dic, aff }).unwrap();
+        assert!(
+            dict.contains("gato"),
+            "'gato' is a bare stem in the fixture .dic"
+        );
+    }
+
+    /// The whole point of the change: a form that is NOT itself a line in
+    /// the fixture `.dic`, but IS generated by the fixture `.aff`'s suffix
+    /// rule (`sol/S` plus `SFX S 0 es .` yields "soles"), must be accepted.
+    /// A test that only checked stems would pass against the old
+    /// plain-wordlist backend too and would prove nothing about this change.
+    #[test]
+    fn hunspell_backend_accepts_affix_generated_form() {
+        let (dic, aff) = hunspell_fixture_paths();
+        let dict = load_dictionary(&DictionaryLocation::Hunspell { dic, aff }).unwrap();
+        assert!(
+            dict.contains("soles"),
+            "'soles' is generated from stem 'sol' by the SFX S rule; it is not present verbatim in mini.dic"
+        );
+    }
+
+    #[test]
+    fn hunspell_backend_rejects_word_not_in_stems_or_generated_forms() {
+        let (dic, aff) = hunspell_fixture_paths();
+        let dict = load_dictionary(&DictionaryLocation::Hunspell { dic, aff }).unwrap();
+        assert!(!dict.contains("xylophone"));
+    }
+
+    #[test]
+    fn wordlist_backend_still_accepts_and_rejects_exactly_as_before() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("english.txt");
+        fs::write(&path, "hello\nworld\n").unwrap();
+        let dict = load_dictionary(&DictionaryLocation::Wordlist(path)).unwrap();
+        assert!(dict.contains("hello"));
+        assert!(dict.contains("world"));
+        assert!(!dict.contains("goodbye"));
+    }
+
+    /// Decision 4: when both a `.txt` and a `.dic`/`.aff` exist on disk for
+    /// one language, `ensure_dictionary` must choose the Hunspell pair.
+    #[test]
+    fn ensure_dictionary_prefers_hunspell_pair_when_both_present() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(dicts_dir.join("spanish.txt"), "hola\n").unwrap();
+        let (fixture_dic, fixture_aff) = hunspell_fixture_paths();
+        fs::copy(&fixture_dic, dicts_dir.join("spanish.dic")).unwrap();
+        fs::copy(&fixture_aff, dicts_dir.join("spanish.aff")).unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        let loc = ensure_dictionary("spanish");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        match loc.unwrap() {
+            DictionaryLocation::Hunspell { .. } => {}
+            DictionaryLocation::Wordlist(p) => panic!(
+                "expected the Hunspell pair to win over the wordlist, got wordlist path: {}",
+                p.display()
+            ),
+        }
+    }
+
+    /// A `.dic` present with no `.aff` is not usable — it must be treated
+    /// the same as "no dictionary available" (falling through to the normal
+    /// missing-dictionary path and its skip message), never a panic.
+    #[test]
+    fn lint_files_treats_dic_without_aff_as_no_dictionary_available() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        let (fixture_dic, _fixture_aff) = hunspell_fixture_paths();
+        fs::copy(&fixture_dic, dicts_dir.join("spanish.dic")).unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("NEXTEST_RUN_ID", "te11-dic-without-aff");
+
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), None);
+
+        std::env::remove_var("NEXTEST_RUN_ID");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "a lone .dic with no .aff must be treated as no dictionary available, not crash or \
+             check against it: {:?}",
+            findings
+        );
+    }
+
+    /// End-to-end: `lint_files` on a Spanish document with a Hunspell pair
+    /// installed checks against it (not a fallback wordlist), accepting both
+    /// a bare stem and an affix-generated form while still flagging a
+    /// genuine misspelling (requirement 10).
+    #[test]
+    fn spanish_document_checks_against_installed_hunspell_pair() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        let (fixture_dic, fixture_aff) = hunspell_fixture_paths();
+        fs::copy(&fixture_dic, dicts_dir.join("spanish.dic")).unwrap();
+        fs::copy(&fixture_aff, dicts_dir.join("spanish.aff")).unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                   sol soles perro xilofonoinventado\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), None);
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.contains("'sol'")),
+            "stem 'sol' must be accepted: {:?}",
+            findings
+        );
+        assert!(
+            !findings.iter().any(|f| f.message.contains("'soles'")),
+            "affix-generated form 'soles' must be accepted: {:?}",
+            findings
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("xilofonoinventado")),
+            "a genuine misspelling must still be flagged: {:?}",
             findings
         );
     }

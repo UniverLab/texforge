@@ -213,13 +213,28 @@ fn report_dictionaries() {
         println!("  none installed");
         return;
     }
-    for (lang, path) in &dicts {
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                let words = content.lines().filter(|l| !l.trim().is_empty()).count();
-                println!("  {lang}: {} ({words} words)", path.display());
+    for dict in &dicts {
+        match dict {
+            linter::InstalledDictionary::Wordlist { lang, path } => {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        let words = content.lines().filter(|l| !l.trim().is_empty()).count();
+                        println!("  {lang}: {} ({words} words)", path.display());
+                    }
+                    Err(e) => println!("  {lang}: {} (unreadable: {e})", path.display()),
+                }
             }
-            Err(e) => println!("  {lang}: {} (unreadable: {e})", path.display()),
+            linter::InstalledDictionary::Hunspell {
+                lang,
+                dic_path,
+                aff_path,
+            } => {
+                println!(
+                    "  {lang}: hunspell dictionary ({}, {})",
+                    dic_path.display(),
+                    aff_path.display()
+                );
+            }
         }
     }
 }

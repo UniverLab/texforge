@@ -80,6 +80,12 @@ tempfile = "3.8"
 pdf-extract = "0.12"
 lopdf = "0.42"
 
+# Hunspell-compatible spell-check backend (pure Rust, no_std; same
+# musl-friendliness constraint as hayro/pdf-extract above). Pinned to the
+# minor: spellbook's own README calls it alpha and warns any part of the API
+# may break.
+spellbook = "0.4"
+
 [lints.clippy]
 needless_pass_by_value = "warn"
 redundant_closure = "warn"
