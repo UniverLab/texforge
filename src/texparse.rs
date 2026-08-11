@@ -58,7 +58,9 @@ pub enum Token {
     ///
     /// `level` follows the standard hierarchy: part = 0, chapter = 1, section
     /// = 2, subsection = 3, subsubsection = 4, paragraph = 5, subparagraph =
-    /// 6. `title` is the raw text of the first braced argument.
+    /// 6. `title` is the first braced argument with any wrapping macros
+    /// (`\textit`, `\href`, `\textcolor`, dot-leader constructs, ...)
+    /// resolved to plain text — see [`resolve_section_title`].
     Section { level: u8, title: String },
 
     /// Beginning of a math region: `$...$`, `$$...$$`, `\(...\)`, `\[...\]`,
@@ -226,6 +228,169 @@ fn section_level(name: &str) -> Option<u8> {
         "paragraph" => Some(5),
         "subparagraph" => Some(6),
         _ => None,
+    }
+}
+
+/// Macros that contribute no text to a resolved section title: pure spacing
+/// or rule constructs, typically used to build dot leaders.
+const TITLE_VISUAL_MACROS: &[&str] = &["leaders", "hfill", "hbox"];
+
+/// Macros whose braced argument is the title text itself: everything but the
+/// last argument is dropped (a URL, a color name, ...), and the kept argument
+/// is resolved recursively so nesting works.
+const TITLE_TEXT_MACROS: &[&str] = &["textit", "textbf", "emph"];
+
+/// Resolves a raw section title — the literal source text of a `\section`-like
+/// command's braced argument — into human-readable prose.
+///
+/// This is the single place that understands macro-wrapped titles (`\href`,
+/// `\textit`, `\textcolor`, dot-leader constructs, ...), so `outline` and the
+/// PDF page mapper both see the same resolved string instead of drifting
+/// title cleaners. See the module's [DECISIONS] in the originating spec for
+/// the resolution rule per macro class.
+///
+/// The resolver never panics: unbalanced braces yield a best-effort string
+/// built from whatever was scanned before the input ran out.
+pub(crate) fn resolve_section_title(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let resolved = TitleResolver::new(&chars).resolve();
+    resolved.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Recursive-descent scanner over a title's raw source, mirroring the
+/// tokenizer's own brace handling but standalone: it only needs to tell
+/// prose apart from the handful of macros a title can be wrapped in.
+struct TitleResolver<'a> {
+    chars: &'a [char],
+    pos: usize,
+}
+
+impl<'a> TitleResolver<'a> {
+    fn new(chars: &'a [char]) -> Self {
+        Self { chars, pos: 0 }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let c = self.peek();
+        if c.is_some() {
+            self.pos += 1;
+        }
+        c
+    }
+
+    /// Reads a balanced `{...}` group's inner content. On unbalanced input,
+    /// returns everything scanned up to the end of input (best effort).
+    fn read_group(&mut self) -> Option<Vec<char>> {
+        if self.peek() != Some('{') {
+            return None;
+        }
+        self.bump();
+        let mut depth = 1usize;
+        let mut out = Vec::new();
+        while let Some(c) = self.peek() {
+            match c {
+                '\\' => {
+                    out.push(c);
+                    self.bump();
+                    if let Some(next) = self.bump() {
+                        out.push(next);
+                    }
+                }
+                '{' => {
+                    depth += 1;
+                    out.push(c);
+                    self.bump();
+                }
+                '}' => {
+                    self.bump();
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(out);
+                    }
+                    out.push(c);
+                }
+                _ => {
+                    out.push(c);
+                    self.bump();
+                }
+            }
+        }
+        Some(out)
+    }
+
+    fn read_command_name(&mut self) -> String {
+        let mut name = String::new();
+        match self.peek() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                while let Some(c) = self.peek() {
+                    if c.is_ascii_alphabetic() {
+                        name.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            Some(c) => {
+                name.push(c);
+                self.bump();
+            }
+            None => {}
+        }
+        name
+    }
+
+    fn resolve(&mut self) -> String {
+        let mut out = String::new();
+        while let Some(c) = self.peek() {
+            match c {
+                '\\' => {
+                    self.bump();
+                    let name = self.read_command_name();
+                    if TITLE_VISUAL_MACROS.contains(&name.as_str()) {
+                        // Purely visual: drop the macro and, if present, the
+                        // one group it dresses (e.g. `\hbox{.}`).
+                        let _ = self.read_group();
+                    } else if TITLE_TEXT_MACROS.contains(&name.as_str()) {
+                        if let Some(group) = self.read_group() {
+                            out.push_str(&TitleResolver::new(&group).resolve());
+                        }
+                    } else if name == "textcolor" || name == "href" {
+                        // `\textcolor{color}{text}` and `\href{url}{text}`:
+                        // drop the first (non-textual) group, keep the second.
+                        let _dropped = self.read_group();
+                        if let Some(text) = self.read_group() {
+                            out.push_str(&TitleResolver::new(&text).resolve());
+                        }
+                    } else if let Some(group) = self.read_group() {
+                        // Unknown macro: keep its textual content rather than
+                        // dropping the title or emitting raw source.
+                        out.push_str(&TitleResolver::new(&group).resolve());
+                    }
+                    // Unknown macro with no braced argument: drop silently.
+                }
+                '{' => {
+                    // A bare group not attached to a command still groups
+                    // prose (`{Emphasis}`); keep its resolved content.
+                    if let Some(group) = self.read_group() {
+                        out.push_str(&TitleResolver::new(&group).resolve());
+                    }
+                }
+                '}' => {
+                    // Stray closing brace from malformed input: skip it.
+                    self.bump();
+                }
+                _ => {
+                    out.push(c);
+                    self.bump();
+                }
+            }
+        }
+        out
     }
 }
 
@@ -443,7 +608,8 @@ impl<'a> Parser<'a> {
                 if let Some(level) = section_level(name) {
                     self.eat('*');
                     let _ = self.read_bracket_group();
-                    let title = self.read_braced_group().unwrap_or_default();
+                    let raw_title = self.read_braced_group().unwrap_or_default();
+                    let title = resolve_section_title(&raw_title);
                     self.push(tokens, Token::Section { level, title }, start, self.pos);
                 } else if name == "href" {
                     self.handle_href(start, tokens);
@@ -1491,5 +1657,77 @@ mod tests {
         let tokenized = tokenize_with_spans(src);
         assert_eq!(tokenized.unclosed_math, vec![14]);
         assert_eq!(&src[14..15], "$");
+    }
+
+    #[test]
+    fn plain_title_is_unchanged() {
+        assert_eq!(resolve_section_title("Introduction"), "Introduction");
+    }
+
+    #[test]
+    fn href_title_keeps_link_text_not_url() {
+        assert_eq!(
+            resolve_section_title(r"\href{https://univerlab.org}{UniverLab.org}"),
+            "UniverLab.org"
+        );
+    }
+
+    #[test]
+    fn textit_and_textbf_keep_their_argument() {
+        assert_eq!(resolve_section_title(r"\textit{Hello}"), "Hello");
+        assert_eq!(resolve_section_title(r"\textbf{Hello}"), "Hello");
+    }
+
+    #[test]
+    fn textcolor_drops_color_keeps_text() {
+        assert_eq!(
+            resolve_section_title(r"\textcolor{lightgray}{Hello}"),
+            "Hello"
+        );
+    }
+
+    #[test]
+    fn visual_macros_are_dropped_entirely() {
+        assert_eq!(resolve_section_title(r"\leaders\hbox{.}\hfill"), "");
+        assert_eq!(
+            resolve_section_title(r"Before \leaders\hbox{.}\hfill{}After"),
+            "Before After"
+        );
+    }
+
+    #[test]
+    fn unknown_macro_keeps_textual_content() {
+        assert_eq!(resolve_section_title(r"\foo{bar}"), "bar");
+    }
+
+    #[test]
+    fn nested_macros_resolve_to_innermost_text() {
+        assert_eq!(resolve_section_title(r"\textbf{\href{u}{X}}"), "X");
+    }
+
+    #[test]
+    fn whitespace_and_newlines_collapse_to_single_spaces() {
+        assert_eq!(
+            resolve_section_title("AI Engineer en Accenture\n\\textcolor{lightgray}{\\leaders\\hbox{.}\\hfill}\n\\textit{Julio 2026 -- Actual}"),
+            "AI Engineer en Accenture Julio 2026 -- Actual"
+        );
+    }
+
+    #[test]
+    fn title_resolution_survives_unbalanced_braces() {
+        assert_eq!(resolve_section_title(r"\textit{Hello"), "Hello");
+        assert_eq!(resolve_section_title("Hello}"), "Hello");
+    }
+
+    #[test]
+    fn evidence_heading_resolves_via_tokenize() {
+        let tokens = tokenize(r"\section{\href{https://univerlab.org}{UniverLab.org}}");
+        assert_eq!(
+            tokens,
+            vec![Token::Section {
+                level: 2,
+                title: "UniverLab.org".to_string(),
+            }]
+        );
     }
 }

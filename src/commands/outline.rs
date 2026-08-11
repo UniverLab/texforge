@@ -23,7 +23,8 @@ pub struct OutlineSection {
     pub level: u8,
     /// Dotted section number (`1`, `1.1`, `2.1.1`).
     pub number: String,
-    /// Raw section title.
+    /// Resolved section title: wrapping macros (`\textit`, `\href`,
+    /// `\textcolor`, ...) are stripped down to their text.
     pub title: String,
     /// `.tex` file containing the section, relative to the project root.
     pub file: String,
@@ -300,6 +301,29 @@ mod tests {
         ]);
         let outline = build_outline("Doc", dir.path(), "main.tex");
         assert_eq!(titles(&outline), vec!["A", "B"]);
+    }
+
+    #[test]
+    fn macro_wrapped_titles_resolve_to_plain_text() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\section{\\href{https://univerlab.org}{UniverLab.org}}\n\\subsection{AI Engineer en Accenture\n\\textcolor{lightgray}{\\leaders\\hbox{.}\\hfill}\n\\textit{Julio 2026 -- Actual}}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(
+            titles(&outline),
+            vec![
+                "UniverLab.org",
+                "AI Engineer en Accenture Julio 2026 -- Actual"
+            ]
+        );
+        for title in titles(&outline) {
+            assert!(!title.contains('\\'), "title leaks markup: {title:?}");
+            assert!(
+                !title.contains('\n'),
+                "title spans multiple lines: {title:?}"
+            );
+        }
     }
 
     #[test]

@@ -241,6 +241,48 @@ More Artificial Intelligence content on page two about workflows.
     }
 
     #[test]
+    fn pages_attributes_macro_wrapped_heading_to_its_own_page() {
+        // Same fixture PDF as `info_and_pages_and_check_run`, but the
+        // heading opening page 2 is wrapped in `\textit`. Before titles
+        // were resolved at the tokenizer, the raw markup title never
+        // matched the plain page text, so page 2 stayed attributed to
+        // section 1 instead of section 2.
+        let tex = r#"\documentclass{article}
+\begin{document}
+\section{Introduction}
+Artificial Intelligence and MLflow workflows for local-first systems.
+Deep Learning appears here with enough filler text to eventually force a page break if we add more.
+\newpage
+\section{\textit{Methods}}
+More Artificial Intelligence content on page two about workflows.
+\end{document}
+"#;
+        let (_dir, project) = project_with_pdf(PAGES, "Pages Doc Macro", tex);
+        let pdf_path = compiled_pdf_path(&project);
+        let page_texts = pdftext::extract_text_by_pages(&pdf_path).unwrap();
+        let outline = outline::build_outline(
+            &project.config.document.title,
+            &project.root,
+            &project.config.build.entry,
+        );
+        let sections: Vec<(String, String)> = outline
+            .sections
+            .iter()
+            .map(|s| (s.number.clone(), s.title.clone()))
+            .collect();
+        assert_eq!(
+            sections[1].1, "Methods",
+            "title should be resolved, not raw markup"
+        );
+
+        let breaks = pdftext::page_breaks(&page_texts, &sections);
+        assert_eq!(
+            pdftext::format_page_breaks(&breaks),
+            "page=1 section=1 title=Introduction\npage=2 section=2 title=Methods"
+        );
+    }
+
+    #[test]
     fn missing_pdf_is_helpful() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
