@@ -670,10 +670,23 @@ fn resolve_dict<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<&'a Di
 /// Report which section opens each page.
 ///
 /// `sections` is `(number, title)` in document order (e.g. from the outline).
-/// A page is attributed to the *last section heading that begins on or
-/// before that page*: for each section, in order, we search forward from
-/// the page where the previous *matched* section was found for the first
-/// page whose text contains this section's title.
+/// A section title matches a page only when it appears as its own line in
+/// that page's extracted text — either the bare title, or the title with a
+/// leading `"<number> "` prefix, since a numbered `\section` renders that
+/// way (see `section_title_in_page`). A mention inside a sentence does not
+/// count. For each section, in order, we search forward from the page where
+/// the previous *matched* section was found for the first page whose text
+/// contains this section's title as a line.
+///
+/// A page is opened by the *first* matched heading that begins on it with
+/// nothing but whitespace before it in the page's text — that is the
+/// heading that starts the page's content, as opposed to a heading that
+/// merely appears partway down a page whose start still belongs to the
+/// previous section. If that first matched heading is preceded by other
+/// text, the page keeps the section carried over from the previous page
+/// instead. A page with no carry-over yet (no section has opened before it)
+/// is opened by its first matched heading regardless of what precedes it,
+/// since there is nothing else to attribute the page to.
 ///
 /// Matching keys on page position, not on a strict in-order text-equality
 /// chain: a title that fails to match anywhere (for example a heading whose
@@ -693,7 +706,7 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
             .iter()
             .enumerate()
             .skip(search_from)
-            .find(|(_, text)| section_title_in_page(text, title))
+            .find(|(_, text)| section_title_in_page(text, num, title))
             .map(|(idx, _)| idx);
         if let Some(page_idx) = found {
             matches.push((page_idx, num.clone(), title.clone()));
@@ -704,11 +717,21 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
     let mut out = Vec::with_capacity(page_texts.len());
     let mut current: Option<(String, String)> = None;
     let mut match_idx = 0usize;
-    for i in 0..page_texts.len() {
-        while match_idx < matches.len() && matches[match_idx].0 <= i {
-            let (_, num, title) = &matches[match_idx];
-            current = Some((num.clone(), title.clone()));
+    for (i, page) in normalized_pages.iter().enumerate() {
+        // Only the first heading matched on this page is a candidate to
+        // open it; later headings on the same page are consumed but never
+        // override `current` here.
+        let mut candidate: Option<&(usize, String, String)> = None;
+        while match_idx < matches.len() && matches[match_idx].0 == i {
+            if candidate.is_none() {
+                candidate = Some(&matches[match_idx]);
+            }
             match_idx += 1;
+        }
+        if let Some((_, num, title)) = candidate {
+            if current.is_none() || section_title_opens_page(page, num, title) {
+                current = Some((num.clone(), title.clone()));
+            }
         }
         out.push(PdfPageBreak {
             page: i + 1,
@@ -719,12 +742,55 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
     out
 }
 
-fn section_title_in_page(page_text: &str, title: &str) -> bool {
+/// True when a trimmed page line is the heading line for `(number, title)`:
+/// either the bare title, or the title with its auto-numbering prefix
+/// (`"1 Introduction"`), which is how a numbered `\section` renders in
+/// extracted PDF text. A mention inside a sentence never lands on a line by
+/// itself, so this rejects prose the same way either form.
+fn line_is_section_heading(line: &str, number: &str, needle: &str) -> bool {
+    if line == needle {
+        return true;
+    }
+    let Some(rest) = line.strip_prefix(number) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(char::is_whitespace) else {
+        return false;
+    };
+    rest.trim_start() == needle
+}
+
+/// True when `title` appears as its own line (trimmed, normalized) anywhere
+/// in `page_text`. A mention inside a sentence does not count.
+fn section_title_in_page(page_text: &str, number: &str, title: &str) -> bool {
     let needle = normalize_pdf_text(title);
+    let needle = needle.trim();
     if needle.is_empty() {
         return false;
     }
-    page_text.contains(needle.as_str())
+    page_text
+        .lines()
+        .any(|line| line_is_section_heading(line.trim(), number, needle))
+}
+
+/// True when `title`'s line is the first non-blank content on the page —
+/// i.e. nothing but whitespace precedes it.
+fn section_title_opens_page(page_text: &str, number: &str, title: &str) -> bool {
+    let needle = normalize_pdf_text(title);
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return false;
+    }
+    for line in page_text.lines() {
+        let trimmed = line.trim();
+        if line_is_section_heading(trimmed, number, needle) {
+            return true;
+        }
+        if !trimmed.is_empty() {
+            return false;
+        }
+    }
+    false
 }
 
 /// Format page breaks for diff-friendly output: one line per page.
@@ -859,6 +925,91 @@ mod tests {
         assert_eq!(
             formatted,
             "page=1 section=1 title=Introduction\npage=2 section=2 title=Methods"
+        );
+    }
+
+    #[test]
+    fn page_breaks_ignore_a_title_mentioned_inside_prose_te9() {
+        // TE9: the reporter's two-page document. "UniverLab.org" is a
+        // section title, but it also occurs verbatim inside a sentence in
+        // the "Perfil Profesional" prose on page 1. A substring match would
+        // false-positive there (as the buggy code did); a whole-line match
+        // must not.
+        let pages = vec![
+            "Jane Doe\ncontacto@example.com\nFundador de UniverLab.org y contribuidor activo en open source\nPerfil Profesional\nExperiencia Laboral\nSix positions of professional experience follow.".to_string(),
+            "UniverLab.org\nFormación Académica\nHabilidades Técnicas\nRust, Python, and more.".to_string(),
+        ];
+        let sections = vec![
+            ("1".into(), "Perfil Profesional".into()),
+            ("2".into(), "Experiencia Laboral".into()),
+            ("3".into(), "UniverLab.org".into()),
+            ("4".into(), "Formación Académica".into()),
+            ("5".into(), "Habilidades Técnicas".into()),
+        ];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section=1 title=Perfil Profesional\npage=2 section=3 title=UniverLab.org"
+        );
+    }
+
+    #[test]
+    fn page_breaks_title_only_in_prose_never_matches() {
+        let pages = vec![
+            "This report inline-mentions Special Report but never as a heading.".to_string(),
+            "More filler text on the second page, still no heading line.".to_string(),
+        ];
+        let sections = vec![("1".into(), "Special Report".into())];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(formatted, "page=1 section= title=\npage=2 section= title=");
+    }
+
+    #[test]
+    fn page_breaks_carry_over_when_first_heading_is_preceded_by_body_text() {
+        let pages = vec![
+            "Alpha\nBody text under Alpha continues here.".to_string(),
+            "Trailing body text from Alpha spills onto this page.\nBeta\nMore Beta content."
+                .to_string(),
+        ];
+        let sections = vec![("1".into(), "Alpha".into()), ("2".into(), "Beta".into())];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section=1 title=Alpha\npage=2 section=1 title=Alpha"
+        );
+    }
+
+    #[test]
+    fn page_breaks_several_headings_on_one_page_first_wins() {
+        let pages = vec![
+            "Cover page with no headings at all.".to_string(),
+            "Gamma\nDelta\nBody text under Delta.".to_string(),
+            "Body continues, no new heading here.".to_string(),
+        ];
+        let sections = vec![("1".into(), "Gamma".into()), ("2".into(), "Delta".into())];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section= title=\npage=2 section=1 title=Gamma\npage=3 section=1 title=Gamma"
+        );
+    }
+
+    #[test]
+    fn page_breaks_pages_before_first_heading_are_unattributed() {
+        let pages = vec![
+            "Cover page with no headings at all.".to_string(),
+            "Epsilon\nBody text under Epsilon.".to_string(),
+        ];
+        let sections = vec![("1".into(), "Epsilon".into())];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section= title=\npage=2 section=1 title=Epsilon"
         );
     }
 
