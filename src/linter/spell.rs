@@ -32,10 +32,6 @@ fn remote_for_language(lang: &str) -> Option<&'static str> {
     match lang {
         "english" => Some("https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"),
         "en" => Some("https://raw.githubusercontent.com/dwyl/english-words/master/words.txt"),
-        // Spanish sources are varied; attempt a common wordlist if present.
-        "spanish" | "es" => {
-            Some("https://raw.githubusercontent.com/manuelperez/wordlists/master/spanish.txt")
-        }
         _ => None,
     }
 }
@@ -225,6 +221,7 @@ fn normalize_babel_option(opt: &str) -> Option<&'static str> {
     match value {
         "spanish" | "es" | "spanish-mexico" | "es-MX" => Some("spanish"),
         "english" | "en" | "USenglish" | "UKenglish" => Some("english"),
+        "french" | "fr" | "francais" => Some("french"),
         _ => None,
     }
 }
@@ -250,30 +247,70 @@ fn babel_language_from_usepackage(args: &[String]) -> Option<&'static str> {
     None
 }
 
-/// Resolve the language to spell-check against: the configured default takes
-/// priority; otherwise infer from a `\usepackage[...]{babel}` (or
-/// `polyglossia`) declaration in the preamble, falling back to English.
-fn resolve_language(files: &[(String, String)], default_lang: Option<&str>) -> String {
-    if let Some(lang) = default_lang {
-        return lang.to_string();
-    }
+/// Outcome of `resolve_language`: the language spell-check will actually use,
+/// plus the document's own `babel`/`polyglossia` declaration (if any) and
+/// where it was found. Kept separate from finding-construction so
+/// `resolve_language` stays free of `LintFinding` concerns; callers decide
+/// whether the declaration and the configured default disagree.
+struct LanguageResolution {
+    /// The language spell-check will use.
+    language: String,
+    /// `(language, file, line)` of the `\usepackage[...]{babel}` (or
+    /// `polyglossia`) declaration found in the preamble, if any.
+    declared: Option<(String, String, usize)>,
+}
 
-    for (_rel, source) in files {
-        let tokenized = tokenize_with_spans(source);
-        for sp in &tokenized.tokens {
-            match &sp.token {
-                Token::Command { name, args } if name == "usepackage" => {
-                    if let Some(lang) = babel_language_from_usepackage(args) {
-                        return lang.to_string();
-                    }
+/// Scan a single file's preamble for a `babel`/`polyglossia` language
+/// declaration, stopping at `\begin{document}` so the body is never
+/// tokenized for this. Returns the language and the 1-based line of the
+/// `\usepackage` that declared it.
+fn find_babel_declaration(source: &str) -> Option<(&'static str, usize)> {
+    let tokenized = tokenize_with_spans(source);
+    for sp in &tokenized.tokens {
+        match &sp.token {
+            Token::Command { name, args } if name == "usepackage" => {
+                if let Some(lang) = babel_language_from_usepackage(args) {
+                    return Some((lang, line_of(source, sp.start)));
                 }
-                Token::BeginDocument => break,
-                _ => {}
             }
+            Token::BeginDocument => break,
+            _ => {}
         }
     }
+    None
+}
 
-    "english".to_string()
+/// Resolve the language to spell-check against. Highest priority first:
+/// (1) a `babel`/`polyglossia` language declared in the document's own
+/// preamble — a declaration inside the file is evidence about *this*
+/// document, while a global default is only a guess; (2) the user-configured
+/// default; (3) `english`. The declaration (if any) is reported alongside the
+/// resolved language so the caller can warn when it disagrees with the
+/// configured default rather than silently overriding it.
+fn resolve_language(files: &[(String, String)], default_lang: Option<&str>) -> LanguageResolution {
+    let declared = files.iter().find_map(|(rel, source)| {
+        find_babel_declaration(source).map(|(lang, line)| (lang.to_string(), rel.clone(), line))
+    });
+
+    let language = match &declared {
+        Some((lang, _, _)) => lang.clone(),
+        None => default_lang
+            .map(str::to_string)
+            .unwrap_or_else(|| "english".to_string()),
+    };
+
+    LanguageResolution { language, declared }
+}
+
+/// Message for the `Severity::Warning` finding emitted when the document's
+/// own declaration overrides a configured default that names a different
+/// language. Names both languages explicitly and states which one won, so
+/// the override is never silent.
+fn language_disagreement_message(configured: &str, declared: &str) -> String {
+    format!(
+        "Configured default language is '{}', but this document declares '{}' via babel/polyglossia; using '{}'",
+        configured, declared, declared
+    )
 }
 
 /// Single-line message printed when spell-check must be skipped because the
@@ -371,9 +408,30 @@ pub fn lint_files(
     root: &Path,
     default_lang: Option<&str>,
 ) -> Result<Vec<LintFinding>> {
-    // Determine language: prefer configured default; otherwise try to infer
-    // from a `\usepackage[spanish]{babel}` occurrence in the preamble.
-    let lang = resolve_language(files, default_lang);
+    // Determine language: the document's own babel/polyglossia declaration
+    // wins over the configured default, which wins over the `english`
+    // fallback. See `resolve_language` for the rationale.
+    let resolution = resolve_language(files, default_lang);
+    let lang = resolution.language;
+
+    // The document's declaration silently overriding the user's global
+    // default would just replace one confusing behaviour with another: warn,
+    // naming both languages, whenever they disagree. Fires at most once per
+    // run and never when either is absent or they agree.
+    let mut findings = Vec::new();
+    if let (Some(configured), Some((declared, file, line))) =
+        (default_lang, resolution.declared.as_ref())
+    {
+        if declared != configured {
+            findings.push(LintFinding {
+                file: file.clone(),
+                line: *line,
+                severity: Severity::Warning,
+                message: language_disagreement_message(configured, declared),
+                suggestion: None,
+            });
+        }
+    }
 
     // Ensure dictionary exists and load it. Never fall back to a dictionary
     // for a different language: a missing dictionary means spell-check is
@@ -385,7 +443,7 @@ pub fn lint_files(
                 "{}",
                 skip_message(&lang, dictionary_path_for(&lang).as_deref(), &e.to_string())
             );
-            return Ok(Vec::new());
+            return Ok(findings);
         }
     };
 
@@ -396,7 +454,7 @@ pub fn lint_files(
                 "{}",
                 skip_message(&lang, Some(dict_path.as_path()), &e.to_string())
             );
-            return Ok(Vec::new());
+            return Ok(findings);
         }
     };
 
@@ -438,7 +496,6 @@ pub fn lint_files(
         }
     }
 
-    let mut findings = Vec::new();
     for (word, (file, line)) in unknowns {
         findings.push(LintFinding {
             file,
@@ -648,21 +705,51 @@ Hello world. This is some text. \label{sec:intro} More text.
     fn resolve_language_infers_spanish_from_babel_preamble() {
         let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
         let files = vec![("main.tex".to_string(), src.to_string())];
-        assert_eq!(resolve_language(&files, None), "spanish");
+        assert_eq!(resolve_language(&files, None).language, "spanish");
     }
 
     #[test]
     fn resolve_language_defaults_to_english_without_babel() {
         let src = "\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}";
         let files = vec![("main.tex".to_string(), src.to_string())];
-        assert_eq!(resolve_language(&files, None), "english");
+        assert_eq!(resolve_language(&files, None).language, "english");
+    }
+
+    /// TE10 regression: the document's own declaration must win over a
+    /// configured default that names a different language.
+    #[test]
+    fn resolve_language_prefers_document_declaration_over_configured_default() {
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(
+            resolve_language(&files, Some("english")).language,
+            "spanish"
+        );
+    }
+
+    /// The precedence rule is not spanish-specific: any declared language
+    /// overrides the configured default.
+    #[test]
+    fn resolve_language_prefers_document_declaration_for_other_languages_too() {
+        let src = "\\usepackage[french]{babel}\n\\begin{document}\nSalut\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(resolve_language(&files, Some("english")).language, "french");
     }
 
     #[test]
-    fn resolve_language_prefers_configured_default_over_babel() {
-        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+    fn resolve_language_uses_configured_default_without_babel() {
+        let src = "\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}";
         let files = vec![("main.tex".to_string(), src.to_string())];
-        assert_eq!(resolve_language(&files, Some("french")), "french");
+        assert_eq!(
+            resolve_language(&files, Some("english")).language,
+            "english"
+        );
+    }
+
+    #[test]
+    fn remote_for_language_has_no_spanish_source() {
+        assert_eq!(remote_for_language("spanish"), None);
+        assert_eq!(remote_for_language("es"), None);
     }
 
     #[test]
@@ -776,6 +863,169 @@ Hello world. This is some text. \label{sec:intro} More text.
             findings.iter().any(|f| f.message.contains("hello")),
             "'hello' is English-only and must be flagged when checking against spanish, \
              proving no fallback to the english dictionary occurred: {:?}",
+            findings
+        );
+    }
+
+    // --- TE10: a global default must not silently override the document's
+    // own language declaration ---
+
+    /// The disagreement warning must be a `Warning`, name both languages, and
+    /// point at the line of the `\usepackage` that declared the language
+    /// which won. Also proves the skip path still runs (zero `Unknown word`
+    /// findings) so the disagreement warning is the only finding produced.
+    #[test]
+    fn disagreement_warning_names_both_languages_and_points_at_declaration() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("NEXTEST_RUN_ID", "te10-disagreement-warning");
+
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        std::env::remove_var("NEXTEST_RUN_ID");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert_eq!(
+            findings.len(),
+            1,
+            "expected exactly one finding (the disagreement warning; spell-check itself is \
+             skipped since no spanish dictionary is obtainable): {:?}",
+            findings
+        );
+        let warning = &findings[0];
+        assert!(matches!(warning.severity, Severity::Warning));
+        assert!(
+            warning.message.contains("spanish") && warning.message.contains("english"),
+            "message must name both languages: {}",
+            warning.message
+        );
+        assert_eq!(warning.file, "main.tex");
+        assert_eq!(warning.line, 1, "must point at the \\usepackage line");
+    }
+
+    #[test]
+    fn no_disagreement_warning_when_declared_matches_configured_default() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("NEXTEST_RUN_ID", "te10-no-disagreement-same-lang");
+
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("spanish"));
+
+        std::env::remove_var("NEXTEST_RUN_ID");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "declared and configured language agree; expected no findings: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn no_disagreement_warning_without_babel_declaration() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\documentclass{article}\n\\begin{document}\nhello world\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "no babel declaration means no disagreement is possible: {:?}",
+            findings
+        );
+    }
+
+    /// A multi-file project where two files declare the same language must
+    /// produce exactly one warning, not one per file.
+    #[test]
+    fn multi_file_project_with_matching_declarations_produces_one_warning() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("NEXTEST_RUN_ID", "te10-multi-file-one-warning");
+
+        let src_a = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let src_b = "\\usepackage[spanish]{babel}\n\\begin{document}\nAdios\n\\end{document}";
+        let files = vec![
+            ("a.tex".to_string(), src_a.to_string()),
+            ("b.tex".to_string(), src_b.to_string()),
+        ];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english"));
+
+        std::env::remove_var("NEXTEST_RUN_ID");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        let warnings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.message.contains("Configured default language"))
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "two files declaring the same language must produce one warning, not two: {:?}",
             findings
         );
     }
