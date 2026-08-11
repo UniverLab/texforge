@@ -670,24 +670,45 @@ fn resolve_dict<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<&'a Di
 /// Report which section opens each page.
 ///
 /// `sections` is `(number, title)` in document order (e.g. from the outline).
-/// A page is attributed to the latest section whose title appears in that
-/// page's text (or an earlier page), so page breaks stay stable under diff.
+/// A page is attributed to the *last section heading that begins on or
+/// before that page*: for each section, in order, we search forward from
+/// the page where the previous *matched* section was found for the first
+/// page whose text contains this section's title.
+///
+/// Matching keys on page position, not on a strict in-order text-equality
+/// chain: a title that fails to match anywhere (for example a heading whose
+/// rendered PDF form diverges from its resolved source text — dot-leader
+/// alignment, a substituted dash, ...) is skipped rather than permanently
+/// blocking every section that follows it. Skipping a title does not move
+/// the search position, so later sections still search from the last page
+/// that *did* match.
 pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<PdfPageBreak> {
-    let mut current: Option<(String, String)> = None;
-    let mut next_idx = 0usize;
-    let mut out = Vec::with_capacity(page_texts.len());
+    let normalized_pages: Vec<String> = page_texts.iter().map(|p| normalize_pdf_text(p)).collect();
 
-    for (i, raw) in page_texts.iter().enumerate() {
-        let normalized = normalize_pdf_text(raw);
-        // Advance through every section title that appears on this page, in order.
-        while next_idx < sections.len() {
-            let (num, title) = &sections[next_idx];
-            if section_title_in_page(&normalized, title) {
-                current = Some((num.clone(), title.clone()));
-                next_idx += 1;
-            } else {
-                break;
-            }
+    // (page index, number, title) for each section that could be located.
+    let mut matches: Vec<(usize, String, String)> = Vec::new();
+    let mut search_from = 0usize;
+    for (num, title) in sections {
+        let found = normalized_pages
+            .iter()
+            .enumerate()
+            .skip(search_from)
+            .find(|(_, text)| section_title_in_page(text, title))
+            .map(|(idx, _)| idx);
+        if let Some(page_idx) = found {
+            matches.push((page_idx, num.clone(), title.clone()));
+            search_from = page_idx;
+        }
+    }
+
+    let mut out = Vec::with_capacity(page_texts.len());
+    let mut current: Option<(String, String)> = None;
+    let mut match_idx = 0usize;
+    for i in 0..page_texts.len() {
+        while match_idx < matches.len() && matches[match_idx].0 <= i {
+            let (_, num, title) = &matches[match_idx];
+            current = Some((num.clone(), title.clone()));
+            match_idx += 1;
         }
         out.push(PdfPageBreak {
             page: i + 1,
@@ -807,6 +828,30 @@ mod tests {
         let pages = extract_text_by_pages_from_bytes(PAGES_PDF).unwrap();
         let sections = vec![
             ("1".into(), "Introduction".into()),
+            ("2".into(), "Methods".into()),
+        ];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section=1 title=Introduction\npage=2 section=2 title=Methods"
+        );
+    }
+
+    #[test]
+    fn page_breaks_skip_a_permanently_unmatched_section_between_matches() {
+        // TE5: a heading between two matchable sections whose resolved title
+        // never appears verbatim in any page's extracted text (e.g. a résumé
+        // job-date line built with a dot leader, which renders as a row of
+        // dots in the PDF but collapses to plain text once resolved) must
+        // not permanently block later sections from being found.
+        let pages = extract_text_by_pages_from_bytes(PAGES_PDF).unwrap();
+        let sections = vec![
+            ("1".into(), "Introduction".into()),
+            (
+                "1.1".into(),
+                "AI Engineer en Accenture Julio 2026 -- Actual".into(),
+            ),
             ("2".into(), "Methods".into()),
         ];
         let breaks = page_breaks(&pages, &sections);

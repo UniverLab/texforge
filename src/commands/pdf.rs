@@ -283,6 +283,55 @@ More Artificial Intelligence content on page two about workflows.
     }
 
     #[test]
+    fn pages_does_not_let_an_unmatchable_heading_hide_a_later_section() {
+        // TE5: page 2 opens with a macro-wrapped `\section` (an `\href`),
+        // exactly the shape that survived the 2c16831 title-resolution fix
+        // because that fix targeted `outline`, not this mapper. A
+        // dot-leader subsection sits between "Introduction" and the `\href`
+        // section — its resolved title never appears verbatim in the PDF
+        // text (the PDF renders a literal row of dots; the resolved title
+        // strips it to a space) — and previously that unmatched title
+        // permanently blocked every section after it, including the one
+        // that truly opens page 2.
+        let tex = r#"\documentclass{article}
+\begin{document}
+\section{Introduction}
+Artificial Intelligence and MLflow workflows for local-first systems.
+Deep Learning appears here with enough filler text to eventually force a page break if we add more.
+\subsection{AI Engineer en Accenture
+\textcolor{lightgray}{\leaders\hbox{.}\hfill}
+\textit{Julio 2026 -- Actual}}
+\newpage
+\section{\href{https://example.com}{Methods}}
+More Artificial Intelligence content on page two about workflows.
+\end{document}
+"#;
+        let (_dir, project) = project_with_pdf(PAGES, "Pages Doc Href", tex);
+        let pdf_path = compiled_pdf_path(&project);
+        let page_texts = pdftext::extract_text_by_pages(&pdf_path).unwrap();
+        let outline = outline::build_outline(
+            &project.config.document.title,
+            &project.root,
+            &project.config.build.entry,
+        );
+        let sections: Vec<(String, String)> = outline
+            .sections
+            .iter()
+            .map(|s| (s.number.clone(), s.title.clone()))
+            .collect();
+        assert_eq!(
+            sections[2].1, "Methods",
+            "title should be resolved, not raw markup"
+        );
+
+        let breaks = pdftext::page_breaks(&page_texts, &sections);
+        assert_eq!(
+            pdftext::format_page_breaks(&breaks),
+            "page=1 section=1 title=Introduction\npage=2 section=2 title=Methods"
+        );
+    }
+
+    #[test]
     fn missing_pdf_is_helpful() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
