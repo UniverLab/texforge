@@ -327,6 +327,20 @@ mod tests {
     }
 
     #[test]
+    fn evidence_escaped_ampersand_survives_in_outline() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\section{Team}\n\\subsection*{\\textit{Fundador \\& Lead Engineer}}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(titles(&outline), vec!["Team", "Fundador & Lead Engineer"]);
+
+        let value = serde_json::to_value(&outline).unwrap();
+        let json_title = value["sections"][1]["title"].as_str().unwrap();
+        assert_eq!(json_title, "Fundador & Lead Engineer");
+    }
+
+    #[test]
     fn json_contract_keys_are_stable() {
         let dir = write(&[(
             "main.tex",

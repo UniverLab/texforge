@@ -240,6 +240,11 @@ const TITLE_VISUAL_MACROS: &[&str] = &["leaders", "hfill", "hbox"];
 /// is resolved recursively so nesting works.
 const TITLE_TEXT_MACROS: &[&str] = &["textit", "textbf", "emph"];
 
+/// The standard LaTeX escaped specials: `\&`, `\%`, `\$`, `\#`, `\_`, `\{`,
+/// `\}` each resolve to their literal character in a title. A backslash
+/// followed by anything else still introduces a command.
+const ESCAPED_SPECIALS: &[char] = &['&', '%', '$', '#', '_', '{', '}'];
+
 /// Resolves a raw section title — the literal source text of a `\section`-like
 /// command's braced argument — into human-readable prose.
 ///
@@ -350,6 +355,13 @@ impl<'a> TitleResolver<'a> {
             match c {
                 '\\' => {
                     self.bump();
+                    if let Some(special) = self.peek().filter(|c| ESCAPED_SPECIALS.contains(c)) {
+                        // Escaped special: the backslash just protects the
+                        // character, it does not introduce a command.
+                        self.bump();
+                        out.push(special);
+                        continue;
+                    }
                     let name = self.read_command_name();
                     if TITLE_VISUAL_MACROS.contains(&name.as_str()) {
                         // Purely visual: drop the macro and, if present, the
@@ -1727,6 +1739,61 @@ mod tests {
             vec![Token::Section {
                 level: 2,
                 title: "UniverLab.org".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn escaped_ampersand_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\&"), "&");
+    }
+
+    #[test]
+    fn escaped_percent_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\%"), "%");
+    }
+
+    #[test]
+    fn escaped_dollar_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\$"), "$");
+    }
+
+    #[test]
+    fn escaped_hash_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\#"), "#");
+    }
+
+    #[test]
+    fn escaped_underscore_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\_"), "_");
+    }
+
+    #[test]
+    fn escaped_open_brace_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\{"), "{");
+    }
+
+    #[test]
+    fn escaped_close_brace_resolves_to_literal_character() {
+        assert_eq!(resolve_section_title(r"\}"), "}");
+    }
+
+    #[test]
+    fn escaped_specials_survive_inside_wrapping_macros() {
+        assert_eq!(
+            resolve_section_title(r"\textit{Fundador \& Lead Engineer}"),
+            "Fundador & Lead Engineer"
+        );
+    }
+
+    #[test]
+    fn evidence_escaped_ampersand_resolves_via_tokenize() {
+        let tokens = tokenize(r"\subsection*{\textit{Fundador \& Lead Engineer}}");
+        assert_eq!(
+            tokens,
+            vec![Token::Section {
+                level: 3,
+                title: "Fundador & Lead Engineer".to_string(),
             }]
         );
     }
