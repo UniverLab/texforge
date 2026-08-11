@@ -51,7 +51,10 @@ fn ensure_dictionary(lang: &str) -> Result<PathBuf> {
     }
 
     let Some(url) = remote_for_language(lang) else {
-        anyhow::bail!("No remote dictionary configured for language: {}", lang)
+        anyhow::bail!(
+            "no {} dictionary is available from the configured source",
+            lang
+        )
     };
 
     // During tests (and when running under a test harness such as nextest)
@@ -214,6 +217,89 @@ fn download_with_tools(
     }
 }
 
+/// Map a babel/polyglossia language option (e.g. `spanish`, `es`, `main=spanish`)
+/// to the canonical language name used for dictionary filenames.
+fn normalize_babel_option(opt: &str) -> Option<&'static str> {
+    // `main=spanish` / `variant=es-MX` style keyed options: use the value.
+    let value = opt.rsplit('=').next().unwrap_or(opt).trim();
+    match value {
+        "spanish" | "es" | "spanish-mexico" | "es-MX" => Some("spanish"),
+        "english" | "en" | "USenglish" | "UKenglish" => Some("english"),
+        _ => None,
+    }
+}
+
+/// If `args` is a `\usepackage` invocation loading `babel` or `polyglossia`,
+/// return the language it declares (e.g. `\usepackage[spanish]{babel}` -> `Some("spanish")`).
+///
+/// The tokenizer appends bracket and brace groups to `args` in the order they
+/// appear, so for `[spanish]{babel}` the package name (`babel`) is `args.last()`
+/// and the language option (`spanish`) is an *earlier* element — not the last one.
+fn babel_language_from_usepackage(args: &[String]) -> Option<&'static str> {
+    let package = args.last()?;
+    if package != "babel" && package != "polyglossia" {
+        return None;
+    }
+    for opt_group in &args[..args.len() - 1] {
+        for opt in opt_group.split(',') {
+            if let Some(lang) = normalize_babel_option(opt.trim()) {
+                return Some(lang);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the language to spell-check against: the configured default takes
+/// priority; otherwise infer from a `\usepackage[...]{babel}` (or
+/// `polyglossia`) declaration in the preamble, falling back to English.
+fn resolve_language(files: &[(String, String)], default_lang: Option<&str>) -> String {
+    if let Some(lang) = default_lang {
+        return lang.to_string();
+    }
+
+    for (_rel, source) in files {
+        let tokenized = tokenize_with_spans(source);
+        for sp in &tokenized.tokens {
+            match &sp.token {
+                Token::Command { name, args } if name == "usepackage" => {
+                    if let Some(lang) = babel_language_from_usepackage(args) {
+                        return lang.to_string();
+                    }
+                }
+                Token::BeginDocument => break,
+                _ => {}
+            }
+        }
+    }
+
+    "english".to_string()
+}
+
+/// Single-line message printed when spell-check must be skipped because the
+/// dictionary for the resolved language is unavailable. Names the language,
+/// the dictionary path that was expected, and why it could not be obtained —
+/// so a wrong-language (or no-language) run is never silent.
+fn skip_message(lang: &str, expected_path: Option<&Path>, reason: &str) -> String {
+    let expected = expected_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unknown: could not determine home directory>".to_string());
+    format!(
+        "Spell-check skipped: resolved language '{}', but its dictionary ({}) is unavailable: {}",
+        lang, expected, reason
+    )
+}
+
+/// Single-line message printed when spell-check runs, naming the language
+/// and dictionary file actually used.
+fn using_message(lang: &str, dict_path: &Path) -> String {
+    format!(
+        "Spell-check: checking '{}' prose against {}",
+        lang,
+        dict_path.display()
+    )
+}
+
 fn load_dictionary(path: &Path) -> Result<HashSet<String>> {
     let content = fs::read_to_string(path).context("Failed to read dictionary file")?;
     let mut set = HashSet::new();
@@ -287,37 +373,17 @@ pub fn lint_files(
 ) -> Result<Vec<LintFinding>> {
     // Determine language: prefer configured default; otherwise try to infer
     // from a `\usepackage[spanish]{babel}` occurrence in the preamble.
-    let mut lang = default_lang
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "english".to_string());
+    let lang = resolve_language(files, default_lang);
 
-    if default_lang.is_none() {
-        'outer: for (_rel, source) in files.iter() {
-            let tokenized = tokenize_with_spans(source);
-            for sp in &tokenized.tokens {
-                if let Token::Command { name, args } = &sp.token {
-                    if name == "usepackage" && args.last().is_some() {
-                        let arg = args.last().unwrap().as_str();
-                        if arg == "spanish" {
-                            lang = "spanish".to_string();
-                            break 'outer;
-                        }
-                    }
-                }
-                if let Token::BeginDocument = &sp.token {
-                    break;
-                }
-            }
-        }
-    }
-
-    // Ensure dictionary exists and load it.
+    // Ensure dictionary exists and load it. Never fall back to a dictionary
+    // for a different language: a missing dictionary means spell-check is
+    // skipped for this run, not silently degraded.
     let dict_path = match ensure_dictionary(&lang) {
         Ok(p) => p,
         Err(e) => {
             eprintln!(
-                "Spell-check disabled: could not obtain dictionary for '{}': {}",
-                lang, e
+                "{}",
+                skip_message(&lang, dictionary_path_for(&lang).as_deref(), &e.to_string())
             );
             return Ok(Vec::new());
         }
@@ -327,13 +393,14 @@ pub fn lint_files(
         Ok(d) => d,
         Err(e) => {
             eprintln!(
-                "Spell-check disabled: failed to read dictionary '{}': {}",
-                dict_path.display(),
-                e
+                "{}",
+                skip_message(&lang, Some(dict_path.as_path()), &e.to_string())
             );
             return Ok(Vec::new());
         }
     };
+
+    eprintln!("{}", using_message(&lang, &dict_path));
 
     let mut allowed = dict;
     // Add project whitelist
@@ -541,6 +608,175 @@ Hello world. This is some text. \label{sec:intro} More text.
             msg.to_lowercase().contains("source") || msg.to_lowercase().contains("exist"),
             "message should call out that the dictionary may not exist at the source: {}",
             msg
+        );
+    }
+
+    // --- TE6: language resolution must not silently default to English ---
+
+    /// `\usepackage[spanish]{babel}` tokenizes with the package name
+    /// (`babel`) last and the language option (`spanish`) *before* it — the
+    /// bug was checking `args.last()` for the language, which is always the
+    /// package name, so this never matched.
+    #[test]
+    fn babel_language_reads_the_option_not_the_package_name() {
+        let args = vec!["spanish".to_string(), "babel".to_string()];
+        assert_eq!(babel_language_from_usepackage(&args), Some("spanish"));
+    }
+
+    #[test]
+    fn babel_language_ignores_unrelated_packages() {
+        let args = vec!["amsmath".to_string()];
+        assert_eq!(babel_language_from_usepackage(&args), None);
+
+        let args = vec!["utf8".to_string(), "inputenc".to_string()];
+        assert_eq!(babel_language_from_usepackage(&args), None);
+    }
+
+    #[test]
+    fn babel_language_handles_babel_with_no_option() {
+        let args = vec!["babel".to_string()];
+        assert_eq!(babel_language_from_usepackage(&args), None);
+    }
+
+    #[test]
+    fn babel_language_handles_keyed_options_and_polyglossia() {
+        let args = vec!["main=spanish".to_string(), "polyglossia".to_string()];
+        assert_eq!(babel_language_from_usepackage(&args), Some("spanish"));
+    }
+
+    #[test]
+    fn resolve_language_infers_spanish_from_babel_preamble() {
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(resolve_language(&files, None), "spanish");
+    }
+
+    #[test]
+    fn resolve_language_defaults_to_english_without_babel() {
+        let src = "\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(resolve_language(&files, None), "english");
+    }
+
+    #[test]
+    fn resolve_language_prefers_configured_default_over_babel() {
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(resolve_language(&files, Some("french")), "french");
+    }
+
+    #[test]
+    fn skip_message_is_one_line_and_names_language_path_and_reason() {
+        let msg = skip_message(
+            "spanish",
+            Some(Path::new("/home/user/.texforge/dicts/spanish.txt")),
+            "network disabled during tests",
+        );
+        assert_eq!(msg.lines().count(), 1, "must be exactly one line: {}", msg);
+        assert!(msg.contains("spanish"), "must name the language: {}", msg);
+        assert!(
+            msg.contains("/home/user/.texforge/dicts/spanish.txt"),
+            "must name the expected dictionary path: {}",
+            msg
+        );
+        assert!(
+            msg.contains("network disabled during tests"),
+            "must carry the reason: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn using_message_is_one_line_and_names_language_and_path() {
+        let msg = using_message(
+            "spanish",
+            Path::new("/home/user/.texforge/dicts/spanish.txt"),
+        );
+        assert_eq!(msg.lines().count(), 1, "must be exactly one line: {}", msg);
+        assert!(msg.contains("spanish"));
+        assert!(msg.contains("/home/user/.texforge/dicts/spanish.txt"));
+    }
+
+    /// Reproduces the reported defect end-to-end: a Spanish document, no
+    /// configured default language, and only an English dictionary present.
+    /// Must emit ZERO `Unknown word` findings — not 214 false positives from
+    /// checking Spanish prose against English words.
+    #[test]
+    fn spanish_document_with_only_english_dictionary_emits_no_unknown_word_warnings() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
+        fs::write(
+            home.path()
+                .join(".texforge")
+                .join("dicts")
+                .join("english.txt"),
+            "hello\nworld\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        // Force the offline bail deterministically (see
+        // ensure_dictionary_bails_in_test_harness_environment) instead of
+        // depending on real network access being unavailable.
+        std::env::set_var("NEXTEST_RUN_ID", "te6-spanish-only-english-dict");
+
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                   mentoría ahí universidad liderazgo soluciones\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), None);
+
+        std::env::remove_var("NEXTEST_RUN_ID");
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            findings.is_empty(),
+            "expected zero findings when the resolved language's dictionary is missing, got: {:?}",
+            findings
+        );
+    }
+
+    /// When a dictionary for the resolved language IS present, spell-check
+    /// must run against THAT dictionary, never a different language's —
+    /// proven by a Spanish word passing and an English-only word failing.
+    #[test]
+    fn spanish_document_checks_against_spanish_dictionary_not_english() {
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(dicts_dir.join("spanish.txt"), "mentoría\nahí\n").unwrap();
+        fs::write(dicts_dir.join("english.txt"), "hello\nworld\n").unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                   mentoría hello\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), None);
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let findings = findings.unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.contains("mentoría")),
+            "'mentoría' is in the spanish dictionary and must not be flagged: {:?}",
+            findings
+        );
+        assert!(
+            findings.iter().any(|f| f.message.contains("hello")),
+            "'hello' is English-only and must be flagged when checking against spanish, \
+             proving no fallback to the english dictionary occurred: {:?}",
+            findings
         );
     }
 }
