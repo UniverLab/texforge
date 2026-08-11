@@ -80,42 +80,9 @@ fn ensure_dictionary(lang: &str) -> Result<PathBuf> {
     // rustls at runtime (which has previously caused panics in some test
     // environments). If neither tool is available, degrade to a clear message
     // and do not attempt network activity.
-
-    let download_result: Result<Vec<u8>> = (|| {
-        // Try curl first
-        if let Ok(output) = std::process::Command::new("curl")
-            .args(["-fsSL", url])
-            .output()
-        {
-            if output.status.success() {
-                return Ok(output.stdout);
-            }
-            // fall through to wget
-        }
-
-        // Try wget next
-        if let Ok(output) = std::process::Command::new("wget")
-            .args(["-qO-", url])
-            .output()
-        {
-            if output.status.success() {
-                return Ok(output.stdout);
-            }
-        }
-
-        // No download tool available or both failed: do not attempt reqwest here
-        anyhow::bail!("No download tool (curl or wget) available to fetch dictionary")
-    })();
-
-    let bytes = match download_result {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!(
-                "Spell-check disabled: could not obtain dictionary for '{}': {}",
-                lang, e
-            );
-            return Ok(path);
-        }
+    let bytes = match download_with_tools(url, "curl", "wget") {
+        Ok(bytes) => bytes,
+        Err(failure) => anyhow::bail!(failure.describe(lang, url)),
     };
 
     if let Some(dir) = path.parent() {
@@ -128,6 +95,123 @@ fn ensure_dictionary(lang: &str) -> Result<PathBuf> {
     eprintln!("  ◇ Dictionary cached to {}", path.display());
 
     Ok(path)
+}
+
+/// Outcome of running a single download tool (curl or wget).
+enum ToolOutcome {
+    Success(Vec<u8>),
+    /// The binary does not exist in PATH (spawn failed with `NotFound`).
+    NotFound,
+    /// The binary exists and ran, but did not produce the dictionary.
+    Failed(ToolFailure),
+}
+
+/// Detail of a download tool that ran but failed, kept separate from "tool
+/// not installed" so the two situations never collapse into one message.
+struct ToolFailure {
+    tool: &'static str,
+    detail: String,
+}
+
+/// Reason a download could not be completed by any available tool.
+enum DownloadFailure {
+    /// Neither tool exists in PATH.
+    NoToolFound,
+    /// A tool ran but the transfer itself failed (bad exit status, HTTP
+    /// error, network error, ...). Carries that tool's own error output so
+    /// it can be reported verbatim instead of behind a generic message.
+    ToolError(ToolFailure),
+}
+
+impl DownloadFailure {
+    /// `lang` and `url` are folded in here (rather than left to the caller)
+    /// so every branch names the specific language and source attempted,
+    /// even though the caller also wraps this in its own "could not obtain
+    /// dictionary for '{lang}'" context.
+    fn describe(&self, lang: &str, url: &str) -> String {
+        match self {
+            DownloadFailure::NoToolFound => {
+                "neither 'curl' nor 'wget' was found in PATH".to_string()
+            }
+            DownloadFailure::ToolError(f) => {
+                let mut msg = format!("{} exited fetching {}: {}", f.tool, url, f.detail);
+                if f.detail.contains("404") {
+                    msg.push_str(&format!(
+                        "; this looks like a missing resource (HTTP 404) — the source configured \
+                         for '{}' may not have this dictionary, see remote_for_language()",
+                        lang
+                    ));
+                }
+                msg
+            }
+        }
+    }
+}
+
+/// Last non-empty lines of tool output, trimmed, for embedding in an error
+/// message without dumping an entire progress bar or stack trace.
+fn tail_lines(text: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join(" | ")
+}
+
+/// Run one download tool binary and classify what happened. Kept separate
+/// from `download_with_tools` so both curl and wget go through identical
+/// classification logic.
+fn run_tool(bin: &str, args: &[&str], tool_label: &'static str) -> ToolOutcome {
+    match std::process::Command::new(bin).args(args).output() {
+        Ok(output) if output.status.success() => ToolOutcome::Success(output.stdout),
+        Ok(output) => {
+            let tail = tail_lines(&String::from_utf8_lossy(&output.stderr), 5);
+            let detail = if tail.is_empty() {
+                format!("exited with {}", output.status)
+            } else {
+                format!("exited with {}: {}", output.status, tail)
+            };
+            ToolOutcome::Failed(ToolFailure {
+                tool: tool_label,
+                detail,
+            })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ToolOutcome::NotFound,
+        Err(e) => ToolOutcome::Failed(ToolFailure {
+            tool: tool_label,
+            detail: format!("could not be run: {}", e),
+        }),
+    }
+}
+
+/// Try `curl_bin` then `wget_bin` to fetch `url`. Binary names are
+/// parameterized (rather than hardcoded to "curl"/"wget") so tests can
+/// exercise the "no download tool" and "tool ran but failed" branches
+/// deterministically — e.g. a nonexistent binary name for "not found", or
+/// `false`, which always exits 1, for "ran but failed" — without depending
+/// on what happens to be installed on the machine running the tests.
+fn download_with_tools(
+    url: &str,
+    curl_bin: &str,
+    wget_bin: &str,
+) -> std::result::Result<Vec<u8>, DownloadFailure> {
+    let curl = match run_tool(curl_bin, &["-fsSL", url], "curl") {
+        ToolOutcome::Success(bytes) => return Ok(bytes),
+        other => other,
+    };
+    let wget = match run_tool(wget_bin, &["--no-verbose", "-O", "-", url], "wget") {
+        ToolOutcome::Success(bytes) => return Ok(bytes),
+        other => other,
+    };
+
+    match (curl, wget) {
+        (ToolOutcome::Failed(f), _) => Err(DownloadFailure::ToolError(f)),
+        (ToolOutcome::NotFound, ToolOutcome::Failed(f)) => Err(DownloadFailure::ToolError(f)),
+        (ToolOutcome::NotFound, ToolOutcome::NotFound) => Err(DownloadFailure::NoToolFound),
+        _ => unreachable!("success cases already returned above"),
+    }
 }
 
 fn load_dictionary(path: &Path) -> Result<HashSet<String>> {
@@ -374,5 +458,89 @@ Hello world. This is some text. \label{sec:intro} More text.
             "Expected ensure_dictionary to error when under test harness"
         );
         std::env::remove_var("NEXTEST_RUN_ID");
+    }
+
+    /// Neither binary exists in PATH: must report that plainly, naming both
+    /// tools, and must NOT claim a transfer failure that never happened.
+    #[test]
+    fn download_with_tools_reports_missing_tools_by_name() {
+        let bogus_a = "definitely-not-a-real-binary-abc123";
+        let bogus_b = "definitely-not-a-real-binary-xyz789";
+        let err = download_with_tools("https://example.invalid/dict.txt", bogus_a, bogus_b)
+            .expect_err("expected failure when neither tool exists");
+        assert!(matches!(err, DownloadFailure::NoToolFound));
+        let msg = err.describe("spanish", "https://example.invalid/dict.txt");
+        assert!(msg.contains("curl"), "message should name curl: {}", msg);
+        assert!(msg.contains("wget"), "message should name wget: {}", msg);
+    }
+
+    /// A tool that exists and runs but fails must have ITS failure reported
+    /// (exit status), not the generic "no download tool" message — that
+    /// message is reserved for the tool genuinely being absent.
+    #[cfg(unix)]
+    #[test]
+    fn download_with_tools_reports_real_exit_status_when_tool_runs_but_fails() {
+        // `false` always exists on Unix and always exits 1 without touching
+        // the network, so this is deterministic and offline.
+        let bogus_wget = "definitely-not-a-real-binary-xyz789";
+        let err = download_with_tools("https://example.invalid/dict.txt", "false", bogus_wget)
+            .expect_err("expected failure when curl exits non-zero");
+        match &err {
+            DownloadFailure::ToolError(f) => assert_eq!(f.tool, "curl"),
+            DownloadFailure::NoToolFound => {
+                panic!("curl exists and ran; must not report NoToolFound")
+            }
+        }
+        let msg = err.describe("spanish", "https://example.invalid/dict.txt");
+        assert!(msg.contains("curl"), "message should name curl: {}", msg);
+        assert!(
+            msg.contains("exit"),
+            "message should carry the tool's exit status: {}",
+            msg
+        );
+    }
+
+    /// A 404 from a tool that ran must be called out explicitly as a
+    /// missing-resource problem, not folded into a generic error.
+    #[cfg(unix)]
+    #[test]
+    fn download_with_tools_flags_http_404_as_missing_source() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let fake_curl = tmp.path().join("curl");
+        {
+            let mut f = fs::File::create(&fake_curl).unwrap();
+            writeln!(f, "#!/bin/sh").unwrap();
+            writeln!(
+                f,
+                "echo 'curl: (22) The requested URL returned error: 404' 1>&2"
+            )
+            .unwrap();
+            writeln!(f, "exit 22").unwrap();
+        }
+        let mut perms = fs::metadata(&fake_curl).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_curl, perms).unwrap();
+
+        let bogus_wget = "definitely-not-a-real-binary-xyz789";
+        let err = download_with_tools(
+            "https://example.invalid/spanish.txt",
+            fake_curl.to_str().unwrap(),
+            bogus_wget,
+        )
+        .expect_err("expected failure on HTTP 404");
+        let msg = err.describe("spanish", "https://example.invalid/spanish.txt");
+        assert!(
+            msg.contains("404"),
+            "message should surface the 404 the tool reported: {}",
+            msg
+        );
+        assert!(
+            msg.to_lowercase().contains("source") || msg.to_lowercase().contains("exist"),
+            "message should call out that the dictionary may not exist at the source: {}",
+            msg
+        );
     }
 }
