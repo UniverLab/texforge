@@ -748,7 +748,7 @@ pub fn lint_files(
             message: format!("Unknown word: '{}'", word),
             suggestion: Some(
                 "Add to your personal dictionary with `texforge spell add <word>` \
-                 (add --global to accept it in every project) to accept this word"
+                 (add --local instead to accept it only in this project) to accept this word"
                     .into(),
             ),
         });
@@ -1798,9 +1798,10 @@ Hello world. This is some text. \label{sec:intro} More text.
     }
 
     /// The `Unknown word` finding's suggestion must point at the new command,
-    /// not at hand-editing files (requirement 9).
+    /// not at hand-editing files, and must now name `--local` rather than
+    /// `--global` since global became the default (requirement 9).
     #[test]
-    fn unknown_word_suggestion_names_spell_add_and_global_flag() {
+    fn unknown_word_suggestion_names_spell_add_and_local_flag() {
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1834,8 +1835,13 @@ Hello world. This is some text. \label{sec:intro} More text.
             suggestion
         );
         assert!(
-            suggestion.contains("--global"),
-            "suggestion must mention --global: {}",
+            suggestion.contains("--local"),
+            "suggestion must mention --local, since global is now the default: {}",
+            suggestion
+        );
+        assert!(
+            !suggestion.contains("--global"),
+            "suggestion should not point at --global now that it is the default: {}",
             suggestion
         );
     }

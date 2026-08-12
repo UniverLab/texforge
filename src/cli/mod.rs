@@ -140,28 +140,37 @@ enum PdfAction {
 
 #[derive(Subcommand)]
 enum SpellAction {
-    /// Add one or more words to the whitelist (default: project scope)
+    /// Add one or more words to the whitelist (default: global personal dictionary)
     Add {
         /// Word(s) to add
         #[arg(required = true)]
         words: Vec<String>,
-        /// Target the global personal dictionary (~/.texforge/spell-words) instead of the project's
-        #[arg(long)]
+        /// Target the project's whitelist instead of the global personal dictionary
+        #[arg(long, conflicts_with = "global")]
+        local: bool,
+        /// Target the global personal dictionary (~/.texforge/spell-words); this is the default
+        #[arg(long, conflicts_with = "local")]
         global: bool,
     },
-    /// List the effective whitelist words for the scope
+    /// List the effective whitelist words for the scope (default: global personal dictionary)
     List {
-        /// List the global personal dictionary instead of the project's
-        #[arg(long)]
+        /// List the project's whitelist instead of the global personal dictionary
+        #[arg(long, conflicts_with = "global")]
+        local: bool,
+        /// List the global personal dictionary (~/.texforge/spell-words); this is the default
+        #[arg(long, conflicts_with = "local")]
         global: bool,
     },
-    /// Remove one or more words from the whitelist (default: project scope)
+    /// Remove one or more words from the whitelist (default: global personal dictionary)
     Remove {
         /// Word(s) to remove
         #[arg(required = true)]
         words: Vec<String>,
-        /// Target the global personal dictionary (~/.texforge/spell-words) instead of the project's
-        #[arg(long)]
+        /// Target the project's whitelist instead of the global personal dictionary
+        #[arg(long, conflicts_with = "global")]
+        local: bool,
+        /// Target the global personal dictionary (~/.texforge/spell-words); this is the default
+        #[arg(long, conflicts_with = "local")]
         global: bool,
     },
 }
@@ -229,13 +238,25 @@ impl Cli {
             },
             Commands::Spell { action } => {
                 let action = match action {
-                    SpellAction::Add { words, global } => {
-                        commands::spell::SpellAction::Add { words, global }
-                    }
-                    SpellAction::List { global } => commands::spell::SpellAction::List { global },
-                    SpellAction::Remove { words, global } => {
-                        commands::spell::SpellAction::Remove { words, global }
-                    }
+                    SpellAction::Add {
+                        words,
+                        local,
+                        global,
+                    } => commands::spell::SpellAction::Add {
+                        words,
+                        scope: commands::spell::Scope::from_flags(local, global),
+                    },
+                    SpellAction::List { local, global } => commands::spell::SpellAction::List {
+                        scope: commands::spell::Scope::from_flags(local, global),
+                    },
+                    SpellAction::Remove {
+                        words,
+                        local,
+                        global,
+                    } => commands::spell::SpellAction::Remove {
+                        words,
+                        scope: commands::spell::Scope::from_flags(local, global),
+                    },
                 };
                 commands::spell::execute(action)
             }
@@ -248,5 +269,48 @@ impl Cli {
                 (None, Some(_)) => anyhow::bail!("Cannot set value without a key"),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TE14 requirement 6: `--local --global` together must be rejected by
+    /// clap, not silently resolved to one or the other.
+    #[test]
+    fn spell_add_rejects_local_and_global_together() {
+        let result =
+            Cli::try_parse_from(["texforge", "spell", "add", "docker", "--local", "--global"]);
+        assert!(
+            result.is_err(),
+            "`--local --global` together must be a usage error"
+        );
+    }
+
+    #[test]
+    fn spell_list_rejects_local_and_global_together() {
+        let result = Cli::try_parse_from(["texforge", "spell", "list", "--local", "--global"]);
+        assert!(
+            result.is_err(),
+            "`--local --global` together must be a usage error"
+        );
+    }
+
+    #[test]
+    fn spell_remove_rejects_local_and_global_together() {
+        let result = Cli::try_parse_from([
+            "texforge", "spell", "remove", "docker", "--local", "--global",
+        ]);
+        assert!(
+            result.is_err(),
+            "`--local --global` together must be a usage error"
+        );
+    }
+
+    #[test]
+    fn spell_add_accepts_local_alone() {
+        let result = Cli::try_parse_from(["texforge", "spell", "add", "docker", "--local"]);
+        assert!(result.is_ok());
     }
 }

@@ -1,9 +1,11 @@
 //! `texforge spell` — manage the personal spell-check whitelist (dictionary)
 //! from the CLI, reusing the whitelist mechanism the linter already reads.
 //!
-//! Two scopes: the project (the first of `PROJECT_WHITELIST_FILES` that
-//! already exists, or `.texforge/spell-words` if none do) and the global
-//! personal dictionary (`~/.texforge/spell-words`, shared by every project).
+//! Two scopes: the global personal dictionary (`~/.texforge/spell-words`,
+//! shared by every project and the default, since the words in this list are
+//! overwhelmingly true of the person rather than of one document) and the
+//! project (the first of `PROJECT_WHITELIST_FILES` that already exists, or
+//! `.texforge/spell-words` if none do), selected explicitly with `--local`.
 //! Adding is append-only and never rewrites existing bytes; removing rewrites
 //! the file with only the matching lines dropped.
 
@@ -17,53 +19,83 @@ use anyhow::{Context, Result};
 use crate::domain::project::Project;
 use crate::linter::{global_whitelist_path, parse_whitelist_words, PROJECT_WHITELIST_FILES};
 
+/// Which whitelist a `spell` action targets. Global is the default; `--local`
+/// is the explicit opt-in to the project's whitelist (decisions 1-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Global,
+    Local,
+}
+
+impl Scope {
+    /// `--local` and `--global` are mutually exclusive at the clap level, so
+    /// at most one of these is ever true here; global wins when neither is
+    /// set, since global is the default (decision 1).
+    pub fn from_flags(local: bool, global: bool) -> Self {
+        debug_assert!(!(local && global));
+        if local {
+            Scope::Local
+        } else {
+            let _ = global;
+            Scope::Global
+        }
+    }
+}
+
 /// Subcommands of `texforge spell`.
 #[derive(Debug, Clone)]
 pub enum SpellAction {
     /// Add one or more words to the whitelist.
-    Add { words: Vec<String>, global: bool },
+    Add { words: Vec<String>, scope: Scope },
     /// List the effective whitelist words for the scope.
-    List { global: bool },
+    List { scope: Scope },
     /// Remove one or more words from the whitelist.
-    Remove { words: Vec<String>, global: bool },
+    Remove { words: Vec<String>, scope: Scope },
 }
 
 /// Dispatch a `texforge spell` action.
 pub fn execute(action: SpellAction) -> Result<()> {
     match action {
-        SpellAction::Add { words, global } => add(&words, global),
-        SpellAction::List { global } => list(global),
-        SpellAction::Remove { words, global } => remove(&words, global),
+        SpellAction::Add { words, scope } => add(&words, scope),
+        SpellAction::List { scope } => list(scope),
+        SpellAction::Remove { words, scope } => remove(&words, scope),
     }
 }
 
-/// Resolve the file `add`/`remove` should target for the given scope.
-/// Global always resolves to `global_whitelist_path()`. Project resolves to
+/// Resolve the file `add`/`remove`/`list` should target for the given scope.
+/// Global always resolves to `global_whitelist_path()`. Local resolves to
 /// the first of `PROJECT_WHITELIST_FILES` that already exists, or
 /// `.texforge/spell-words` if none do (decision 4) — this does not require
-/// the file to exist yet, only its parent project.
-fn target_file(global: bool) -> Result<PathBuf> {
-    if global {
-        return global_whitelist_path()
-            .context("Could not determine home directory for the global personal dictionary");
-    }
-
-    let project = Project::load()?;
-    for name in PROJECT_WHITELIST_FILES {
-        let p = project.root.join(name);
-        if p.exists() {
-            return Ok(p);
+/// the file to exist yet, only its parent project. `--local` outside a
+/// texforge project is an error, not a silent fallback to global
+/// (decision 5): `Project::load()` already fails with a message naming what
+/// was expected when no project is found.
+fn target_file(scope: Scope) -> Result<PathBuf> {
+    match scope {
+        Scope::Global => global_whitelist_path()
+            .context("Could not determine home directory for the global personal dictionary"),
+        Scope::Local => {
+            let project = Project::load().context(
+                "`--local` requires a texforge project (project.toml not found in this \
+                 directory or any parent)",
+            )?;
+            for name in PROJECT_WHITELIST_FILES {
+                let p = project.root.join(name);
+                if p.exists() {
+                    return Ok(p);
+                }
+            }
+            Ok(project.root.join(".texforge").join("spell-words"))
         }
     }
-    Ok(project.root.join(".texforge").join("spell-words"))
 }
 
-fn add(words: &[String], global: bool) -> Result<()> {
+fn add(words: &[String], scope: Scope) -> Result<()> {
     if words.is_empty() {
         anyhow::bail!("No words given; usage: texforge spell add <WORD>...");
     }
 
-    let path = target_file(global)?;
+    let path = target_file(scope)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
@@ -113,12 +145,12 @@ fn add(words: &[String], global: bool) -> Result<()> {
     Ok(())
 }
 
-fn remove(words: &[String], global: bool) -> Result<()> {
+fn remove(words: &[String], scope: Scope) -> Result<()> {
     if words.is_empty() {
         anyhow::bail!("No words given; usage: texforge spell remove <WORD>...");
     }
 
-    let path = target_file(global)?;
+    let path = target_file(scope)?;
 
     let Ok(content) = fs::read_to_string(&path) else {
         for w in words {
@@ -169,15 +201,18 @@ fn remove(words: &[String], global: bool) -> Result<()> {
     Ok(())
 }
 
-fn list(global: bool) -> Result<()> {
-    if global {
+fn list(scope: Scope) -> Result<()> {
+    if scope == Scope::Global {
         let path = global_whitelist_path()
             .context("Could not determine home directory for the global personal dictionary")?;
         print_whitelist_file(&path);
         return Ok(());
     }
 
-    let project = Project::load()?;
+    let project = Project::load().context(
+        "`--local` requires a texforge project (project.toml not found in this directory or \
+         any parent)",
+    )?;
     let mut any = false;
     for name in PROJECT_WHITELIST_FILES {
         let p = project.root.join(name);
@@ -260,7 +295,7 @@ entry = "main.tex"
         write_project_toml(project.path());
 
         with_cwd(project.path(), || {
-            add(&["docker".to_string()], false).unwrap();
+            add(&["docker".to_string()], Scope::Local).unwrap();
         });
 
         let target = project.path().join(".texforge").join("spell-words");
@@ -277,7 +312,7 @@ entry = "main.tex"
         fs::write(project.path().join("spell-whitelist.txt"), "acme\n").unwrap();
 
         with_cwd(project.path(), || {
-            add(&["docker".to_string()], false).unwrap();
+            add(&["docker".to_string()], Scope::Local).unwrap();
         });
 
         assert_eq!(
@@ -303,7 +338,7 @@ entry = "main.tex"
         .unwrap();
 
         with_cwd(project.path(), || {
-            add(&["docker".to_string()], false).unwrap();
+            add(&["docker".to_string()], Scope::Local).unwrap();
         });
 
         assert_eq!(
@@ -324,7 +359,7 @@ entry = "main.tex"
         .unwrap();
 
         with_cwd(project.path(), || {
-            add(&["docker".to_string()], false).unwrap();
+            add(&["docker".to_string()], Scope::Local).unwrap();
         });
 
         assert_eq!(
@@ -340,9 +375,9 @@ entry = "main.tex"
         fs::write(project.path().join("spell-whitelist.txt"), "docker\n").unwrap();
 
         with_cwd(project.path(), || {
-            add(&["docker".to_string()], false).unwrap();
-            add(&["Docker".to_string()], false).unwrap();
-            add(&["DOCKER".to_string()], false).unwrap();
+            add(&["docker".to_string()], Scope::Local).unwrap();
+            add(&["Docker".to_string()], Scope::Local).unwrap();
+            add(&["DOCKER".to_string()], Scope::Local).unwrap();
         });
 
         assert_eq!(
@@ -362,7 +397,7 @@ entry = "main.tex"
         .unwrap();
 
         with_cwd(project.path(), || {
-            remove(&["docker".to_string()], false).unwrap();
+            remove(&["docker".to_string()], Scope::Local).unwrap();
         });
 
         assert_eq!(
@@ -379,7 +414,7 @@ entry = "main.tex"
         fs::write(project.path().join("spell-whitelist.txt"), original).unwrap();
 
         with_cwd(project.path(), || {
-            remove(&["nonexistent".to_string()], false).unwrap();
+            remove(&["nonexistent".to_string()], Scope::Local).unwrap();
         });
 
         assert_eq!(
@@ -392,14 +427,14 @@ entry = "main.tex"
     fn add_and_remove_target_global_file_under_home() {
         let home = TempDir::new().unwrap();
         with_home(home.path(), || {
-            add(&["docker".to_string()], true).unwrap();
+            add(&["docker".to_string()], Scope::Global).unwrap();
         });
 
         let global = home.path().join(".texforge").join("spell-words");
         assert_eq!(fs::read_to_string(&global).unwrap(), "docker\n");
 
         with_home(home.path(), || {
-            remove(&["docker".to_string()], true).unwrap();
+            remove(&["docker".to_string()], Scope::Global).unwrap();
         });
         assert_eq!(fs::read_to_string(&global).unwrap(), "");
     }
@@ -413,7 +448,7 @@ entry = "main.tex"
         // `list` only prints; assert indirectly via the underlying data it
         // would report, since stdout isn't captured here.
         with_cwd(project.path(), || {
-            list(false).unwrap();
+            list(Scope::Local).unwrap();
         });
 
         let words = parse_whitelist_words(
@@ -439,7 +474,7 @@ entry = "main.tex"
         .unwrap();
 
         with_home(home.path(), || {
-            add(&["docker".to_string()], true).unwrap();
+            add(&["docker".to_string()], Scope::Global).unwrap();
         });
 
         let src = "\\begin{document}\nHello docker world\n\\end{document}";
@@ -456,5 +491,143 @@ entry = "main.tex"
             "word added via `texforge spell add --global` must be accepted: {:?}",
             findings
         );
+    }
+
+    /// TE14 requirement 1: no scope flag means global, even when a project
+    /// whitelist file already exists in the current directory.
+    #[test]
+    fn add_with_no_flag_writes_global_and_leaves_existing_project_file_untouched() {
+        let project = TempDir::new().unwrap();
+        write_project_toml(project.path());
+        fs::write(project.path().join("spell-whitelist.txt"), "acme\n").unwrap();
+
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            with_cwd(project.path(), || {
+                add(&["docker".to_string()], Scope::Global).unwrap();
+            });
+        });
+
+        let global = home.path().join(".texforge").join("spell-words");
+        assert_eq!(fs::read_to_string(&global).unwrap(), "docker\n");
+        assert_eq!(
+            fs::read_to_string(project.path().join("spell-whitelist.txt")).unwrap(),
+            "acme\n",
+            "project whitelist must be untouched by a default-scope add"
+        );
+    }
+
+    /// TE14 requirement 5: `--global` behaves identically to no flag, since
+    /// global is both the default and the explicit name for it.
+    #[test]
+    fn add_global_flag_behaves_identically_to_no_flag() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            add(&["docker".to_string()], Scope::Global).unwrap();
+        });
+
+        let global = home.path().join(".texforge").join("spell-words");
+        assert_eq!(fs::read_to_string(&global).unwrap(), "docker\n");
+    }
+
+    /// TE14 requirement 4: `list --local` reads the project file rather than
+    /// the global default.
+    #[test]
+    fn list_local_reads_the_project_file_not_global() {
+        let project = TempDir::new().unwrap();
+        write_project_toml(project.path());
+        fs::write(project.path().join("spell-whitelist.txt"), "docker\n").unwrap();
+
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge")).unwrap();
+        fs::write(
+            home.path().join(".texforge").join("spell-words"),
+            "globalword\n",
+        )
+        .unwrap();
+
+        with_home(home.path(), || {
+            with_cwd(project.path(), || {
+                list(Scope::Local).unwrap();
+            });
+        });
+
+        let words = parse_whitelist_words(
+            &fs::read_to_string(project.path().join("spell-whitelist.txt")).unwrap(),
+        );
+        assert!(words.contains("docker"));
+        assert!(!words.contains("globalword"));
+    }
+
+    /// TE14 requirement: `remove` with no flag removes from global only,
+    /// leaving an identically-named word in the project file untouched.
+    #[test]
+    fn remove_with_no_flag_removes_from_global_only() {
+        let project = TempDir::new().unwrap();
+        write_project_toml(project.path());
+        fs::write(project.path().join("spell-whitelist.txt"), "docker\n").unwrap();
+
+        let home = TempDir::new().unwrap();
+        fs::create_dir_all(home.path().join(".texforge")).unwrap();
+        fs::write(
+            home.path().join(".texforge").join("spell-words"),
+            "docker\n",
+        )
+        .unwrap();
+
+        with_home(home.path(), || {
+            with_cwd(project.path(), || {
+                remove(&["docker".to_string()], Scope::Global).unwrap();
+            });
+        });
+
+        assert_eq!(
+            fs::read_to_string(home.path().join(".texforge").join("spell-words")).unwrap(),
+            ""
+        );
+        assert_eq!(
+            fs::read_to_string(project.path().join("spell-whitelist.txt")).unwrap(),
+            "docker\n",
+            "project whitelist must be untouched by a default-scope remove"
+        );
+    }
+
+    /// TE14 decision 5: `--local` outside a texforge project must fail
+    /// loudly rather than silently falling back to the global list.
+    #[test]
+    fn local_outside_a_project_errors_and_writes_nothing() {
+        let outside = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+
+        let result = with_home(home.path(), || {
+            with_cwd(outside.path(), || {
+                add(&["docker".to_string()], Scope::Local)
+            })
+        });
+
+        assert!(result.is_err(), "add --local with no project must fail");
+        assert!(
+            !home.path().join(".texforge").join("spell-words").exists(),
+            "a failed --local add must not fall back to writing the global list"
+        );
+        assert!(
+            !outside
+                .path()
+                .join(".texforge")
+                .join("spell-words")
+                .exists(),
+            "a failed --local add must not create a project file out of nowhere either"
+        );
+    }
+
+    /// TE14 requirement 6: `--local --global` together is a clap usage
+    /// error, checked at the `Scope::from_flags` boundary this command
+    /// module relies on — the CLI layer enforces `conflicts_with` before
+    /// either flag reaches here.
+    #[test]
+    fn from_flags_defaults_to_global_when_neither_flag_is_set() {
+        assert_eq!(Scope::from_flags(false, false), Scope::Global);
+        assert_eq!(Scope::from_flags(true, false), Scope::Local);
+        assert_eq!(Scope::from_flags(false, true), Scope::Global);
     }
 }
