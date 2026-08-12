@@ -64,6 +64,43 @@ last build. Press `Ctrl+C` to stop.
 texforge clean   # remove build artifacts
 ```
 
+## Preview
+
+`texforge preview` rasterizes the compiled PDF to PNG pages for quick visual review or for embedding in documentation:
+
+```bash
+# Rasterize all pages (writes to ./preview/)
+texforge preview
+
+# Single page
+texforge preview --page 1
+
+# Custom output directory
+texforge preview --out ./previews
+
+# Scale up for higher resolution (default: 1.0 pixel per PDF point)
+texforge preview --scale 2.0
+```
+
+## PDF Inspection
+
+Once built, the PDF can be inspected without re-compiling:
+
+```bash
+# Extract text as readers and accessibility tools see it
+texforge pdf text
+
+# Report pages, fonts, whether fonts are embedded, and metadata
+texforge pdf info
+
+# List which section opens each page (for diffing in version control)
+texforge pdf pages
+
+# Verify significant source words survived into the PDF
+# (catches missing fonts, encoding issues, rendering bugs)
+texforge pdf check
+```
+
 ## Runtime directory
 
 Texforge keeps its engine and template cache under `~/.texforge/`:
