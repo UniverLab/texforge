@@ -48,7 +48,9 @@ Available on [crates.io](https://crates.io/crates/texforge).
 
 ## Updating texforge
 
-Texforge updates itself in place, **replacing the binary that is running**. When a newer version becomes available, you will be prompted during normal command execution.
+Texforge updates itself in place, **replacing the binary that is running**.
+
+The check runs when you create or migrate a project with `texforge init` — not on every command, and never during a build. If a newer release exists, you are asked once, there and then. To update outside that flow, reach for the installer or `cargo` as below.
 
 **If you used the quick installer or downloaded a binary directly:**
 
