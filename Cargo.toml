@@ -62,6 +62,12 @@ notify = { version = "7", features = ["macos_fsevent"] }
 mermaid-rs-renderer = { version = "0.2", default-features = false }
 resvg = "0.46"
 
+# SVG -> PDF embedding, so diagrams stay vector in the built document instead
+# of being rasterized. Pulls in its own usvg/resvg (^0.45, incompatible with
+# our 0.46 above) — pass SVG as a string, never a usvg::Tree, across this
+# boundary; see svg_to_pdf in src/diagrams/mod.rs.
+svg2pdf = "0.13.0"
+
 # Graphviz/DOT diagram rendering
 layout-rs = "0.1"
 

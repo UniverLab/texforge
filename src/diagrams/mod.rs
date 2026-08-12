@@ -1,7 +1,8 @@
 //! Pre-processor for embedded diagram environments.
 //!
 //! Intercepts `\begin{mermaid}[opts]...\end{mermaid}` blocks, renders them
-//! to PNG, and replaces each block with a proper `figure` environment.
+//! to vector PDF (falling back to PNG if the PDF conversion fails), and
+//! replaces each block with a proper `figure` environment.
 //!
 //! Works on copies in `build/` — the original .tex files are never modified.
 
@@ -46,15 +47,15 @@ fn render_diagrams(content: &str, diagrams_dir: &Path) -> Result<String> {
     let content = render_env(content, "mermaid", diagrams_dir, |src| {
         let svg = render_mermaid_with_config(src)
             .map_err(|e| anyhow::anyhow!("Mermaid render error: {}", e))?;
-        svg_to_png(&svg).context("Failed to convert mermaid SVG to PNG")
+        convert_svg_or_fallback("mermaid", &svg)
     })?;
     let content = render_env(&content, "graphviz", diagrams_dir, |src| {
         let svg = render_graphviz(src)?;
-        svg_to_png(&svg).context("Failed to convert graphviz SVG to PNG")
+        convert_svg_or_fallback("graphviz", &svg)
     })?;
     let content = render_env(&content, "d2", diagrams_dir, |src| {
         let svg = render_d2(src)?;
-        svg_to_png(&svg).context("Failed to convert D2 SVG to PNG")
+        convert_svg_or_fallback("d2", &svg)
     })?;
     Ok(content)
 }
@@ -73,13 +74,15 @@ fn render_mermaid_with_config(src: &str) -> Result<String> {
 
 /// Generic environment renderer: replaces `\begin{env}[opts]...\end{env}` with figure.
 ///
-/// Rendered PNGs are named after a hash of the diagram source, so unchanged
-/// diagrams are reused across rebuilds (watch mode) instead of re-rendered.
+/// Rendered artefacts are named after a hash of the diagram source, so
+/// unchanged diagrams are reused across rebuilds (watch mode) instead of
+/// re-rendered. `render_fn` returns the encoded bytes and the extension
+/// (`"pdf"` on the vector path, `"png"` when it fell back to rasterizing).
 pub(crate) fn render_env(
     content: &str,
     env: &str,
     diagrams_dir: &Path,
-    render_fn: impl Fn(&str) -> Result<Vec<u8>>,
+    render_fn: impl Fn(&str) -> Result<(Vec<u8>, &'static str)>,
 ) -> Result<String> {
     let begin_tag = format!("\\begin{{{}}}", env);
     let end_tag = format!("\\end{{{}}}", env);
@@ -98,11 +101,16 @@ pub(crate) fn render_env(
 
         validate_pos_option(&opts, env)?;
 
-        let filename = format!("{}-{:016x}.png", env, content_hash(diagram_src));
-        if !diagrams_dir.join(&filename).exists() {
-            let png = render_fn(diagram_src)?;
-            std::fs::write(diagrams_dir.join(&filename), png)?;
-        }
+        let base = format!("{}-{:016x}", env, content_hash(diagram_src));
+        let filename = match cached_filename(diagrams_dir, &base) {
+            Some(filename) => filename,
+            None => {
+                let (bytes, ext) = render_fn(diagram_src)?;
+                let filename = format!("{base}.{ext}");
+                std::fs::write(diagrams_dir.join(&filename), bytes)?;
+                filename
+            }
+        };
         let fig_env = build_figure_environment(&opts, env, &filename)?;
 
         result.push_str(&fig_env);
@@ -111,6 +119,14 @@ pub(crate) fn render_env(
 
     result.push_str(remaining);
     Ok(result)
+}
+
+/// Look for an already-rendered artefact for `base`, vector form first.
+fn cached_filename(diagrams_dir: &Path, base: &str) -> Option<String> {
+    ["pdf", "png"].into_iter().find_map(|ext| {
+        let filename = format!("{base}.{ext}");
+        diagrams_dir.join(&filename).exists().then_some(filename)
+    })
 }
 
 /// Stable-enough 64-bit hash of diagram source for cache filenames.
@@ -405,6 +421,50 @@ fn configure_monospace_family(
 /// which is print quality.
 const RASTER_SCALE: f32 = 3.0;
 
+/// Convert SVG string to PDF bytes, embedding it as vector art (with
+/// selectable text) rather than rasterizing it.
+///
+/// Takes the SVG as a string rather than a pre-parsed `usvg::Tree`: `svg2pdf`
+/// depends on `usvg ^0.45` while the rest of texforge is on `usvg 0.46`, and
+/// those are distinct incompatible types. Parsing here, with svg2pdf's own
+/// bundled usvg, avoids needing to bridge the two.
+fn svg_to_pdf(svg: &str) -> Result<Vec<u8>> {
+    let options = svg2pdf::usvg::Options {
+        fontdb: shared_fontdb(),
+        shape_rendering: svg2pdf::usvg::ShapeRendering::GeometricPrecision,
+        text_rendering: svg2pdf::usvg::TextRendering::OptimizeLegibility,
+        ..Default::default()
+    };
+
+    let tree =
+        svg2pdf::usvg::Tree::from_str(svg, &options).context("Failed to parse SVG for PDF")?;
+
+    svg2pdf::to_pdf(
+        &tree,
+        svg2pdf::ConversionOptions::default(),
+        svg2pdf::PageOptions::default(),
+    )
+    .map_err(|e| anyhow::anyhow!("SVG to PDF conversion failed: {}", e))
+}
+
+/// Convert a diagram's SVG to a vector PDF; fall back to a rasterized PNG,
+/// with a warning naming the diagram, if the PDF conversion fails.
+///
+/// Returns the encoded bytes alongside the extension actually produced, so
+/// callers can name the cached artefact accordingly.
+fn convert_svg_or_fallback(env: &str, svg: &str) -> Result<(Vec<u8>, &'static str)> {
+    match svg_to_pdf(svg) {
+        Ok(pdf) => Ok((pdf, "pdf")),
+        Err(e) => {
+            eprintln!(
+                "warning: {env} diagram: SVG to PDF conversion failed ({e}), falling back to PNG"
+            );
+            let png = svg_to_png(svg).context("Failed to convert diagram SVG to PNG (fallback)")?;
+            Ok((png, "png"))
+        }
+    }
+}
+
 /// Convert SVG string to PNG bytes at print resolution.
 fn svg_to_png(svg: &str) -> Result<Vec<u8>> {
     let options = resvg::usvg::Options {
@@ -435,6 +495,66 @@ fn svg_to_png(svg: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds an SVG whose group nesting is deep enough to exceed svg2pdf's
+    /// PDF content-stream nesting guard (`state_nesting_depth() > 28`), while
+    /// remaining well within what resvg's rasterizer renders without issue.
+    /// Each level carries a decoy sibling rect so usvg can't flatten the
+    /// single-child transform chain into one group.
+    fn deeply_nested_svg() -> String {
+        let mut svg =
+            String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">"#);
+        let depth = 35;
+        for i in 0..depth {
+            svg.push_str(&format!(
+                r#"<g transform="translate(0.1,0.1)"><rect x="{i}" y="0" width="1" height="1" fill="blue"/>"#
+            ));
+        }
+        svg.push_str(r#"<rect width="10" height="10" fill="red"/>"#);
+        for _ in 0..depth {
+            svg.push_str("</g>");
+        }
+        svg.push_str("</svg>");
+        svg
+    }
+
+    #[test]
+    fn svg_to_pdf_produces_pdf_magic_bytes() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>"#;
+        let pdf = svg_to_pdf(svg).unwrap();
+        assert!(
+            pdf.starts_with(b"%PDF-"),
+            "expected PDF magic bytes, got: {:?}",
+            &pdf[..pdf.len().min(20)]
+        );
+    }
+
+    #[test]
+    fn svg_to_pdf_fails_on_excessive_nesting_that_png_still_handles() {
+        let svg = deeply_nested_svg();
+        assert!(
+            svg_to_pdf(&svg).is_err(),
+            "expected the deeply nested SVG to exceed svg2pdf's nesting guard"
+        );
+        assert!(
+            svg_to_png(&svg).is_ok(),
+            "rasterization should not be affected by the PDF nesting guard"
+        );
+    }
+
+    #[test]
+    fn convert_svg_or_fallback_falls_back_to_png_on_pdf_failure() {
+        let svg = deeply_nested_svg();
+        let (bytes, ext) = convert_svg_or_fallback("graphviz", &svg).unwrap();
+        assert_eq!(ext, "png");
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn content_hash_stable_across_calls() {
+        let src = "digraph G { A -> B }";
+        assert_eq!(content_hash(src), content_hash(src));
+    }
 
     #[test]
     fn parse_opts_no_brackets_returns_empty_map() {
@@ -541,22 +661,65 @@ mod tests {
     }
 
     #[test]
-    fn render_d2_to_png_via_pipeline() {
+    fn render_d2_to_pdf_via_pipeline() {
         let dir = tempfile::tempdir().unwrap();
         let content = "\\begin{d2}[caption=Flow]\nx -> y: go\n\\end{d2}";
         let out = render_diagrams(content, dir.path()).unwrap();
         assert!(out.contains("\\includegraphics"));
+        assert!(out.contains(".pdf"));
         assert!(out.contains("\\caption{Flow}"));
-        // exactly one cached PNG written
-        let pngs = std::fs::read_dir(dir.path()).unwrap().count();
-        assert_eq!(pngs, 1);
+        // exactly one cached artefact written, and it's the vector form
+        let mut entries = std::fs::read_dir(dir.path()).unwrap();
+        let entry = entries.next().unwrap().unwrap();
+        assert!(entries.next().is_none());
+        assert_eq!(entry.path().extension().unwrap(), "pdf");
+    }
+
+    #[test]
+    fn render_mermaid_to_pdf_via_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{mermaid}\nflowchart LR\n  A --> B\n\\end{mermaid}";
+        let out = render_diagrams(content, dir.path()).unwrap();
+        assert!(out.contains(".pdf"));
+    }
+
+    #[test]
+    fn render_graphviz_to_pdf_via_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{graphviz}\ndigraph G { A -> B }\n\\end{graphviz}";
+        let out = render_diagrams(content, dir.path()).unwrap();
+        assert!(out.contains(".pdf"));
+    }
+
+    #[test]
+    fn render_env_build_succeeds_when_pdf_conversion_fails() {
+        // Exercises the same fallback a real diagram render would take when
+        // its SVG trips svg2pdf's nesting guard: the build must still
+        // succeed, emitting a PNG artefact rather than failing outright.
+        let content = "\\begin{graphviz}\ndigraph G { A -> B }\n\\end{graphviz}";
+        let dir = tempfile::tempdir().unwrap();
+        let svg = deeply_nested_svg();
+
+        let result = render_env(content, "graphviz", dir.path(), |_| {
+            convert_svg_or_fallback("graphviz", &svg)
+        });
+
+        assert!(result.is_ok(), "build must succeed via the PNG fallback");
+        let out = result.unwrap();
+        assert!(out.contains(".png"));
+        let entry = std::fs::read_dir(dir.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.path().extension().unwrap(), "png");
     }
 
     #[test]
     fn render_env_no_blocks_unchanged() {
         let content = "hello world";
         let dir = tempfile::tempdir().unwrap();
-        let result = render_env(content, "graphviz", dir.path(), |_| Ok(vec![])).unwrap();
+        let result = render_env(content, "graphviz", dir.path(), |_| Ok((vec![], "pdf"))).unwrap();
         assert_eq!(result, content);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
@@ -565,7 +728,10 @@ mod tests {
     fn render_env_invalid_pos_returns_error() {
         let content = "\\begin{graphviz}[pos=Z]\ndigraph G{}\n\\end{graphviz}";
         let dir = tempfile::tempdir().unwrap();
-        let err = render_env(content, "graphviz", dir.path(), |_| Ok(vec![1, 2, 3])).unwrap_err();
+        let err = render_env(content, "graphviz", dir.path(), |_| {
+            Ok((vec![1, 2, 3], "pdf"))
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("pos='Z'"));
     }
 
@@ -578,12 +744,49 @@ mod tests {
         for _ in 0..2 {
             render_env(content, "graphviz", dir.path(), |_| {
                 calls.set(calls.get() + 1);
-                Ok(vec![1, 2, 3])
+                Ok((vec![1, 2, 3], "pdf"))
             })
             .unwrap();
         }
         assert_eq!(calls.get(), 1);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn render_env_falls_back_to_png_extension() {
+        let content = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
+        let dir = tempfile::tempdir().unwrap();
+        let out = render_env(content, "graphviz", dir.path(), |_| {
+            Ok((vec![1, 2, 3], "png"))
+        })
+        .unwrap();
+        assert!(out.contains(".png"));
+        let mut entries = std::fs::read_dir(dir.path()).unwrap();
+        let entry = entries.next().unwrap().unwrap();
+        assert_eq!(entry.path().extension().unwrap(), "png");
+    }
+
+    #[test]
+    fn render_env_reuses_cached_png_without_recomputing() {
+        let content = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
+        let dir = tempfile::tempdir().unwrap();
+        // A prior run fell back to PNG for this diagram.
+        render_env(content, "graphviz", dir.path(), |_| {
+            Ok((vec![1, 2, 3], "png"))
+        })
+        .unwrap();
+
+        let calls = std::cell::Cell::new(0u32);
+        render_env(content, "graphviz", dir.path(), |_| {
+            calls.set(calls.get() + 1);
+            Ok((vec![9, 9, 9], "pdf"))
+        })
+        .unwrap();
+        assert_eq!(
+            calls.get(),
+            0,
+            "cached .png should be reused, not re-rendered"
+        );
     }
 
     #[test]

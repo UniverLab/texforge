@@ -10,8 +10,14 @@ order: 5
 compilation and replaces them with rendered figures. Your original `.tex`
 files are never modified — rendering happens in the `build/` copies.
 
-Both renderers are pure Rust: no browser, no Node.js, no `dot` binary
+All three renderers are pure Rust: no browser, no Node.js, no `dot` binary
 required.
+
+Diagrams are embedded as vector PDF, so they stay sharp at any zoom level
+and their label text remains selectable and searchable in the final PDF.
+If a diagram's SVG can't be converted to PDF, texforge falls back to a
+rasterized PNG for that one diagram, prints a warning naming it, and the
+build still succeeds.
 
 ## Mermaid
 
