@@ -151,6 +151,46 @@
     engines -> pdf: "tectonic"
   \end{d2}
 
+  \subsection{Estilos de Diagrama (\texttt{style})}\label{sec:estilos}
+
+  Los tres entornos aceptan también un atributo \texttt{style}, combinable
+  con \texttt{width}, \texttt{pos} y \texttt{caption}. En vez de describir
+  cada preset con adjetivos, el mismo diagrama mínimo se repite a
+  continuación una vez por preset, para que la diferencia se vea
+  directamente:
+
+  \begin{mermaid}[style=editorial, width=0.55\linewidth, caption=Preset \texttt{editorial}: paleta restringida, un solo acento, sin sombras, pos=H]
+    flowchart LR
+      A[Entrada] --> B[Proceso] --> C[Salida]
+  \end{mermaid}
+
+  \begin{mermaid}[style=mono, width=0.55\linewidth, caption=Preset \texttt{mono}: escala de grises, pos=H]
+    flowchart LR
+      A[Entrada] --> B[Proceso] --> C[Salida]
+  \end{mermaid}
+
+  \begin{mermaid}[style=technical, width=0.55\linewidth, caption=Preset \texttt{technical}: trazo uniforme, sin relleno, etiquetas monoespaciadas, pos=H]
+    flowchart LR
+      A[Entrada] --> B[Proceso] --> C[Salida]
+  \end{mermaid}
+
+  El preset \texttt{editorial} sirve para documentos que se leen en pantalla
+  o se imprimen a color y buscan un acabado sobrio. El preset
+  \texttt{technical} conviene a diagramas que funcionan como planos o
+  esquemas de referencia, con peso de trazo uniforme. El preset
+  \texttt{mono} tiene una razón menos obvia: existe para documentos que se
+  imprimen en blanco y negro, donde un diagrama a color puede perder
+  significado, porque dos colores que se distinguen en pantalla pueden
+  reducirse al mismo gris al imprimirse sin color; \texttt{mono} evita ese
+  problema por construcción, ya que nunca depende del color para
+  distinguir nada. Omitir \texttt{style} equivale a \texttt{style=default},
+  el aspecto propio de cada motor, como en los tres diagramas anteriores.
+
+  También puede fijarse un preset por defecto para todo el documento en
+  \texttt{project.toml}, bajo \texttt{[diagrams]} con \texttt{style = "..."};
+  el atributo \texttt{style} de un entorno concreto, cuando está presente,
+  sobrescribe ese valor por defecto.
+
   % -------------------------------------------------------
   \section{Matemáticas}\label{sec:matematicas}
 
