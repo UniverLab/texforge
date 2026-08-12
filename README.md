@@ -21,6 +21,8 @@
 
 Texforge is a unified LaTeX workspace — one tool for writing, rendering diagrams (Mermaid, Graphviz), and building PDFs. Set it up once and stay focused on your document.
 
+**[Visit texforge.univerlab.org](https://univerlab.org/texforge)** — Full documentation, guides, and examples.
+
 ---
 
 ## Features

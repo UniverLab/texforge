@@ -7,6 +7,7 @@ rust-version = "1.92"
 description = "Self-contained LaTeX to PDF compiler CLI"
 license = "MIT"
 repository = "https://github.com/UniverLab/texforge"
+homepage = "https://univerlab.org/texforge"
 keywords = ["latex", "pdf", "compiler", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
