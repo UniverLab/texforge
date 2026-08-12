@@ -46,7 +46,23 @@ cargo install texforge
 
 Available on [crates.io](https://crates.io/crates/texforge).
 
-## From source
+## Updating texforge
+
+Texforge updates itself in place, **replacing the binary that is running**. When a newer version becomes available, you will be prompted during normal command execution.
+
+**If you used the quick installer or downloaded a binary directly:**
+
+Accept the update prompt, and it will overwrite the binary at its current location (typically `~/.local/bin/texforge`).
+
+**If you installed via `cargo install`:**
+
+Self-update is deliberately disabled — cargo owns that installation path and tracks its own versions. To update, run:
+
+```bash
+cargo install --force texforge
+```
+
+**Why it matters:** Mixing install methods leaves two binaries on your system. The one on your PATH may not be the one that updated, leading to confusing version mismatches. Choose one method and stick with it.
 
 ```bash
 git clone https://github.com/UniverLab/texforge.git

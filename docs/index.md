@@ -31,7 +31,7 @@ collapses that into a single workflow:
   built-in offline fallback.
 - **Build and live edit** — compile once or use watch mode.
 - **Smart linting** — catch missing files, broken references, bibliography
-  keys and unclosed environments before compiling.
+  keys, unclosed environments, and spelling errors before compiling.
 - **Opinionated formatter** — one canonical `.tex` style, clean git diffs.
 
 ## How the documentation is organized

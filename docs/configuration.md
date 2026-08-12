@@ -26,7 +26,7 @@ The wizard asks for:
 - **Name** — your full name
 - **Email** — your email address
 - **Institution** — your institution/organization
-- **Language** — document language (default: `english`)
+- **Language** — fallback language for documents without an explicit `\usepackage[lang]{babel}` or `polyglossia` declaration (default: `english`). If a document declares its language in the preamble, that takes precedence.
 
 **Command-line interface:**
 
