@@ -10,6 +10,17 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectConfig {
     pub document: DocumentConfig,
     pub build: BuildConfig,
+    #[serde(default)]
+    pub diagrams: Option<DiagramsConfig>,
+}
+
+/// `[diagrams]` section of `project.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagramsConfig {
+    /// Document-wide default style preset (`default`, `editorial`, `mono`,
+    /// `technical`). A `style=` on the environment itself overrides this.
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +127,7 @@ entry = "main.tex"
                 bibliography: Some("refs.bib".to_string()),
                 reproducible: None,
             },
+            diagrams: None,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: ProjectConfig = toml::from_str(&toml_str).unwrap();
@@ -136,6 +148,7 @@ entry = "main.tex"
                 bibliography: None,
                 reproducible: None,
             },
+            diagrams: None,
         };
         let cloned = config.clone();
         let debug_str = format!("{:?}", config);
@@ -264,6 +277,7 @@ entry = "main.tex"
                 bibliography: None,
                 reproducible: Some(Reproducible::Epoch(1700000000)),
             },
+            diagrams: None,
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let parsed: ProjectConfig = toml::from_str(&serialized).unwrap();
@@ -271,5 +285,41 @@ entry = "main.tex"
             parsed.build.reproducible,
             Some(Reproducible::Epoch(1700000000))
         );
+    }
+
+    #[test]
+    fn project_config_diagrams_style_present() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[diagrams]
+style = "editorial"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.diagrams.and_then(|d| d.style),
+            Some("editorial".to_string())
+        );
+    }
+
+    #[test]
+    fn project_config_diagrams_absent_is_none() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.diagrams.is_none());
     }
 }

@@ -13,10 +13,20 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 
+pub mod style;
+use style::DiagramStyle;
+
 /// Copy all .tex files to `build_dir`, rendering embedded diagrams in the copies.
 /// Also mirrors non-.tex assets so tectonic can resolve relative paths.
-/// Returns the path to the build copy of `entry`.
-pub fn process(root: &Path, entry: &str, build_dir: &Path) -> Result<PathBuf> {
+/// `default_style` is the document-wide style (`project.toml`'s `[diagrams]
+/// style`, or `DiagramStyle::Default`); a `style=` on the environment itself
+/// overrides it. Returns the path to the build copy of `entry`.
+pub fn process(
+    root: &Path,
+    entry: &str,
+    build_dir: &Path,
+    default_style: DiagramStyle,
+) -> Result<PathBuf> {
     std::fs::create_dir_all(build_dir)?;
 
     let diagrams_dir = build_dir.join("diagrams");
@@ -31,7 +41,7 @@ pub fn process(root: &Path, entry: &str, build_dir: &Path) -> Result<PathBuf> {
             std::fs::create_dir_all(parent)?;
         }
         let content = std::fs::read_to_string(src)?;
-        let processed = render_diagrams(&content, &diagrams_dir)
+        let processed = render_diagrams(&content, &diagrams_dir, default_style)
             .with_context(|| format!("Failed to render diagrams in {}", src.display()))?;
         std::fs::write(&dest, processed)?;
     }
@@ -43,33 +53,42 @@ pub fn process(root: &Path, entry: &str, build_dir: &Path) -> Result<PathBuf> {
 }
 
 /// Replace all `\begin{mermaid}[opts]...\end{mermaid}` with figure environments.
-fn render_diagrams(content: &str, diagrams_dir: &Path) -> Result<String> {
-    let content = render_env(content, "mermaid", diagrams_dir, |src| {
-        let svg = render_mermaid_with_config(src)
-            .map_err(|e| anyhow::anyhow!("Mermaid render error: {}", e))?;
-        convert_svg_or_fallback("mermaid", &svg)
-    })?;
-    let content = render_env(&content, "graphviz", diagrams_dir, |src| {
-        let svg = render_graphviz(src)?;
-        convert_svg_or_fallback("graphviz", &svg)
-    })?;
-    let content = render_env(&content, "d2", diagrams_dir, |src| {
-        let svg = render_d2(src)?;
+fn render_diagrams(
+    content: &str,
+    diagrams_dir: &Path,
+    default_style: DiagramStyle,
+) -> Result<String> {
+    let content = render_env(
+        content,
+        "mermaid",
+        diagrams_dir,
+        default_style,
+        |src, sty| {
+            let svg = render_mermaid_with_config(src, sty)?;
+            convert_svg_or_fallback("mermaid", &svg)
+        },
+    )?;
+    let content = render_env(
+        &content,
+        "graphviz",
+        diagrams_dir,
+        default_style,
+        |src, sty| {
+            let svg = render_graphviz(src, sty)?;
+            convert_svg_or_fallback("graphviz", &svg)
+        },
+    )?;
+    let content = render_env(&content, "d2", diagrams_dir, default_style, |src, sty| {
+        let svg = render_d2(src, sty)?;
         convert_svg_or_fallback("d2", &svg)
     })?;
     Ok(content)
 }
 
-/// Render Mermaid diagram with improved configuration for better layout.
-fn render_mermaid_with_config(src: &str) -> Result<String> {
-    // Try with default configuration first
-    mermaid_rs_renderer::render(src).map_err(|e| {
-        // If default fails, try with explicit configuration
-        anyhow::anyhow!(
-            "Mermaid render error: {}. Consider checking diagram syntax.",
-            e
-        )
-    })
+/// Render a Mermaid diagram, applying `style`'s theme and layout spacing.
+fn render_mermaid_with_config(src: &str, sty: DiagramStyle) -> Result<String> {
+    mermaid_rs_renderer::render_with_options(src, style::mermaid_options(sty))
+        .map_err(|e| anyhow::anyhow!("Mermaid render error: {}", e))
 }
 
 /// Generic environment renderer: replaces `\begin{env}[opts]...\end{env}` with figure.
@@ -82,7 +101,8 @@ pub(crate) fn render_env(
     content: &str,
     env: &str,
     diagrams_dir: &Path,
-    render_fn: impl Fn(&str) -> Result<(Vec<u8>, &'static str)>,
+    default_style: DiagramStyle,
+    render_fn: impl Fn(&str, DiagramStyle) -> Result<(Vec<u8>, &'static str)>,
 ) -> Result<String> {
     let begin_tag = format!("\\begin{{{}}}", env);
     let end_tag = format!("\\end{{{}}}", env);
@@ -100,12 +120,13 @@ pub(crate) fn render_env(
         let diagram_src = after_opts[..end].trim();
 
         validate_pos_option(&opts, env)?;
+        let diagram_style = resolve_style(&opts, env, default_style)?;
 
-        let base = format!("{}-{:016x}", env, content_hash(diagram_src));
+        let base = format!("{}-{:016x}", env, content_hash(diagram_src, diagram_style));
         let filename = match cached_filename(diagrams_dir, &base) {
             Some(filename) => filename,
             None => {
-                let (bytes, ext) = render_fn(diagram_src)?;
+                let (bytes, ext) = render_fn(diagram_src, diagram_style)?;
                 let filename = format!("{base}.{ext}");
                 std::fs::write(diagrams_dir.join(&filename), bytes)?;
                 filename
@@ -129,11 +150,35 @@ fn cached_filename(diagrams_dir: &Path, base: &str) -> Option<String> {
     })
 }
 
-/// Stable-enough 64-bit hash of diagram source for cache filenames.
-fn content_hash(src: &str) -> u64 {
+/// Stable-enough 64-bit hash of diagram source and style for cache filenames.
+/// Folding the style in means changing `style=` re-renders instead of
+/// serving a stale cached artefact.
+fn content_hash(src: &str, style: DiagramStyle) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut hasher);
+    (style as u8).hash(&mut hasher);
     hasher.finish()
+}
+
+/// Resolve the style for one diagram: the environment's `style=` option
+/// wins, then the `project.toml` default. An unknown name is an error
+/// naming the offending value and the valid alternatives.
+fn resolve_style(
+    opts: &HashMap<String, String>,
+    env: &str,
+    default_style: DiagramStyle,
+) -> Result<DiagramStyle> {
+    match opts.get("style") {
+        None => Ok(default_style),
+        Some(name) => DiagramStyle::parse(name).map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid {} option style='{}' — valid values are: {}",
+                env,
+                name,
+                style::VALID_STYLE_NAMES.join(", ")
+            )
+        }),
+    }
 }
 
 /// Find the end tag position and validate it exists.
@@ -213,13 +258,18 @@ fn add_caption_if_present(opts: &HashMap<String, String>, fig: &mut String) -> R
 }
 
 /// Render a DOT/Graphviz diagram to SVG using layout-rs (pure Rust).
-fn render_graphviz(src: &str) -> Result<String> {
+///
+/// `layout-rs` has no theme concept: `style` is applied by injecting
+/// `node [...]; edge [...];` default-attribute statements into the DOT
+/// source before parsing (see [`style::graphviz_inject`]).
+fn render_graphviz(src: &str, sty: DiagramStyle) -> Result<String> {
     use layout::backends::svg::SVGWriter;
     use layout::gv::DotParser;
     use layout::gv::GraphBuilder;
     use layout::topo::layout::VisualGraph;
 
-    let mut parser = DotParser::new(src);
+    let styled_src = style::graphviz_inject(src, sty);
+    let mut parser = DotParser::new(&styled_src);
     let graph = parser.process().map_err(|e| {
         parser.print_error();
         anyhow::anyhow!("Graphviz parse error: {}", e)
@@ -235,8 +285,14 @@ fn render_graphviz(src: &str) -> Result<String> {
 }
 
 /// Render a D2 diagram to SVG using d2-little (pure Rust port of the d2lang pipeline).
-fn render_d2(src: &str) -> Result<String> {
-    let svg = d2_little::d2_to_svg(src).map_err(|e| anyhow::anyhow!("D2 render error: {}", e))?;
+///
+/// `style` is applied by prepending a `vars: { d2-config: ... }` block (see
+/// [`style::d2_prefix`]) — the only way to reach `theme-overrides`, which
+/// `CompileOptions` has no field for.
+fn render_d2(src: &str, sty: DiagramStyle) -> Result<String> {
+    let styled_src = format!("{}{}", style::d2_prefix(sty), src);
+    let svg =
+        d2_little::d2_to_svg(&styled_src).map_err(|e| anyhow::anyhow!("D2 render error: {}", e))?;
     String::from_utf8(svg).context("D2 produced non-UTF8 SVG")
 }
 
@@ -553,7 +609,19 @@ mod tests {
     #[test]
     fn content_hash_stable_across_calls() {
         let src = "digraph G { A -> B }";
-        assert_eq!(content_hash(src), content_hash(src));
+        assert_eq!(
+            content_hash(src, DiagramStyle::Default),
+            content_hash(src, DiagramStyle::Default)
+        );
+    }
+
+    #[test]
+    fn content_hash_differs_by_style() {
+        let src = "digraph G { A -> B }";
+        assert_ne!(
+            content_hash(src, DiagramStyle::Default),
+            content_hash(src, DiagramStyle::Editorial)
+        );
     }
 
     #[test]
@@ -581,6 +649,18 @@ mod tests {
         let (map, _) = parse_opts("[label=fig:my-diagram, height=5cm]");
         assert_eq!(map.get("label").map(String::as_str), Some("fig:my-diagram"));
         assert_eq!(map.get("height").map(String::as_str), Some("5cm"));
+    }
+
+    #[test]
+    fn parse_opts_style_alongside_others_any_order() {
+        let (map, _) = parse_opts("[pos=t, style=editorial, width=0.5\\linewidth]");
+        assert_eq!(map.get("style").map(String::as_str), Some("editorial"));
+        assert_eq!(map.get("pos").map(String::as_str), Some("t"));
+        assert_eq!(map.get("width").map(String::as_str), Some("0.5\\linewidth"));
+
+        let (map, _) = parse_opts("[style=mono, caption=A diagram]");
+        assert_eq!(map.get("style").map(String::as_str), Some("mono"));
+        assert_eq!(map.get("caption").map(String::as_str), Some("A diagram"));
     }
 
     #[test]
@@ -642,7 +722,7 @@ mod tests {
     #[test]
     fn render_graphviz_produces_svg() {
         let dot = "digraph G { A -> B }";
-        let svg = render_graphviz(dot).unwrap();
+        let svg = render_graphviz(dot, DiagramStyle::Default).unwrap();
         assert!(
             svg.contains("<svg"),
             "expected SVG output, got: {}",
@@ -652,7 +732,7 @@ mod tests {
 
     #[test]
     fn render_d2_produces_svg() {
-        let svg = render_d2("a -> b -> c").unwrap();
+        let svg = render_d2("a -> b -> c", DiagramStyle::Default).unwrap();
         assert!(
             svg.contains("<svg"),
             "expected SVG output, got: {}",
@@ -664,7 +744,7 @@ mod tests {
     fn render_d2_to_pdf_via_pipeline() {
         let dir = tempfile::tempdir().unwrap();
         let content = "\\begin{d2}[caption=Flow]\nx -> y: go\n\\end{d2}";
-        let out = render_diagrams(content, dir.path()).unwrap();
+        let out = render_diagrams(content, dir.path(), DiagramStyle::Default).unwrap();
         assert!(out.contains("\\includegraphics"));
         assert!(out.contains(".pdf"));
         assert!(out.contains("\\caption{Flow}"));
@@ -679,7 +759,7 @@ mod tests {
     fn render_mermaid_to_pdf_via_pipeline() {
         let dir = tempfile::tempdir().unwrap();
         let content = "\\begin{mermaid}\nflowchart LR\n  A --> B\n\\end{mermaid}";
-        let out = render_diagrams(content, dir.path()).unwrap();
+        let out = render_diagrams(content, dir.path(), DiagramStyle::Default).unwrap();
         assert!(out.contains(".pdf"));
     }
 
@@ -687,8 +767,25 @@ mod tests {
     fn render_graphviz_to_pdf_via_pipeline() {
         let dir = tempfile::tempdir().unwrap();
         let content = "\\begin{graphviz}\ndigraph G { A -> B }\n\\end{graphviz}";
-        let out = render_diagrams(content, dir.path()).unwrap();
+        let out = render_diagrams(content, dir.path(), DiagramStyle::Default).unwrap();
         assert!(out.contains(".pdf"));
+    }
+
+    #[test]
+    fn render_diagrams_with_editorial_style_attribute_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{mermaid}[style=editorial]\nflowchart LR\n  A --> B\n\\end{mermaid}";
+        let out = render_diagrams(content, dir.path(), DiagramStyle::Default).unwrap();
+        assert!(out.contains(".pdf"));
+    }
+
+    #[test]
+    fn render_diagrams_unknown_style_attribute_fails_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{mermaid}[style=editoral]\nflowchart LR\n  A --> B\n\\end{mermaid}";
+        let err = render_diagrams(content, dir.path(), DiagramStyle::Default).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("editoral"), "message: {msg}");
     }
 
     #[test]
@@ -700,9 +797,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let svg = deeply_nested_svg();
 
-        let result = render_env(content, "graphviz", dir.path(), |_| {
-            convert_svg_or_fallback("graphviz", &svg)
-        });
+        let result = render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| convert_svg_or_fallback("graphviz", &svg),
+        );
 
         assert!(result.is_ok(), "build must succeed via the PNG fallback");
         let out = result.unwrap();
@@ -719,7 +820,14 @@ mod tests {
     fn render_env_no_blocks_unchanged() {
         let content = "hello world";
         let dir = tempfile::tempdir().unwrap();
-        let result = render_env(content, "graphviz", dir.path(), |_| Ok((vec![], "pdf"))).unwrap();
+        let result = render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![], "pdf")),
+        )
+        .unwrap();
         assert_eq!(result, content);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
@@ -728,11 +836,34 @@ mod tests {
     fn render_env_invalid_pos_returns_error() {
         let content = "\\begin{graphviz}[pos=Z]\ndigraph G{}\n\\end{graphviz}";
         let dir = tempfile::tempdir().unwrap();
-        let err = render_env(content, "graphviz", dir.path(), |_| {
-            Ok((vec![1, 2, 3], "pdf"))
-        })
+        let err = render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![1, 2, 3], "pdf")),
+        )
         .unwrap_err();
         assert!(err.to_string().contains("pos='Z'"));
+    }
+
+    #[test]
+    fn render_env_invalid_style_returns_error_listing_valid_names() {
+        let content = "\\begin{graphviz}[style=editoral]\ndigraph G{}\n\\end{graphviz}";
+        let dir = tempfile::tempdir().unwrap();
+        let err = render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![1, 2, 3], "pdf")),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("style='editoral'"), "message: {msg}");
+        for name in style::VALID_STYLE_NAMES {
+            assert!(msg.contains(name), "message missing '{name}': {msg}");
+        }
     }
 
     #[test]
@@ -742,10 +873,16 @@ mod tests {
         let calls = std::cell::Cell::new(0u32);
         // render twice into the same dir — second pass must hit the cache
         for _ in 0..2 {
-            render_env(content, "graphviz", dir.path(), |_| {
-                calls.set(calls.get() + 1);
-                Ok((vec![1, 2, 3], "pdf"))
-            })
+            render_env(
+                content,
+                "graphviz",
+                dir.path(),
+                DiagramStyle::Default,
+                |_, _| {
+                    calls.set(calls.get() + 1);
+                    Ok((vec![1, 2, 3], "pdf"))
+                },
+            )
             .unwrap();
         }
         assert_eq!(calls.get(), 1);
@@ -756,9 +893,13 @@ mod tests {
     fn render_env_falls_back_to_png_extension() {
         let content = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
         let dir = tempfile::tempdir().unwrap();
-        let out = render_env(content, "graphviz", dir.path(), |_| {
-            Ok((vec![1, 2, 3], "png"))
-        })
+        let out = render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![1, 2, 3], "png")),
+        )
         .unwrap();
         assert!(out.contains(".png"));
         let mut entries = std::fs::read_dir(dir.path()).unwrap();
@@ -771,22 +912,218 @@ mod tests {
         let content = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
         let dir = tempfile::tempdir().unwrap();
         // A prior run fell back to PNG for this diagram.
-        render_env(content, "graphviz", dir.path(), |_| {
-            Ok((vec![1, 2, 3], "png"))
-        })
+        render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![1, 2, 3], "png")),
+        )
         .unwrap();
 
         let calls = std::cell::Cell::new(0u32);
-        render_env(content, "graphviz", dir.path(), |_| {
-            calls.set(calls.get() + 1);
-            Ok((vec![9, 9, 9], "pdf"))
-        })
+        render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| {
+                calls.set(calls.get() + 1);
+                Ok((vec![9, 9, 9], "pdf"))
+            },
+        )
         .unwrap();
         assert_eq!(
             calls.get(),
             0,
             "cached .png should be reused, not re-rendered"
         );
+    }
+
+    #[test]
+    fn render_env_omitted_style_matches_explicit_default_style() {
+        // Omitting `style=` must render exactly as `style=default`: both
+        // resolve to `DiagramStyle::Default`, so they hash to the same
+        // cache entry and only one artefact is written.
+        let dir = tempfile::tempdir().unwrap();
+        let content_omitted = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
+        let content_explicit =
+            "\\begin{graphviz}[style=default]\ndigraph G{ A -> B }\n\\end{graphviz}";
+
+        render_env(
+            content_omitted,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, sty| {
+                assert_eq!(sty, DiagramStyle::Default);
+                Ok((vec![1, 2, 3], "pdf"))
+            },
+        )
+        .unwrap();
+        render_env(
+            content_explicit,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, sty| {
+                assert_eq!(sty, DiagramStyle::Default);
+                Ok((vec![1, 2, 3], "pdf"))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "omitted style= and explicit style=default must share one cache entry"
+        );
+    }
+
+    #[test]
+    fn render_env_project_default_style_used_when_attribute_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
+        render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Editorial,
+            |_, sty| {
+                assert_eq!(sty, DiagramStyle::Editorial);
+                Ok((vec![1, 2, 3], "pdf"))
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn render_env_attribute_style_overrides_project_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\\begin{graphviz}[style=mono]\ndigraph G{ A -> B }\n\\end{graphviz}";
+        render_env(
+            content,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Editorial,
+            |_, sty| {
+                assert_eq!(sty, DiagramStyle::Mono);
+                Ok((vec![1, 2, 3], "pdf"))
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn render_env_different_styles_produce_distinct_cache_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let content_default = "\\begin{graphviz}\ndigraph G{ A -> B }\n\\end{graphviz}";
+        let content_editorial =
+            "\\begin{graphviz}[style=editorial]\ndigraph G{ A -> B }\n\\end{graphviz}";
+        render_env(
+            content_default,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![1], "pdf")),
+        )
+        .unwrap();
+        render_env(
+            content_editorial,
+            "graphviz",
+            dir.path(),
+            DiagramStyle::Default,
+            |_, _| Ok((vec![2], "pdf")),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "different styles must produce distinct cached artefacts"
+        );
+    }
+
+    fn hex_colors_for_attr(svg: &str, attr: &str) -> Vec<(u8, u8, u8)> {
+        let pattern = format!("{attr}=\"#");
+        let mut out = Vec::new();
+        let mut rest = svg;
+        while let Some(idx) = rest.find(&pattern) {
+            let after = &rest[idx + pattern.len()..];
+            if after.len() >= 6 {
+                let hex = &after[..6];
+                if let (Ok(r), Ok(g), Ok(b)) = (
+                    u8::from_str_radix(&hex[0..2], 16),
+                    u8::from_str_radix(&hex[2..4], 16),
+                    u8::from_str_radix(&hex[4..6], 16),
+                ) {
+                    out.push((r, g, b));
+                }
+            }
+            rest = &after[6.min(after.len())..];
+        }
+        out
+    }
+
+    /// Grayscale means R == G == B for every `fill`/`stroke` hex color —
+    /// the requirement `mono` exists to guarantee.
+    fn assert_grayscale_svg(svg: &str, label: &str) {
+        for attr in ["fill", "stroke"] {
+            for (r, g, b) in hex_colors_for_attr(svg, attr) {
+                assert!(
+                    r == g && g == b,
+                    "{label}: non-grayscale {attr} color #{r:02X}{g:02X}{b:02X} under mono style"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mono_style_mermaid_svg_is_grayscale() {
+        let svg = render_mermaid_with_config("flowchart LR\n  A --> B --> C", DiagramStyle::Mono)
+            .unwrap();
+        assert_grayscale_svg(&svg, "mermaid");
+    }
+
+    #[test]
+    fn mono_style_graphviz_svg_is_grayscale() {
+        let svg = render_graphviz("digraph G { A -> B }", DiagramStyle::Mono).unwrap();
+        assert_grayscale_svg(&svg, "graphviz");
+    }
+
+    #[test]
+    fn mono_style_d2_svg_is_grayscale() {
+        let svg = render_d2("a -> b -> c", DiagramStyle::Mono).unwrap();
+        assert_grayscale_svg(&svg, "d2");
+    }
+
+    #[test]
+    fn technical_style_renders_across_all_three_renderers() {
+        // technical is the trickiest preset: D2 reaches its monospaced-label
+        // rule via a base theme-id (301) injected alongside theme-overrides.
+        let svg =
+            render_mermaid_with_config("flowchart LR\n  A --> B", DiagramStyle::Technical).unwrap();
+        assert!(svg.contains("<svg"), "mermaid: {svg}");
+
+        let svg = render_graphviz("digraph G { A -> B }", DiagramStyle::Technical).unwrap();
+        assert!(svg.contains("<svg"), "graphviz: {svg}");
+
+        let svg = render_d2("a -> b -> c", DiagramStyle::Technical).unwrap();
+        assert!(svg.contains("<svg"), "d2: {svg}");
+    }
+
+    #[test]
+    fn graphviz_renders_despite_unsupported_background_override() {
+        // layout-rs has no document-wide theme or background — StyleAttr is
+        // per-node/per-edge only — so a preset it can't fully express must
+        // still render successfully rather than fail the build.
+        for sty in [
+            DiagramStyle::Editorial,
+            DiagramStyle::Mono,
+            DiagramStyle::Technical,
+        ] {
+            let svg = render_graphviz("digraph G { A -> B }", sty).unwrap();
+            assert!(svg.contains("<svg"));
+        }
     }
 
     #[test]

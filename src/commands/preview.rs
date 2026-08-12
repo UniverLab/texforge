@@ -138,6 +138,7 @@ mod tests {
                     bibliography: None,
                     reproducible: None,
                 },
+                diagrams: None,
             },
         };
         (dir, project)
@@ -220,6 +221,7 @@ mod tests {
                     bibliography: None,
                     reproducible: None,
                 },
+                diagrams: None,
             },
         };
         let err = run(&project, None, 1.0, None).unwrap_err();

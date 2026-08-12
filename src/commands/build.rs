@@ -39,6 +39,22 @@ fn resolve_epoch(cli: Option<Option<u64>>, config: Option<Reproducible>) -> Opti
     }
 }
 
+/// Resolve the document-wide default diagram style from `project.toml`'s
+/// `[diagrams] style` key. A `style=` on the environment itself overrides
+/// this. An unrecognised name fails the build rather than silently falling
+/// back to `default`.
+fn resolve_default_style(project: &Project) -> Result<diagrams::style::DiagramStyle> {
+    match project
+        .config
+        .diagrams
+        .as_ref()
+        .and_then(|d| d.style.as_deref())
+    {
+        Some(name) => diagrams::style::DiagramStyle::parse(name),
+        None => Ok(diagrams::style::DiagramStyle::Default),
+    }
+}
+
 /// Compile project to PDF using a temp directory, output named after the document title.
 pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     let project = Project::load()?;
@@ -50,11 +66,18 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
         println!("  ◇ reproducible build (SOURCE_DATE_EPOCH pinned)");
     }
 
+    let default_style = resolve_default_style(&project)?;
+
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path();
     println!("  ◇ temp: {}", build_dir.display());
 
-    diagrams::process(&project.root, &project.config.build.entry, build_dir)?;
+    diagrams::process(
+        &project.root,
+        &project.config.build.entry,
+        build_dir,
+        default_style,
+    )?;
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -193,7 +216,16 @@ fn run_build(
     epoch: Option<u64>,
 ) -> WatchResult {
     let _ = std::fs::create_dir_all(build_dir);
-    if let Err(e) = diagrams::process(&project.root, &project.config.build.entry, build_dir) {
+    let default_style = match resolve_default_style(project) {
+        Ok(style) => style,
+        Err(e) => return WatchResult::Err(e.to_string()),
+    };
+    if let Err(e) = diagrams::process(
+        &project.root,
+        &project.config.build.entry,
+        build_dir,
+        default_style,
+    ) {
         return WatchResult::Err(e.to_string());
     }
     let entry_filename = Path::new(&project.config.build.entry)
@@ -349,6 +381,52 @@ mod tests {
         assert_eq!(resolve_epoch(None, None), None);
     }
 
+    fn project_with_diagrams_style(style: Option<&str>) -> Project {
+        Project {
+            root: PathBuf::from("."),
+            config: crate::domain::project::ProjectConfig {
+                document: crate::domain::project::DocumentConfig {
+                    title: "T".to_string(),
+                    author: "A".to_string(),
+                    template: "general".to_string(),
+                },
+                build: crate::domain::project::BuildConfig {
+                    entry: "main.tex".to_string(),
+                    bibliography: None,
+                    reproducible: None,
+                },
+                diagrams: style.map(|s| crate::domain::project::DiagramsConfig {
+                    style: Some(s.to_string()),
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn default_style_is_used_when_project_toml_has_none() {
+        let project = project_with_diagrams_style(None);
+        assert_eq!(
+            resolve_default_style(&project).unwrap(),
+            diagrams::style::DiagramStyle::Default
+        );
+    }
+
+    #[test]
+    fn project_toml_style_becomes_the_default() {
+        let project = project_with_diagrams_style(Some("editorial"));
+        assert_eq!(
+            resolve_default_style(&project).unwrap(),
+            diagrams::style::DiagramStyle::Editorial
+        );
+    }
+
+    #[test]
+    fn invalid_project_toml_style_fails() {
+        let project = project_with_diagrams_style(Some("editoral"));
+        let err = resolve_default_style(&project).unwrap_err();
+        assert!(err.to_string().contains("editoral"));
+    }
+
     fn tectonic_available() -> bool {
         crate::compiler::locate_tectonic().is_some()
     }
@@ -475,6 +553,7 @@ mod tests {
                     bibliography: None,
                     reproducible: None,
                 },
+                diagrams: None,
             },
         };
         let build_dir = dir.path().join(".texforge-build");

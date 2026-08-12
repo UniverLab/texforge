@@ -194,6 +194,7 @@ entry = "main.tex"
                     bibliography: None,
                     reproducible: None,
                 },
+                diagrams: None,
             },
         };
         (dir, project)
@@ -365,6 +366,7 @@ entry = "main.tex"
                     bibliography: None,
                     reproducible: None,
                 },
+                diagrams: None,
             },
         };
         let err = execute_for_project(&project, PdfAction::Info).unwrap_err();
