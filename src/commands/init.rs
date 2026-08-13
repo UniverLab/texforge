@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use inquire::{Confirm, Select, Text};
 
 use crate::commands::new as new_cmd;
@@ -205,11 +205,20 @@ fn check_for_updates() -> Result<()> {
     Ok(())
 }
 
-/// Download and install a new binary (placeholder for Phase 1)
+/// Download and install a new binary by replacing the file currently
+/// running (`std::env::current_exe()`) — never a hardcoded install
+/// directory. If that file is a `cargo install`, refuse to touch it: cargo
+/// keeps its own metadata about what it manages there, and this is a clean
+/// exit, not a failure.
 fn download_and_install(version: &crate::version::SemVer) -> Result<()> {
-    // Phase 1: Show the download URL and instructions
-    // Phase 2+: Implement automatic download/install
-    let url = version_checker::get_release_download_url("UniverLab", "texforge", version);
-    println!("  Download: {}", url);
-    anyhow::bail!("Automatic installation not yet implemented. Please download from the URL above.")
+    let current_exe =
+        std::env::current_exe().context("failed to resolve the running binary's path")?;
+
+    if version_checker::current_exe_is_cargo_managed(&current_exe) {
+        println!("\n  texforge was installed with cargo.");
+        println!("  Run: cargo install --force texforge\n");
+        std::process::exit(0);
+    }
+
+    version_checker::download_and_replace("UniverLab", "texforge", version, &current_exe)
 }

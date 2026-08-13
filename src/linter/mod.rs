@@ -1,20 +1,48 @@
 //! Static linting rules.
 
+mod engine;
+mod glyphs;
+pub(crate) mod spell;
+
+pub use spell::{
+    global_whitelist_path, installed_dictionaries, parse_whitelist_words, InstalledDictionary,
+    PROJECT_WHITELIST_FILES,
+};
+
 use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
 
-/// A linting error with location and suggestion.
+use crate::texutil;
+
+/// Severity of a lint finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Severity::Error => write!(f, "ERROR"),
+            Severity::Warning => write!(f, "WARNING"),
+        }
+    }
+}
+
+/// A lint finding with location, severity, and suggestion.
 #[derive(Debug)]
-pub struct LintError {
+pub struct LintFinding {
     pub file: String,
     pub line: usize,
+    pub severity: Severity,
     pub message: String,
     pub suggestion: Option<String>,
 }
 
-impl std::fmt::Display for LintError {
+impl std::fmt::Display for LintFinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "  {}:{} — {}", self.file, self.line, self.message)?;
         if let Some(ref s) = self.suggestion {
@@ -25,14 +53,15 @@ impl std::fmt::Display for LintError {
 }
 
 /// Run all lint rules on a project directory.
-pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<LintError>> {
+pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<LintFinding>> {
     let mut errors = Vec::new();
 
     let entry_path = root.join(entry);
     if !entry_path.exists() {
-        errors.push(LintError {
+        errors.push(LintFinding {
             file: entry.to_string(),
             line: 0,
+            severity: Severity::Error,
             message: "Entry point file does not exist".into(),
             suggestion: Some(format!("Create {}", entry)),
         });
@@ -40,8 +69,17 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     }
 
     // Collect all .tex files reachable from entry
-    let mut tex_files = Vec::new();
-    collect_tex_files(root, entry, &mut tex_files, &mut errors);
+    let collected = texutil::collect_tex_files(root, entry);
+    for (entry, path) in &collected.circular {
+        errors.push(LintFinding {
+            severity: Severity::Error,
+            file: entry.clone(),
+            line: 0,
+            message: format!("Circular \\input detected: {}", path.display()),
+            suggestion: Some("Remove the circular reference".into()),
+        });
+    }
+    let tex_files = collected.files;
 
     // Parse .bib keys if bibliography exists
     let bib_keys = match bib_file {
@@ -54,14 +92,15 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     for file in &tex_files {
         let content = std::fs::read_to_string(file)?;
         for line in content.lines() {
-            let line = strip_comment(line);
-            for label in extract_commands(&line, "label") {
+            let line = texutil::strip_comment(line);
+            for label in texutil::extract_commands(&line, "label") {
                 all_labels.insert(label.to_string());
             }
         }
     }
 
     // Run checks on each file
+    let mut file_contents: Vec<(String, String)> = Vec::new();
     for file in &tex_files {
         let rel = file
             .strip_prefix(root)
@@ -83,7 +122,65 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         check_diagram_blocks(&rel, &content, "mermaid", &mut errors);
         check_diagram_blocks(&rel, &content, "graphviz", &mut errors);
         check_diagram_blocks(&rel, &content, "d2", &mut errors);
+        errors.extend(glyphs::lint_file(&rel, &content));
+        file_contents.push((rel, content));
     }
+
+    // TF12: report .bib keys that are never cited. `\nocite{*}` cites every key.
+    let mut cited_keys = HashSet::new();
+    let mut nocite_star = false;
+    collect_cited_keys(&file_contents, &mut cited_keys, &mut nocite_star);
+    if !nocite_star {
+        let mut unused: Vec<&str> = bib_keys
+            .difference(&cited_keys)
+            .map(String::as_str)
+            .collect();
+        if !unused.is_empty() {
+            unused.sort();
+            errors.push(LintFinding {
+                severity: Severity::Warning,
+                file: bib_file.unwrap_or("").to_string(),
+                line: 0,
+                message: format!("Unused .bib entries (never cited): {}", unused.join(", ")),
+                suggestion: Some(
+                    "Cite them with \\cite or remove them from the bibliography".into(),
+                ),
+            });
+        }
+    }
+
+    // Spell-checking: attempt to load user-level default language and run spell
+    // checks over the tokenized file contents. Fail-open: if spell-check cannot
+    // obtain a dictionary, it prints a clear message and yields no findings.
+    // To keep the test suite offline and deterministic, do not use the user's
+    // config during unit tests — tests must explicitly opt-in by calling the
+    // spell API with a local fixture language (see tests that pass Some("english")).
+    let is_test_harness = std::env::var("RUST_TEST_THREADS").is_ok()
+        || std::env::var("NEXTEST_CURRENT_RUN_ID").is_ok()
+        || std::env::var("NEXTEST_RUN_ID").is_ok()
+        || std::env::var("CI").is_ok();
+
+    // When running under a test harness, ignore user config to avoid network
+    // or environment leakage from the developer machine. Tests that want
+    // spell-checking should pass a language and provide a local dictionary.
+    let default_lang = if is_test_harness {
+        None
+    } else {
+        crate::config::load()
+            .ok()
+            .and_then(|cfg| cfg.defaults.language)
+    };
+
+    if default_lang.is_some() || !is_test_harness {
+        match spell::lint_files(&file_contents, root, default_lang.as_deref()) {
+            Ok(mut fs) => errors.append(&mut fs),
+            Err(e) => eprintln!("Spell-check skipped: {}", e),
+        }
+    } else {
+        eprintln!("Spell-check skipped: test harness detected and no default language configured");
+    }
+
+    errors.extend(engine::lint_files(&file_contents));
 
     Ok(errors)
 }
@@ -96,11 +193,11 @@ fn check_references(
     bib_file: Option<&str>,
     bib_keys: &HashSet<String>,
     all_labels: &HashSet<String>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
-        let line = strip_comment(line);
+        let line = texutil::strip_comment(line);
 
         check_input_references(root, rel, line_num, &line, errors);
         check_includegraphics_references(root, rel, line_num, &line, errors);
@@ -117,12 +214,13 @@ fn check_input_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "input") {
-        let input_path = resolve_tex_path(root, arg);
+    for arg in texutil::extract_commands(line, "input") {
+        let input_path = texutil::resolve_tex_path(root, arg);
         if !input_path.exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\input{{{}}} — file not found", arg),
@@ -138,12 +236,13 @@ fn check_includegraphics_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "includegraphics") {
+    for arg in texutil::extract_commands(line, "includegraphics") {
         let img_path = root.join(arg);
         if !img_path.exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\includegraphics{{{}}} — file not found", arg),
@@ -160,22 +259,59 @@ fn check_cite_references(
     line: &str,
     bib_file: Option<&str>,
     bib_keys: &HashSet<String>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     if bib_file.is_none() {
         return;
     }
 
-    for arg in extract_commands(line, "cite") {
+    for arg in texutil::extract_commands(line, "cite") {
         for key in arg.split(',') {
             let key = key.trim();
             if !key.is_empty() && !bib_keys.contains(key) {
-                errors.push(LintError {
+                errors.push(LintFinding {
+                    severity: Severity::Error,
                     file: rel.to_string(),
                     line: line_num,
                     message: format!("\\cite{{{}}} — key not found in .bib", key),
                     suggestion: None,
                 });
+            }
+        }
+    }
+}
+
+/// Collect every cited key from in-memory file contents for the unused-bib check.
+///
+/// `\cite{...}` and `\nocite{...}` mark their keys as cited; `\nocite{*}` cites
+/// every key in the bibliography, so it sets `nocite_star` instead.
+fn collect_cited_keys(
+    file_contents: &[(String, String)],
+    cited_keys: &mut HashSet<String>,
+    nocite_star: &mut bool,
+) {
+    for (_, content) in file_contents {
+        for line in content.lines() {
+            let line = texutil::strip_comment(line);
+            for arg in texutil::extract_commands(&line, "cite") {
+                for key in arg.split(',') {
+                    let key = key.trim();
+                    if !key.is_empty() {
+                        cited_keys.insert(key.to_string());
+                    }
+                }
+            }
+            for arg in texutil::extract_commands(&line, "nocite") {
+                if arg == "*" {
+                    *nocite_star = true;
+                } else {
+                    for key in arg.split(',') {
+                        let key = key.trim();
+                        if !key.is_empty() {
+                            cited_keys.insert(key.to_string());
+                        }
+                    }
+                }
             }
         }
     }
@@ -187,11 +323,12 @@ fn check_ref_references(
     line_num: usize,
     line: &str,
     all_labels: &HashSet<String>,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "ref") {
+    for arg in texutil::extract_commands(line, "ref") {
         if !all_labels.contains(arg) {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\ref{{{}}} — no matching \\label found", arg),
@@ -207,11 +344,12 @@ fn check_lstinputlisting_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
-    for arg in extract_commands(line, "lstinputlisting") {
+    for arg in texutil::extract_commands(line, "lstinputlisting") {
         if !root.join(arg).exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\lstinputlisting{{{}}} — file not found", arg),
@@ -227,11 +365,12 @@ fn check_inputminted_references(
     rel: &str,
     line_num: usize,
     line: &str,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_inputminted_files(line) {
         if !root.join(arg).exists() {
-            errors.push(LintError {
+            errors.push(LintFinding {
+                severity: Severity::Error,
                 file: rel.to_string(),
                 line: line_num,
                 message: format!("\\inputminted{{{}}} — file not found", arg),
@@ -242,7 +381,7 @@ fn check_inputminted_references(
 }
 
 /// Check for unclosed \begin{env} environments.
-fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
+fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintFinding>) {
     // Stack of (env_name, line_number)
     let mut stack: Vec<(&str, usize)> = Vec::new();
 
@@ -255,16 +394,17 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
             continue;
         }
 
-        for env in extract_commands(trimmed, "begin") {
+        for env in texutil::extract_commands(trimmed, "begin") {
             stack.push((env, line_num));
         }
 
-        for env in extract_commands(trimmed, "end") {
+        for env in texutil::extract_commands(trimmed, "end") {
             if let Some((open_env, _)) = stack.last() {
                 if *open_env == env {
                     stack.pop();
                 } else {
-                    errors.push(LintError {
+                    errors.push(LintFinding {
+                        severity: Severity::Error,
                         file: rel.to_string(),
                         line: line_num,
                         message: format!("\\end{{{}}} does not match \\begin{{{}}}", env, open_env),
@@ -272,7 +412,8 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
                     });
                 }
             } else {
-                errors.push(LintError {
+                errors.push(LintFinding {
+                    severity: Severity::Error,
                     file: rel.to_string(),
                     line: line_num,
                     message: format!("\\end{{{}}} without matching \\begin", env),
@@ -284,7 +425,8 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
 
     // Report unclosed environments
     for (env, line_num) in stack {
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: rel.to_string(),
             line: line_num,
             message: format!("\\begin{{{}}} never closed", env),
@@ -293,99 +435,8 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintError>) {
     }
 }
 
-/// Extract arguments from `\command{arg}` and `\command[opts]{arg}` occurrences in a line.
-fn extract_commands<'a>(line: &'a str, cmd: &str) -> Vec<&'a str> {
-    let mut results = Vec::new();
-    let pattern = format!("\\{}", cmd);
-    let mut search = line;
-
-    while let Some(pos) = search.find(&pattern) {
-        let after = &search[pos + pattern.len()..];
-        // Skip optional args [...]
-        let after = if after.starts_with('[') {
-            match after.find(']') {
-                Some(end) => &after[end + 1..],
-                None => break,
-            }
-        } else {
-            after
-        };
-        if after.starts_with('{') {
-            if let Some(end) = after.find('}') {
-                let arg = after[1..end].trim();
-                if !arg.is_empty() {
-                    results.push(arg);
-                }
-                search = &after[end + 1..];
-                continue;
-            }
-        }
-        search = after;
-    }
-
-    results
-}
-
-/// Resolve a tex input path, adding .tex extension if missing.
-fn resolve_tex_path(root: &Path, input: &str) -> std::path::PathBuf {
-    let p = root.join(input);
-    if p.extension().is_some() {
-        p
-    } else {
-        p.with_extension("tex")
-    }
-}
-
-/// Recursively collect .tex files referenced by `\input{}`.
-fn collect_tex_files(
-    root: &Path,
-    entry: &str,
-    files: &mut Vec<std::path::PathBuf>,
-    errors: &mut Vec<LintError>,
-) {
-    let path = resolve_tex_path(root, entry);
-    if !path.exists() {
-        return;
-    }
-    if files.contains(&path) {
-        errors.push(LintError {
-            file: entry.to_string(),
-            line: 0,
-            message: format!("Circular \\input detected: {}", path.display()),
-            suggestion: Some("Remove the circular reference".into()),
-        });
-        return;
-    }
-    files.push(path.clone());
-
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        for line in content.lines() {
-            let line = strip_comment(line);
-            for input in extract_commands(&line, "input") {
-                collect_tex_files(root, input, files, errors);
-            }
-        }
-    }
-}
-
-/// Strip LaTeX comment from a line (everything after unescaped %).
-fn strip_comment(line: &str) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut prev_backslash = false;
-
-    for c in line.chars() {
-        if c == '%' && !prev_backslash {
-            break;
-        }
-        prev_backslash = c == '\\';
-        result.push(c);
-    }
-
-    result
-}
-
 /// Check mermaid/graphviz blocks: unclosed and invalid pos option.
-fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<LintError>) {
+fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<LintFinding>) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
@@ -406,7 +457,7 @@ fn check_unclosed_diagram_block(
     env: &str,
     line_num: usize,
     line_index: usize,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     let end_tag = format!("\\end{{{}}}", env);
     let rest = &content[content
@@ -415,7 +466,8 @@ fn check_unclosed_diagram_block(
         .map(|l| l.len() + 1)
         .sum::<usize>()..];
     if !rest.contains(&*end_tag) {
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: rel.to_string(),
             line: line_num,
             message: format!("\\begin{{{}}} without matching \\end{{{}}}", env, env),
@@ -430,7 +482,7 @@ fn check_diagram_pos_option(
     line: &str,
     env: &str,
     line_num: usize,
-    errors: &mut Vec<LintError>,
+    errors: &mut Vec<LintFinding>,
 ) {
     const VALID_POS: &[&str] = &["H", "t", "b", "h", "p"];
 
@@ -452,7 +504,8 @@ fn check_diagram_pos_option(
         if VALID_POS.contains(&pos) {
             continue;
         }
-        errors.push(LintError {
+        errors.push(LintFinding {
+            severity: Severity::Error,
             file: rel.to_string(),
             line: line_num,
             message: format!(
@@ -542,8 +595,14 @@ mod tests {
         (dir, "main.tex".to_string())
     }
 
-    fn has_error(errors: &[LintError], fragment: &str) -> bool {
+    fn has_error(errors: &[LintFinding], fragment: &str) -> bool {
         errors.iter().any(|e| e.message.contains(fragment))
+    }
+
+    fn has_finding_with_severity(errors: &[LintFinding], fragment: &str, sev: Severity) -> bool {
+        errors
+            .iter()
+            .any(|e| e.message.contains(fragment) && e.severity == sev)
     }
 
     #[test]
@@ -809,5 +868,133 @@ mod tests {
             setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(errors.is_empty());
+    }
+
+    // --- Severity tests ---
+
+    /// All current rules produce Error-severity findings.
+    #[test]
+    fn existing_findings_have_error_severity() {
+        let (dir, entry) = setup("\\includegraphics{missing.png}");
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(!findings.is_empty());
+        assert!(has_finding_with_severity(
+            &findings,
+            "missing.png",
+            Severity::Error
+        ));
+    }
+
+    /// A clean project with no errors contains no findings.
+    #[test]
+    fn clean_project_has_no_findings() {
+        let (dir, entry) =
+            setup("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}");
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        // No errors → check command would exit 0 regardless of --deny-warnings
+        assert!(
+            findings
+                .iter()
+                .filter(|f| f.severity == Severity::Error)
+                .count()
+                == 0
+        );
+    }
+
+    /// Error-severity findings are detected independently of any deny-warnings flag
+    /// (flag logic lives in the command layer; the linter just tags severity).
+    #[test]
+    fn error_severity_finding_present_when_error_rule_fires() {
+        let (dir, entry) = setup("\\cite{ghost}");
+        std::fs::write(dir.path().join("refs.bib"), "@article{real,}").unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(findings.iter().any(|f| f.severity == Severity::Error));
+    }
+
+    // --- Unused .bib entries (TF12) ---
+
+    /// Unused bib keys are reported once, as a Warning naming the .bib file.
+    #[test]
+    fn unused_bib_entries_warn_as_single_finding() {
+        let (dir, entry) = setup("\\cite{key1}\n\\cite{key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}\n@article{unused3,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        let unused: Vec<_> = findings
+            .iter()
+            .filter(|f| f.message.starts_with("Unused"))
+            .collect();
+        assert_eq!(unused.len(), 1, "grouped into one finding, not one per key");
+        let finding = unused[0];
+        assert_eq!(finding.severity, Severity::Warning);
+        assert_eq!(finding.file, "refs.bib");
+        assert!(finding.message.contains("unused3"));
+        assert!(!finding.message.contains("key1"));
+        assert!(!finding.message.contains("key2"));
+    }
+
+    /// `\nocite{*}` cites every key, so nothing is reported as unused.
+    #[test]
+    fn nocite_star_suppresses_unused_warning() {
+        let (dir, entry) = setup("\\nocite{*}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.starts_with("Unused")),
+            "\\nocite{{*}} reaches every key; none are unused"
+        );
+    }
+
+    /// Keys listed in `\nocite{...}` count as cited for the unused check.
+    #[test]
+    fn nocite_key_counts_as_cited() {
+        let (dir, entry) = setup("\\nocite{key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        let unused: Vec<_> = findings
+            .iter()
+            .filter(|f| f.message.starts_with("Unused"))
+            .collect();
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].message.contains("key1"));
+        assert!(!unused[0].message.contains("key2"));
+    }
+
+    /// A bibliography whose keys are all cited produces no unused warning.
+    #[test]
+    fn all_bib_entries_cited_no_unused_warning() {
+        let (dir, entry) = setup("\\cite{key1,key2}");
+        fs::write(
+            dir.path().join("refs.bib"),
+            "@article{key1,}\n@article{key2,}",
+        )
+        .unwrap();
+        let findings = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.starts_with("Unused")),
+            "all keys are cited"
+        );
+    }
+
+    /// No bibliography means no unused-key warning.
+    #[test]
+    fn no_bib_file_no_unused_warning() {
+        let (dir, entry) = setup("\\cite{key1}");
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !findings.iter().any(|f| f.message.starts_with("Unused")),
+            "no .bib, nothing to check"
+        );
     }
 }

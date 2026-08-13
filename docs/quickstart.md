@@ -47,6 +47,8 @@ texforge build          # compile to <title>.pdf in the project root
 texforge build --watch  # rebuild automatically while you edit
 ```
 
+`texforge check` also validates spelling using language-specific dictionaries (detected from your document or configured as a fallback).
+
 ## Project layout
 
 A texforge project is a regular LaTeX project plus a `project.toml`

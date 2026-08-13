@@ -21,6 +21,8 @@
 
 Texforge is a unified LaTeX workspace — one tool for writing, rendering diagrams (Mermaid, Graphviz), and building PDFs. Set it up once and stay focused on your document.
 
+**[univerlab.org/texforge](https://univerlab.org/texforge)** — the project page: what it does and why it exists. Command-level documentation lives in [`docs/`](docs/).
+
 ---
 
 ## Features
@@ -189,7 +191,18 @@ texforge init
 | `texforge clean` | Remove build artifacts |
 | `texforge fmt` | Format .tex files |
 | `texforge fmt --check` | Check formatting without modifying |
-| `texforge check` | Lint without compiling |
+| `texforge check` | Lint without compiling (includes spell-check) |
+| `texforge spell add <word>` | Add word to personal dictionary (default: global) |
+| `texforge spell list` | List personal dictionary words |
+| `texforge spell remove <word>` | Remove word from personal dictionary |
+| `texforge pdf text` | Extract text as seen by readers / accessibility tools |
+| `texforge pdf info` | Report pages, fonts, embedding status, metadata |
+| `texforge pdf pages` | List which section opens each page (diff-friendly) |
+| `texforge pdf check` | Verify significant source words appear in PDF |
+| `texforge outline` | Show document's section tree |
+| `texforge stats` | Count words by section (or by file with `--by file`) |
+| `texforge preview` | Rasterize PDF to PNG pages |
+| `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, project |
 | `texforge config` | Interactive wizard to set user details (name, email, institution, language) |
 | `texforge config list` | Show all configured values |
 | `texforge config <key>` | Show value for key (name, email, institution, language) |
@@ -335,6 +348,143 @@ One canonical output regardless of input style. Git diffs stay clean.
 texforge fmt           # format in place
 texforge fmt --check   # check without modifying (CI-friendly)
 ```
+
+---
+
+## Spell-Check
+
+`texforge check` now includes automatic spell-checking. The language is detected from the document itself:
+
+- `\usepackage[spanish]{babel}` — Spanish (Hunspell dictionary)
+- `\usepackage[polyglossia]{...}` — Language extracted from polyglossia
+- No language declaration — falls back to configured default (`texforge config language`)
+
+Dictionaries download automatically on first use into `~/.texforge/dicts/`. When a language is unsupported, checking is skipped with a message naming that language (never checks against the wrong dictionary).
+
+### Personal Dictionary
+
+Maintain a personal word list to skip custom terms, proper names, and project-specific jargon:
+
+```bash
+# Add words to the global dictionary (applies to all projects)
+texforge spell add "MyCompany" "LaTeX" "RGB"
+
+# Add to the current project only
+texforge spell add "ProjectCodename" --local
+
+# List current dictionary
+texforge spell list
+
+# Remove a word
+texforge spell remove "MyCompany"
+```
+
+Scopes are unioned at check time — both global and project-local words are respected.
+
+---
+
+## PDF Inspection
+
+`texforge pdf` extracts and inspects the compiled PDF without re-rendering:
+
+### Text Extraction
+
+```bash
+# Print all text as a reader or accessibility tool would see it
+texforge pdf text
+
+# Keep ligature codepoints (ﬁ, ﬂ, etc.) as separate characters
+texforge pdf text --raw
+```
+
+### Metadata and Fonts
+
+```bash
+# Report page count, fonts, whether fonts are embedded, and metadata
+texforge pdf info
+```
+
+### Page Map
+
+```bash
+# List which section opens each page (one line per page)
+# Output designed for version control diffs
+texforge pdf pages
+```
+
+### Fidelity Check
+
+```bash
+# Verify that significant source words survived into the PDF text
+# (catches missing fonts, encoding issues, rendering bugs)
+texforge pdf check
+```
+
+---
+
+## Outline
+
+Print the section tree with LaTeX markup resolved to readable text:
+
+```bash
+texforge outline
+
+# JSON output for scripting
+texforge outline --json
+```
+
+---
+
+## Statistics
+
+Word count by section or by file:
+
+```bash
+# Count words per section (default)
+texforge stats
+
+# Count words per .tex file
+texforge stats --by file
+
+# JSON output
+texforge stats --json
+```
+
+---
+
+## Preview
+
+Rasterize the compiled PDF to PNG pages:
+
+```bash
+# Rasterize all pages (writes to ./preview/ by default)
+texforge preview
+
+# Single page
+texforge preview --page 1
+
+# Custom output directory
+texforge preview --out ./previews
+
+# Scale up for higher resolution (default: 1.0 px per PDF point)
+texforge preview --scale 2.0
+```
+
+---
+
+## Doctor
+
+Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, and project state):
+
+```bash
+texforge doctor
+```
+
+Reports:
+- Whether Tectonic is installed and functional
+- Disk usage of the Tectonic cache and downloaded templates
+- Available fonts and dictionaries
+- Whether the current directory is a recognized texforge project
 
 ---
 

@@ -20,13 +20,16 @@ texforge <command> [options]
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |
 | `texforge build --watch --delay <s>` | Custom debounce delay (default: 2s) |
+| `texforge build --reproducible` | Pin `SOURCE_DATE_EPOCH` to a fixed epoch so identical source yields an identical PDF |
+| `texforge build --reproducible=<epoch>` | Reproducible build with an explicit epoch (seconds since the Unix epoch) |
 | `texforge clean` | Remove build artifacts |
 
 ## Quality
 
 | Command | Description |
 |---|---|
-| `texforge check` | Lint without compiling |
+| `texforge check` | Lint without compiling (includes spell-check) |
+| `texforge check --deny-warnings` | Treat warnings as errors |
 | `texforge fmt` | Format `.tex` files in place |
 | `texforge fmt --check` | Check formatting without modifying (CI-friendly) |
 
@@ -39,6 +42,54 @@ texforge <command> [options]
 | `texforge template add <name>` | Download a template from the registry |
 | `texforge template remove <name>` | Remove an installed template |
 | `texforge template validate <name>` | Verify template compatibility |
+
+## Spell-Check
+
+| Command | Description |
+|---|---|
+| `texforge spell add <words>...` | Add word(s) to personal dictionary |
+| `texforge spell add <words>... --local` | Add to project-local dictionary instead of global |
+| `texforge spell list` | List all words in personal dictionary |
+| `texforge spell list --local` | List project-local dictionary |
+| `texforge spell remove <words>...` | Remove word(s) from personal dictionary |
+| `texforge spell remove <words>... --local` | Remove from project-local dictionary |
+
+Default scope is global (`~/.texforge/spell-words`). Both scopes are unioned at check time.
+
+## PDF Inspection
+
+| Command | Description |
+|---|---|
+| `texforge pdf text` | Extract text as seen by readers and accessibility tools |
+| `texforge pdf text --raw` | Keep ligature codepoints as separate characters |
+| `texforge pdf info` | Report pages, fonts, embedding status, metadata |
+| `texforge pdf pages` | List which section opens each page (diff-friendly) |
+| `texforge pdf check` | Verify significant source words appear in the PDF text |
+
+## Document Analysis
+
+| Command | Description |
+|---|---|
+| `texforge outline` | Print the section tree |
+| `texforge outline --json` | Output as JSON |
+| `texforge stats` | Count words by section (default) |
+| `texforge stats --by file` | Count words by `.tex` file |
+| `texforge stats --json` | Output as JSON |
+
+## Preview
+
+| Command | Description |
+|---|---|
+| `texforge preview` | Rasterize all PDF pages to PNG (writes to `./preview/`) |
+| `texforge preview --page <N>` | Rasterize page N only (1-based) |
+| `texforge preview --scale <SCALE>` | Scale factor for rasterization (default: 1.0) |
+| `texforge preview --out <DIR>` | Output directory (default: `./preview/`) |
+
+## Diagnostics
+
+| Command | Description |
+|---|---|
+| `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, and project |
 
 ## Configuration
 
