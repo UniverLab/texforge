@@ -673,26 +673,15 @@ fn resolve_dict<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<&'a Di
 /// from the page where the previous *matched* section was found for the
 /// first page whose text contains this section's title as a line.
 ///
-/// A page is opened by the *first* matched heading that begins on it with
-/// nothing but whitespace before it in the page's text — that is the
-/// heading that starts the page's content, as opposed to a heading that
-/// merely appears partway down a page whose start still belongs to the
-/// previous section. A page with no carry-over yet (no section has opened
-/// before it) is opened by its first matched heading regardless of what
-/// precedes it, since there is nothing else to attribute the page to.
-///
-/// If the first matched heading is preceded by other text (a diagram or a
-/// table spilling over from the previous page, say) and a *second* heading
-/// also matched later on the same page, the page has demonstrably moved
-/// past that second heading too by the time it ends, even though neither
-/// one opened the page outright — so that page (and every page after it,
-/// until something opens cleanly again) is attributed to the last such
-/// later heading, preferring a top-level one over a subsection when both
-/// are present. A page whose only match is its (non-opening) first heading
-/// carries the previous page's section forward unchanged instead, since one
-/// non-opening match tells us nothing beyond what was already known — this
-/// is what keeps a heading mentioned partway down a page, with nothing
-/// after it, from being mistaken for that page's section.
+/// A page is opened by the *first* matched heading that appears on it, in
+/// document order — never the last. Whatever precedes that heading's line
+/// (a diagram's rendered vector text spilling over the top of the page from
+/// a floated figure, a caption, blank lines) is not itself a section, so it
+/// cannot be what the page opens with instead: the heading is still the
+/// first piece of section content the page reaches, however much non-section
+/// filler sits above it. A page with no matched heading of its own carries
+/// the previous page's section forward unchanged; pages before the first
+/// match anywhere stay unattributed.
 ///
 /// Matching keys on page position, not on a strict in-order text-equality
 /// chain: a title that fails to match anywhere (for example a heading whose
@@ -723,23 +712,15 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
     let mut out = Vec::with_capacity(page_texts.len());
     let mut current: Option<(String, String)> = None;
     let mut match_idx = 0usize;
-    for (i, page) in normalized_pages.iter().enumerate() {
-        let page_start = match_idx;
-        while match_idx < matches.len() && matches[match_idx].0 == i {
-            match_idx += 1;
-        }
-        let page_matches = &matches[page_start..match_idx];
-
-        if let Some((_, num, title)) = page_matches.first() {
-            if current.is_none() || section_title_opens_page(page, title) {
-                current = Some((num.clone(), title.clone()));
-            } else if let Some((_, num, title)) = page_matches[1..]
-                .iter()
-                .rev()
-                .find(|(_, num, _)| !num.contains('.'))
-                .or_else(|| page_matches[1..].last())
-            {
-                current = Some((num.clone(), title.clone()));
+    for i in 0..normalized_pages.len() {
+        // `matches` is grouped by page in document order, so the entry at
+        // `match_idx` — if it belongs to this page at all — is the first
+        // (not last) section matched on it.
+        if match_idx < matches.len() && matches[match_idx].0 == i {
+            let (_, num, title) = &matches[match_idx];
+            current = Some((num.clone(), title.clone()));
+            while match_idx < matches.len() && matches[match_idx].0 == i {
+                match_idx += 1;
             }
         }
         out.push(PdfPageBreak {
@@ -817,26 +798,6 @@ fn section_title_in_page(page_text: &str, title: &str) -> bool {
     page_text
         .lines()
         .any(|line| line_is_section_heading(line.trim(), needle))
-}
-
-/// True when `title`'s line is the first non-blank content on the page —
-/// i.e. nothing but whitespace precedes it.
-fn section_title_opens_page(page_text: &str, title: &str) -> bool {
-    let needle = normalize_pdf_text(title);
-    let needle = needle.trim();
-    if needle.is_empty() {
-        return false;
-    }
-    for line in page_text.lines() {
-        let trimmed = line.trim();
-        if line_is_section_heading(trimmed, needle) {
-            return true;
-        }
-        if !trimmed.is_empty() {
-            return false;
-        }
-    }
-    false
 }
 
 /// Format page breaks for diff-friendly output: one line per page.
@@ -1013,7 +974,13 @@ mod tests {
     }
 
     #[test]
-    fn page_breaks_carry_over_when_first_heading_is_preceded_by_body_text() {
+    fn page_breaks_a_single_match_wins_even_when_preceded_by_other_text() {
+        // A page's only matched heading is what opens it, regardless of what
+        // precedes that heading's line — text before it (spillover, a
+        // caption, a diagram) is not itself a section, so it cannot be what
+        // the page opens with instead. See `page_breaks_defect_2_...` below
+        // for the real-document shape of this: a heading preceded by a
+        // diagram's garbled rendered text, not real prose spillover.
         let pages = vec![
             "Alpha\nBody text under Alpha continues here.".to_string(),
             "Trailing body text from Alpha spills onto this page.\nBeta\nMore Beta content."
@@ -1024,7 +991,7 @@ mod tests {
         let formatted = format_page_breaks(&breaks);
         assert_eq!(
             formatted,
-            "page=1 section=1 title=Alpha\npage=2 section=1 title=Alpha"
+            "page=1 section=1 title=Alpha\npage=2 section=2 title=Beta"
         );
     }
 
@@ -1041,6 +1008,32 @@ mod tests {
         assert_eq!(
             formatted,
             "page=1 section= title=\npage=2 section=1 title=Gamma\npage=3 section=1 title=Gamma"
+        );
+    }
+
+    #[test]
+    fn page_breaks_several_headings_on_a_page_reports_the_first_not_the_last() {
+        // Defect 1: a page with multiple matched headings must report the
+        // *first* one, not the last — and this must hold even once a
+        // section has already opened on an earlier page (`current` is
+        // already `Some`), which is the actual shape of the bug: a
+        // first-page-with-any-match short-circuit made this look fixed
+        // while the real failure (pages 4-6 of examples/texforge-capabilites,
+        // each carrying a section already open from before) went uncaught.
+        let pages = vec![
+            "Alpha\nBody under Alpha.".to_string(),
+            "Leftover Alpha text spills here.\nBeta\nGamma\nMore body.".to_string(),
+        ];
+        let sections = vec![
+            ("1".into(), "Alpha".into()),
+            ("2".into(), "Beta".into()),
+            ("3".into(), "Gamma".into()),
+        ];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section=1 title=Alpha\npage=2 section=2 title=Beta"
         );
     }
 
@@ -1161,30 +1154,73 @@ mod tests {
     }
 
     #[test]
-    fn page_breaks_full_example_structure_tf_f() {
-        // TF-F: a seven-page fixture reproducing
-        // examples/texforge-capabilites' structure — a table of contents
-        // mixing both TOC shapes (leaderless top-level entries, dot-leader
-        // subsection entries), then one top-level section per page. Every
-        // top-level section must be reported on the page where it begins;
-        // this is the shape of test the previous spec lacked.
+    fn page_breaks_full_example_structure_tf_g() {
+        // TF-G: a seven-page fixture reproducing examples/texforge-capabilites'
+        // actual structure — TOC page mixing both TOC shapes (leaderless
+        // top-level entries, dot-leader subsection entries), then the real
+        // per-page content including the garbled letter-spaced text that
+        // `pdf-extract` produces for the document's embedded diagrams. That
+        // filler is what a prior attempt's fixture omitted: without it every
+        // heading happens to be the first line of its page, so a page's only
+        // match always "opens" the page and both defects stay hidden. Pages
+        // 4-6 additionally carry more than one matched heading, so this
+        // fixture alone would have caught both defect 1 (last match wins,
+        // should be first) and defect 2 (a single non-opening match was
+        // dropped in favor of carrying the previous section forward).
         let pages = vec![
             "1. Introducción 2\n\
              1.1. Antecedentes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2\n\
              2. Diagramas Embebidos 2\n\
              2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . . . . . . . . . . 3\n\
              3. Matemáticas 4\n\
+             3.1. Ecuaciones en línea . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4\n\
+             3.3. Matrices . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4\n\
              4. Citas Bibliográficas 5\n\
              5. Listados de Código 5\n\
-             6. Tablas 6"
+             5.2. LaTeX . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6\n\
+             6. Tablas 6\n\
+             7. Comandos de Texforge 7"
                 .to_string(),
-            "1. Introducción\nTexforge simplifica el flujo de trabajo académico.".to_string(),
-            "2. Diagramas Embebidos\nTexforge renderiza diagramas nativamente.".to_string(),
-            "3. Matemáticas\nLa fórmula cuadrática se expresa como sigue.".to_string(),
-            "4. Citas Bibliográficas\nTexforge gestiona automáticamente las referencias."
+            "1. Introducción\nTexforge simplifica el flujo de trabajo académico.\n\
+             1.1. Antecedentes\nLa edición de documentos académicos en LATEX requiere ...\n\
+             2. Diagramas Embebidos\nTexforge renderiza diagramas directamente."
                 .to_string(),
-            "5. Listados de Código\nEjemplo de función en Python.".to_string(),
-            "6. Tablas\nComparación de motores de renderizado.".to_string(),
+            // Real garbled text from the Mermaid diagram (Figura 1) spills
+            // onto the top of the page before the 2.4 heading — this is the
+            // exact shape of defect 2.
+            "l o o p [ D i a g r a m a s   e m b e b i d o s ]\n\
+             Figura 1: Secuencia de compilación de Texforge\n\
+             2.4. Estilos de Diagrama (style)\n\
+             Los tres entornos aceptan también un atributo style."
+                .to_string(),
+            // Real garbled preset-diagram text before three headings — the
+            // shape of defect 1: must report the first (3), not the last
+            // (3.3).
+            "l o p [ D i D a [ g r m s g   D e b i D\n\
+             El preset editorial sirve para documentos que se leen en pantalla.\n\
+             3. Matemáticas\n\
+             3.1. Ecuaciones en línea\n\
+             La fórmula cuadrática se expresa como sigue.\n\
+             3.3. Matrices\n\
+             A ="
+                .to_string(),
+            "C ó d i g o   L a T e X\n\
+             Figura 3: Pipeline de renderizado\n\
+             4. Citas Bibliográficas\n\
+             Texforge gestiona automáticamente las referencias.\n\
+             5. Listados de Código\n\
+             5.1. Python"
+                .to_string(),
+            "5.2. LaTeX\n\
+             Listing 2: Estructura básica de Texforge\n\
+             6. Tablas\n\
+             Comparación de motores de renderizado."
+                .to_string(),
+            "7. Comandos de Texforge\n\
+             Cuadro 2: Resumen de comandos principales.\n\
+             8. Conclusión\n\
+             Texforge demuestra ser una herramienta completa."
+                .to_string(),
         ];
         let sections = vec![
             ("1".into(), "Introducción".into()),
@@ -1192,9 +1228,13 @@ mod tests {
             ("2".into(), "Diagramas Embebidos".into()),
             ("2.4".into(), "Estilos de Diagrama (style)".into()),
             ("3".into(), "Matemáticas".into()),
+            ("3.1".into(), "Ecuaciones en línea".into()),
+            ("3.3".into(), "Matrices".into()),
             ("4".into(), "Citas Bibliográficas".into()),
             ("5".into(), "Listados de Código".into()),
+            ("5.2".into(), "LaTeX".into()),
             ("6".into(), "Tablas".into()),
+            ("7".into(), "Comandos de Texforge".into()),
         ];
         let breaks = page_breaks(&pages, &sections);
         let formatted = format_page_breaks(&breaks);
@@ -1202,22 +1242,20 @@ mod tests {
             formatted,
             "page=1 section= title=\n\
              page=2 section=1 title=Introducción\n\
-             page=3 section=2 title=Diagramas Embebidos\n\
+             page=3 section=2.4 title=Estilos de Diagrama (style)\n\
              page=4 section=3 title=Matemáticas\n\
              page=5 section=4 title=Citas Bibliográficas\n\
-             page=6 section=5 title=Listados de Código\n\
-             page=7 section=6 title=Tablas"
+             page=6 section=5.2 title=LaTeX\n\
+             page=7 section=7 title=Comandos de Texforge"
         );
     }
 
     #[test]
-    fn page_breaks_a_later_match_on_a_non_opening_page_advances_the_carry_tf_f() {
-        // TF-F: when a page's first heading doesn't open it (preceded by
-        // spillover from the previous section) but a *second* heading also
-        // matched further down the same page, the page has demonstrably
-        // moved past that second heading too — so it, not the stale
-        // earlier section, is what's reported, and what carries forward
-        // into pages with no heading of their own.
+    fn page_breaks_a_later_match_on_a_page_does_not_override_the_first() {
+        // A page can carry more than one matched heading; the page is still
+        // reported as opened by the first one, and that is what carries
+        // forward into a following page with no heading of its own — never
+        // the later heading.
         let pages = vec![
             "Alpha\nBody under Alpha.".to_string(),
             "Trailing Alpha content spills onto this page.\nBeta\nMore text.\nGamma\nBody."
@@ -1233,7 +1271,41 @@ mod tests {
         let formatted = format_page_breaks(&breaks);
         assert_eq!(
             formatted,
-            "page=1 section=1 title=Alpha\npage=2 section=3 title=Gamma\npage=3 section=3 title=Gamma"
+            "page=1 section=1 title=Alpha\npage=2 section=2 title=Beta\npage=3 section=2 title=Beta"
+        );
+    }
+
+    #[test]
+    fn page_breaks_defect_2_regression_heading_preceded_by_diagram_junk() {
+        // Regression for defect 2: `2.4. Estilos de Diagrama (style)` is a
+        // real heading line from examples/texforge-capabilites (page 3 of
+        // the compiled PDF), but it is preceded by the garbled letter-spaced
+        // text `pdf-extract` produces for the Mermaid diagram rendered at
+        // the top of that page ("l o o p [ D i a g r a m a s ... ]", the
+        // literal extracted text of Figura 1). The buggy code required a
+        // page's first matched heading to be the very first non-blank line
+        // on the page or fall back to carrying the previous section forward;
+        // since nothing else on the page matched, it kept reporting the
+        // prior section ("1 Introducción") instead of "2.4". The fix: a
+        // page's first matched heading opens it regardless of what
+        // (non-section) text precedes it.
+        let pages = vec![
+            "1. Introducción\nTexforge simplifica el flujo de trabajo académico.".to_string(),
+            "l o o p [ D i a g r a m a s   e m b e b i d o s ]\n\
+             Figura 1: Secuencia de compilación de Texforge\n\
+             2.4. Estilos de Diagrama (style)\n\
+             Los tres entornos aceptan también un atributo style."
+                .to_string(),
+        ];
+        let sections = vec![
+            ("1".into(), "Introducción".into()),
+            ("2.4".into(), "Estilos de Diagrama (style)".into()),
+        ];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section=1 title=Introducción\npage=2 section=2.4 title=Estilos de Diagrama (style)"
         );
     }
 
