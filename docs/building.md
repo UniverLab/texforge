@@ -20,6 +20,32 @@ Compiles the project to `<title>.pdf` in the project root:
 On the first run texforge downloads the Tectonic binary into
 `~/.texforge/bin/` automatically.
 
+## Reproducible builds
+
+By default a build embeds a current timestamp, so the same source produces a
+different PDF on each run. For anything that compares outputs — visual
+regression, build caching, meaningful diffs — texforge can pin the build time:
+
+```bash
+texforge build --reproducible
+```
+
+This sets `SOURCE_DATE_EPOCH` for the Tectonic invocation. With no explicit
+value a fixed epoch is used (never "now"); a release can pin its own:
+
+```bash
+texforge build --reproducible=1700000000
+```
+
+The same behaviour can be made the default for a project in `project.toml`
+(see [Configuration](configuration.md)); the `--reproducible` flag wins when
+both are present.
+
+**The guarantee, and its limit:** identical source plus an identical Tectonic
+version yields an identical PDF. A different Tectonic version (or engine
+updates within it) can still change the output, and the setting does not alter
+the visible content of a document — it only pins the embedded time.
+
 ## Watch mode
 
 `texforge build --watch` watches `.tex` files and rebuilds automatically:
@@ -36,6 +62,43 @@ last build. Press `Ctrl+C` to stop.
 
 ```bash
 texforge clean   # remove build artifacts
+```
+
+## Preview
+
+`texforge preview` rasterizes the compiled PDF to PNG pages for quick visual review or for embedding in documentation:
+
+```bash
+# Rasterize all pages (writes to ./preview/)
+texforge preview
+
+# Single page
+texforge preview --page 1
+
+# Custom output directory
+texforge preview --out ./previews
+
+# Scale up for higher resolution (default: 1.0 pixel per PDF point)
+texforge preview --scale 2.0
+```
+
+## PDF Inspection
+
+Once built, the PDF can be inspected without re-compiling:
+
+```bash
+# Extract text as readers and accessibility tools see it
+texforge pdf text
+
+# Report pages, fonts, whether fonts are embedded, and metadata
+texforge pdf info
+
+# List which section opens each page (for diffing in version control)
+texforge pdf pages
+
+# Verify significant source words survived into the PDF
+# (catches missing fonts, encoding issues, rendering bugs)
+texforge pdf check
 ```
 
 ## Runtime directory

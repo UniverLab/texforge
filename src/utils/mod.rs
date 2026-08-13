@@ -191,4 +191,131 @@ mod tests {
         assert!(!build.path().join("build").exists());
         assert!(!build.path().join(".hidden").exists());
     }
+
+    #[test]
+    fn sanitize_empty_string() {
+        assert_eq!(sanitize_filename(""), "");
+    }
+
+    #[test]
+    fn sanitize_only_special_chars() {
+        assert_eq!(sanitize_filename("@#$!"), "");
+    }
+
+    #[test]
+    fn sanitize_hyphens_preserved() {
+        assert_eq!(sanitize_filename("my-tesis"), "my-tesis");
+    }
+
+    #[test]
+    fn sanitize_underscores_converted() {
+        assert_eq!(sanitize_filename("my_tesis"), "my-tesis");
+    }
+
+    #[test]
+    fn sanitize_leading_trailing_hyphens() {
+        assert_eq!(sanitize_filename("-hello-"), "hello");
+    }
+
+    #[test]
+    fn sanitize_multiple_consecutive_special() {
+        assert_eq!(sanitize_filename("a:::b"), "a-b");
+    }
+
+    #[test]
+    fn find_tex_files_finds_tex() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.tex"), "").unwrap();
+        std::fs::write(dir.path().join("readme.md"), "").unwrap();
+        let files = find_tex_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_string_lossy().contains("main.tex"));
+    }
+
+    #[test]
+    fn find_tex_files_excludes_build() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build/main.tex"), "").unwrap();
+        std::fs::write(dir.path().join("main.tex"), "").unwrap();
+        let files = find_tex_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn find_bib_files_finds_bib() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("refs.bib"), "").unwrap();
+        std::fs::write(dir.path().join("main.tex"), "").unwrap();
+        let files = find_bib_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_string_lossy().contains("refs.bib"));
+    }
+
+    #[test]
+    fn find_bib_files_excludes_build() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build/refs.bib"), "").unwrap();
+        std::fs::write(dir.path().join("refs.bib"), "").unwrap();
+        let files = find_bib_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn find_tex_files_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("chapters");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("ch1.tex"), "").unwrap();
+        std::fs::write(sub.join("ch2.tex"), "").unwrap();
+        let files = find_tex_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn data_dir_returns_path() {
+        let result = data_dir();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().contains(".texforge"));
+    }
+
+    #[test]
+    fn templates_dir_returns_path() {
+        let result = templates_dir();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().contains("templates"));
+    }
+
+    #[test]
+    fn mirror_assets_empty_dir() {
+        let src = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        mirror_assets(src.path(), build.path()).unwrap();
+        assert!(std::fs::read_dir(build.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn mirror_assets_skips_tex_files() {
+        let src = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("main.tex"), "").unwrap();
+        mirror_assets(src.path(), build.path()).unwrap();
+        assert!(!build.path().join("main.tex").exists());
+    }
+
+    #[test]
+    fn mirror_assets_nested_dirs() {
+        let src = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        let sub = src.path().join("a").join("b");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("file.txt"), "content").unwrap();
+        mirror_assets(src.path(), build.path()).unwrap();
+        let dest = build.path().join("a/b/file.txt");
+        assert!(dest.exists());
+        assert_eq!(std::fs::read_to_string(dest).unwrap(), "content");
+    }
 }

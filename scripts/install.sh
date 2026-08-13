@@ -131,12 +131,21 @@ SKILLS_REPO="https://github.com/UniverLab/skills"
 if [ -n "${SKIP_SKILL:-}" ]; then
   info "skill" "skipped (SKIP_SKILL set)"
 elif command -v npx >/dev/null 2>&1; then
-  info "skill" "adding '$SKILL' (npx skills add)"
-  if npx -y skills add "$SKILLS_REPO" --skill "$SKILL" </dev/null; then
-    info "skill" "installed"
-  else
-    info "skill" "skipped — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
-  fi
+  printf '\n  \033[1;36m?\033[0m Install the \033[1m%s\033[0m agent skill? (teaches AI agents how to use %s) [Y/n] ' "$SKILL" "$SKILL"
+  read -r ANSWER </dev/tty
+  case "$ANSWER" in
+    [nN]|[nN][oO])
+      info "skill" "skipped — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
+      ;;
+    *)
+      info "skill" "adding '$SKILL' (npx skills add)"
+      if npx -y skills add "$SKILLS_REPO" --skill "$SKILL"; then
+        info "skill" "installed"
+      else
+        info "skill" "skipped — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
+      fi
+      ;;
+  esac
 else
   info "skill" "npx not found — add later with: npx skills add $SKILLS_REPO --skill $SKILL"
 fi

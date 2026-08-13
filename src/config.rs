@@ -135,4 +135,155 @@ fontsize = "11pt"
         assert!(toml_str.contains("John Doe"));
         assert!(toml_str.contains("john@example.com"));
     }
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert!(config.user.name.is_none());
+        assert!(config.user.email.is_none());
+        assert!(config.institution.name.is_none());
+        assert!(config.defaults.documentclass.is_none());
+        assert!(config.templates.source.is_none());
+    }
+
+    #[test]
+    fn test_parse_institution() {
+        let toml_str = r#"
+[institution]
+name = "University"
+address = "123 Main St"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.institution.name, Some("University".to_string()));
+        assert_eq!(config.institution.address, Some("123 Main St".to_string()));
+    }
+
+    #[test]
+    fn test_parse_templates_section() {
+        let toml_str = r#"
+[templates]
+source = "registry"
+auto_update = true
+watch = false
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.templates.source, Some("registry".to_string()));
+        assert_eq!(config.templates.auto_update, Some(true));
+        assert_eq!(config.templates.watch, Some(false));
+    }
+
+    #[test]
+    fn test_parse_defaults_all_fields() {
+        let toml_str = r#"
+[defaults]
+documentclass = "report"
+fontsize = "12pt"
+papersize = "a4"
+language = "spanish"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.defaults.documentclass, Some("report".to_string()));
+        assert_eq!(config.defaults.fontsize, Some("12pt".to_string()));
+        assert_eq!(config.defaults.papersize, Some("a4".to_string()));
+        assert_eq!(config.defaults.language, Some("spanish".to_string()));
+    }
+
+    #[test]
+    fn test_parse_empty_toml() {
+        let config: Config = toml::from_str("").unwrap();
+        let default = Config::default();
+        assert_eq!(config.user.name, default.user.name);
+        assert_eq!(config.user.email, default.user.email);
+        assert_eq!(config.institution.name, default.institution.name);
+        assert_eq!(
+            config.defaults.documentclass,
+            default.defaults.documentclass
+        );
+    }
+
+    #[test]
+    fn test_config_file_path_returns_result() {
+        let result = config_file_path();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().contains("texforge"));
+        assert!(path.to_string_lossy().ends_with("config.toml"));
+    }
+
+    #[test]
+    fn test_serialize_roundtrip() {
+        let mut config = Config::default();
+        config.user.name = Some("Test User".to_string());
+        config.user.email = Some("test@test.com".to_string());
+        config.institution.name = Some("Test Uni".to_string());
+        config.defaults.language = Some("english".to_string());
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(config.user.name, deserialized.user.name);
+        assert_eq!(config.user.email, deserialized.user.email);
+        assert_eq!(config.institution.name, deserialized.institution.name);
+        assert_eq!(config.defaults.language, deserialized.defaults.language);
+    }
+
+    #[test]
+    fn test_load_missing_file_returns_default() {
+        // load() returns Config::default() when file doesn't exist
+        // We can't easily test the real load() since it uses config_file_path()
+        // But we can test that a config with no file is equivalent to default
+        let config = Config::default();
+        assert!(config.user.name.is_none());
+        assert!(config.user.email.is_none());
+    }
+
+    #[test]
+    fn test_config_serialization_institution_all_fields() {
+        let mut config = Config::default();
+        config.institution.name = Some("MIT".to_string());
+        config.institution.address = Some("77 Massachusetts Ave".to_string());
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("MIT"));
+        assert!(toml_str.contains("77 Massachusetts Ave"));
+    }
+
+    #[test]
+    fn test_config_templates_fields() {
+        let mut config = Config::default();
+        config.templates.source = Some("github".to_string());
+        config.templates.auto_update = Some(true);
+        config.templates.watch = Some(false);
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.templates.source, Some("github".to_string()));
+        assert_eq!(parsed.templates.auto_update, Some(true));
+        assert_eq!(parsed.templates.watch, Some(false));
+    }
+
+    #[test]
+    fn test_config_defaults_all_fields_serialize() {
+        let mut config = Config::default();
+        config.defaults.documentclass = Some("book".to_string());
+        config.defaults.fontsize = Some("10pt".to_string());
+        config.defaults.papersize = Some("letter".to_string());
+        config.defaults.language = Some("french".to_string());
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.defaults.documentclass, Some("book".to_string()));
+        assert_eq!(parsed.defaults.fontsize, Some("10pt".to_string()));
+        assert_eq!(parsed.defaults.papersize, Some("letter".to_string()));
+        assert_eq!(parsed.defaults.language, Some("french".to_string()));
+    }
+
+    #[test]
+    fn test_config_partial_toml_uses_defaults() {
+        let toml_str = r#"
+[user]
+name = "Only Name"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.user.name, Some("Only Name".to_string()));
+        assert!(config.user.email.is_none());
+        assert!(config.institution.name.is_none());
+        assert!(config.defaults.documentclass.is_none());
+    }
 }

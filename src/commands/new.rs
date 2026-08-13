@@ -192,4 +192,116 @@ mod tests {
     fn valid_name_is_ok() {
         assert!(validate_project_name("mi-tesis").is_ok());
     }
+
+    #[test]
+    fn name_with_backslash_is_error() {
+        assert!(validate_project_name("a\\b").is_err());
+    }
+
+    #[test]
+    fn name_with_absolute_path_is_error() {
+        assert!(validate_project_name("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn name_with_special_char_is_error() {
+        assert!(validate_project_name("project@name").is_err());
+        assert!(validate_project_name("project#1").is_err());
+        assert!(validate_project_name("project$").is_err());
+        assert!(validate_project_name("project!").is_err());
+        assert!(validate_project_name("project&test").is_err());
+        assert!(validate_project_name("project|test").is_err());
+        assert!(validate_project_name("project;test").is_err());
+        assert!(validate_project_name("project`test").is_err());
+        assert!(validate_project_name("project\"test").is_err());
+        assert!(validate_project_name("project'test").is_err());
+        assert!(validate_project_name("project*test").is_err());
+        assert!(validate_project_name("project?test").is_err());
+    }
+
+    #[test]
+    fn name_with_only_whitespace_is_error() {
+        assert!(validate_project_name("   ").is_err());
+        assert!(validate_project_name("\t").is_err());
+    }
+
+    #[test]
+    fn apply_substitutions_replaces_tokens() {
+        let mut values = HashMap::new();
+        values.insert("title".to_string(), "My Doc".to_string());
+        values.insert("author".to_string(), "Jane".to_string());
+
+        let content = "\\title{{{title}}}\n\\author{{{author}}}";
+        let result = apply_substitutions(content, &values);
+        assert_eq!(result, "\\title{My Doc}\n\\author{Jane}");
+    }
+
+    #[test]
+    fn apply_substitutions_leaves_unmatched_tokens() {
+        let values = HashMap::new();
+        let content = "\\title{{{title}}}";
+        let result = apply_substitutions(content, &values);
+        assert_eq!(result, "\\title{{{title}}}");
+    }
+
+    #[test]
+    fn apply_substitutions_empty_content() {
+        let values = HashMap::new();
+        let result = apply_substitutions("", &values);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn apply_substitutions_multiple_same_token() {
+        let mut values = HashMap::new();
+        values.insert("x".to_string(), "Y".to_string());
+        let result = apply_substitutions("{{x}} and {{x}}", &values);
+        assert_eq!(result, "Y and Y");
+    }
+
+    #[test]
+    fn resolve_placeholder_values_empty_files() {
+        let files = HashMap::new();
+        let cli_args = HashMap::new();
+        let result = resolve_placeholder_values(&files, cli_args);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_placeholder_values_invalid_toml() {
+        let mut files = HashMap::new();
+        files.insert("template.toml".to_string(), b"not valid {{{ toml".to_vec());
+        let cli_args = HashMap::new();
+        let result = resolve_placeholder_values(&files, cli_args);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_placeholder_values_non_utf8() {
+        let mut files = HashMap::new();
+        files.insert("template.toml".to_string(), vec![0xFF, 0xFE]);
+        let cli_args = HashMap::new();
+        let result = resolve_placeholder_values(&files, cli_args);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn name_with_hyphens_is_ok() {
+        assert!(validate_project_name("my-tesis-v2").is_ok());
+    }
+
+    #[test]
+    fn name_with_underscores_is_ok() {
+        assert!(validate_project_name("my_tesis").is_ok());
+    }
+
+    #[test]
+    fn name_with_dots_is_ok() {
+        assert!(validate_project_name("my.tesis").is_ok());
+    }
+
+    #[test]
+    fn name_with_single_char_is_ok() {
+        assert!(validate_project_name("a").is_ok());
+    }
 }

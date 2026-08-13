@@ -1,5 +1,7 @@
 //! CLI argument parsing and command dispatch.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -35,6 +37,25 @@ enum Commands {
         /// Debounce delay in seconds before rebuilding (default: 10)
         #[arg(long, default_value = "2")]
         delay: u64,
+        /// Print every engine warning instead of a per-file summary
+        #[arg(long)]
+        verbose: bool,
+        /// Build reproducibly: pin `SOURCE_DATE_EPOCH` so identical source plus
+        /// the same Tectonic version yields an identical PDF. An optional epoch
+        /// (seconds since the Unix epoch) overrides the fixed default.
+        #[arg(long, num_args = 0..=1)]
+        reproducible: Option<Option<u64>>,
+        /// After each successful rebuild, write a PNG of one page to a fixed
+        /// path so any file-watching image viewer becomes a live preview
+        /// (requires `--watch`)
+        #[arg(long, requires = "watch")]
+        preview: bool,
+        /// Page to rasterize for `--preview` (1-based; default: 1)
+        #[arg(long, default_value_t = 1, requires = "preview")]
+        preview_page: usize,
+        /// Fixed path for the `--preview` PNG (default: preview.png)
+        #[arg(long, value_name = "PATH", requires = "preview")]
+        preview_out: Option<PathBuf>,
     },
     /// Format .tex files
     Fmt {
@@ -43,18 +64,114 @@ enum Commands {
         check: bool,
     },
     /// Lint project without compiling
-    Check,
+    Check {
+        /// Treat warnings as errors (exit non-zero if any warning is present)
+        #[arg(long)]
+        deny_warnings: bool,
+    },
+    /// Count words per section or file
+    Stats {
+        /// Output JSON instead of a human-readable breakdown
+        #[arg(long)]
+        json: bool,
+        /// Break down by .tex file instead of by section
+        #[arg(long, value_enum, default_value = "section")]
+        by: crate::commands::stats::ByMode,
+    },
+    /// Print the document's section tree
+    Outline {
+        /// Output JSON instead of a human-readable tree
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rasterize the compiled PDF to PNG pages
+    Preview {
+        /// Page number to rasterize (1-based; default: all pages)
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Rasterization scale in pixels per PDF point (default: 1.0)
+        #[arg(long, default_value_t = 1.0)]
+        scale: f32,
+        /// Directory to write PNGs to (default: <project>/preview)
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+    },
+    /// Inspect the compiled PDF (text, info, pages, fidelity)
+    Pdf {
+        #[command(subcommand)]
+        action: PdfAction,
+    },
     /// Manage templates
     Template {
         #[command(subcommand)]
         action: TemplateAction,
     },
+    /// Manage the personal spell-check whitelist (dictionary)
+    Spell {
+        #[command(subcommand)]
+        action: SpellAction,
+    },
+    /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
+    Doctor,
     /// Manage global configuration
     Config {
         /// Key to get/set (name, email, institution, language)
         key: Option<String>,
         /// Value to set (optional - if omitted, shows current value)
         value: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PdfAction {
+    /// Print text as a reader or ATS would see it
+    Text {
+        /// Keep ligature codepoints unnormalized
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Report pages, fonts (embedded?), and metadata
+    Info,
+    /// Report which section opens each page (diff-friendly)
+    Pages,
+    /// Check significant source words appear in the PDF text
+    Check,
+}
+
+#[derive(Subcommand)]
+enum SpellAction {
+    /// Add one or more words to the whitelist (default: global personal dictionary)
+    Add {
+        /// Word(s) to add
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// Target the project's whitelist instead of the global personal dictionary
+        #[arg(long, conflicts_with = "global")]
+        local: bool,
+        /// Target the global personal dictionary (~/.texforge/spell-words); this is the default
+        #[arg(long, conflicts_with = "local")]
+        global: bool,
+    },
+    /// List the effective whitelist words for the scope (default: global personal dictionary)
+    List {
+        /// List the project's whitelist instead of the global personal dictionary
+        #[arg(long, conflicts_with = "global")]
+        local: bool,
+        /// List the global personal dictionary (~/.texforge/spell-words); this is the default
+        #[arg(long, conflicts_with = "local")]
+        global: bool,
+    },
+    /// Remove one or more words from the whitelist (default: global personal dictionary)
+    Remove {
+        /// Word(s) to remove
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// Target the project's whitelist instead of the global personal dictionary
+        #[arg(long, conflicts_with = "global")]
+        local: bool,
+        /// Target the global personal dictionary (~/.texforge/spell-words); this is the default
+        #[arg(long, conflicts_with = "local")]
+        global: bool,
     },
 }
 
@@ -80,21 +197,70 @@ impl Cli {
             Commands::Clean => commands::clean::execute(),
             Commands::Init => commands::init::execute(),
             Commands::New { name, template } => commands::new::execute(&name, template.as_deref()),
-            Commands::Build { watch, delay } => {
+            Commands::Build {
+                watch,
+                delay,
+                verbose,
+                reproducible,
+                preview,
+                preview_page,
+                preview_out,
+            } => {
                 if watch {
-                    commands::build::watch(delay)
+                    let live_preview = preview.then_some(commands::build::LivePreview {
+                        page: preview_page,
+                        out: preview_out,
+                    });
+                    commands::build::watch(delay, verbose, reproducible, live_preview.as_ref())
                 } else {
-                    commands::build::execute()
+                    commands::build::execute(verbose, reproducible)
                 }
             }
             Commands::Fmt { check } => commands::fmt::execute(check),
-            Commands::Check => commands::check::execute(),
+            Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
+            Commands::Stats { json, by } => commands::stats::execute(json, by),
+            Commands::Outline { json } => commands::outline::execute(json),
+            Commands::Preview { page, scale, out } => commands::preview::execute(page, scale, out),
+            Commands::Pdf { action } => {
+                let action = match action {
+                    PdfAction::Text { raw } => commands::pdf::PdfAction::Text { raw },
+                    PdfAction::Info => commands::pdf::PdfAction::Info,
+                    PdfAction::Pages => commands::pdf::PdfAction::Pages,
+                    PdfAction::Check => commands::pdf::PdfAction::Check,
+                };
+                commands::pdf::execute(action)
+            }
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
                 TemplateAction::Add { source } => commands::template::add(&source),
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
             },
+            Commands::Spell { action } => {
+                let action = match action {
+                    SpellAction::Add {
+                        words,
+                        local,
+                        global,
+                    } => commands::spell::SpellAction::Add {
+                        words,
+                        scope: commands::spell::Scope::from_flags(local, global),
+                    },
+                    SpellAction::List { local, global } => commands::spell::SpellAction::List {
+                        scope: commands::spell::Scope::from_flags(local, global),
+                    },
+                    SpellAction::Remove {
+                        words,
+                        local,
+                        global,
+                    } => commands::spell::SpellAction::Remove {
+                        words,
+                        scope: commands::spell::Scope::from_flags(local, global),
+                    },
+                };
+                commands::spell::execute(action)
+            }
+            Commands::Doctor => commands::doctor::execute(),
             Commands::Config { key, value } => match (key, value) {
                 (None, None) => commands::config::wizard(),
                 (Some(k), None) if k == "list" => commands::config::list(),
@@ -103,5 +269,48 @@ impl Cli {
                 (None, Some(_)) => anyhow::bail!("Cannot set value without a key"),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TE14 requirement 6: `--local --global` together must be rejected by
+    /// clap, not silently resolved to one or the other.
+    #[test]
+    fn spell_add_rejects_local_and_global_together() {
+        let result =
+            Cli::try_parse_from(["texforge", "spell", "add", "docker", "--local", "--global"]);
+        assert!(
+            result.is_err(),
+            "`--local --global` together must be a usage error"
+        );
+    }
+
+    #[test]
+    fn spell_list_rejects_local_and_global_together() {
+        let result = Cli::try_parse_from(["texforge", "spell", "list", "--local", "--global"]);
+        assert!(
+            result.is_err(),
+            "`--local --global` together must be a usage error"
+        );
+    }
+
+    #[test]
+    fn spell_remove_rejects_local_and_global_together() {
+        let result = Cli::try_parse_from([
+            "texforge", "spell", "remove", "docker", "--local", "--global",
+        ]);
+        assert!(
+            result.is_err(),
+            "`--local --global` together must be a usage error"
+        );
+    }
+
+    #[test]
+    fn spell_add_accepts_local_alone() {
+        let result = Cli::try_parse_from(["texforge", "spell", "add", "docker", "--local"]);
+        assert!(result.is_ok());
     }
 }

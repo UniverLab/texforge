@@ -466,4 +466,179 @@ mod tests {
         let out = format_bib(src);
         assert_eq!(out, "@misc{k,\n  title = {Hello, World},\n}\n");
     }
+
+    #[test]
+    fn lstlisting_content_preserved() {
+        let src = "\\begin{lstlisting}\n  code here\n\\end{lstlisting}";
+        let out = format(src);
+        assert_eq!(out, "\\begin{lstlisting}\n  code here\n\\end{lstlisting}\n");
+    }
+
+    #[test]
+    fn minted_content_preserved() {
+        let src = "\\begin{minted}\n  raw\n\\end{minted}";
+        let out = format(src);
+        assert_eq!(out, "\\begin{minted}\n  raw\n\\end{minted}\n");
+    }
+
+    #[test]
+    fn leading_dedent_end() {
+        assert_eq!(leading_dedent("\\end{doc}"), 1);
+    }
+
+    #[test]
+    fn leading_dedent_braces() {
+        assert_eq!(leading_dedent("}}"), 2);
+    }
+
+    #[test]
+    fn leading_dedent_none() {
+        assert_eq!(leading_dedent("hello"), 0);
+    }
+
+    #[test]
+    fn nesting_delta_begin() {
+        assert_eq!(nesting_delta("\\begin{doc}"), 1);
+    }
+
+    #[test]
+    fn nesting_delta_end() {
+        assert_eq!(nesting_delta("\\end{doc}"), -1);
+    }
+
+    #[test]
+    fn nesting_delta_braces() {
+        assert_eq!(nesting_delta("{ a }"), 0);
+    }
+
+    #[test]
+    fn nesting_delta_comment_ignored() {
+        assert_eq!(nesting_delta("x % { ignore"), 0);
+    }
+
+    #[test]
+    fn nesting_delta_escaped_braces() {
+        assert_eq!(nesting_delta("\\{ \\}"), 0);
+    }
+
+    #[test]
+    fn extract_env_name_simple() {
+        assert_eq!(
+            extract_env_name("\\begin{figure}"),
+            Some("figure".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_env_name_no_begin() {
+        assert_eq!(extract_env_name("no begin here"), None);
+    }
+
+    #[test]
+    fn count_occurrences_basic() {
+        assert_eq!(count_occurrences("abcabc", "abc"), 2);
+    }
+
+    #[test]
+    fn count_occurrences_none() {
+        assert_eq!(count_occurrences("hello", "xyz"), 0);
+    }
+
+    #[test]
+    fn split_top_level_simple() {
+        let result = split_top_level("a, b, c");
+        assert_eq!(result, vec!["a", " b", " c"]);
+    }
+
+    #[test]
+    fn split_top_level_braced_comma() {
+        let result = split_top_level("a={x,y}, b");
+        assert_eq!(result, vec!["a={x,y}", " b"]);
+    }
+
+    #[test]
+    fn split_top_level_quoted_comma() {
+        let result = split_top_level("\"a,b\", c");
+        assert_eq!(result, vec!["\"a,b\"", " c"]);
+    }
+
+    #[test]
+    fn top_level_eq_found() {
+        assert_eq!(top_level_eq("name = value"), Some(5));
+    }
+
+    #[test]
+    fn top_level_eq_in_braces() {
+        assert_eq!(top_level_eq("{name = value}"), None);
+    }
+
+    #[test]
+    fn collapse_ws_basic() {
+        assert_eq!(collapse_ws("  hello   world  "), "hello world");
+    }
+
+    #[test]
+    fn collapse_ws_newlines() {
+        assert_eq!(collapse_ws("a\n\nb"), "a b");
+    }
+
+    #[test]
+    fn format_empty_lines_only() {
+        let out = format("\n\n\n");
+        assert_eq!(out, "\n");
+    }
+
+    #[test]
+    fn format_single_line() {
+        let out = format("hello");
+        assert_eq!(out, "hello\n");
+    }
+
+    #[test]
+    fn format_mixed_content() {
+        let src = "\\begin{document}\n\\begin{figure}\nimg\n\\end{figure}\n\\end{document}";
+        let out = format(src);
+        assert!(out.contains("  \\begin{figure}"));
+        assert!(out.contains("    img"));
+        assert!(out.contains("  \\end{figure}"));
+    }
+
+    #[test]
+    fn bib_string_entry() {
+        let src = "@string{jabref = {Journal of Things}}";
+        let out = format_bib(src);
+        assert!(out.contains("@string"));
+    }
+
+    #[test]
+    fn bib_paren_delimiters() {
+        let src = "@article(key, author={A. B.})";
+        let out = format_bib(src);
+        assert!(out.contains("@article"));
+    }
+
+    #[test]
+    fn bib_unterminated_returns_original() {
+        let src = "@article{key, author={A. B.}";
+        assert_eq!(format_bib(src), src);
+    }
+
+    #[test]
+    fn bib_empty_returns_original() {
+        assert_eq!(format_bib(""), "");
+    }
+
+    #[test]
+    fn format_trailing_whitespace_trimmed() {
+        let src = "hello   \nworld";
+        let out = format(src);
+        assert!(!out.contains("   \n"));
+    }
+
+    #[test]
+    fn format_comment_not_counted() {
+        let src = "\\begin{doc}\nx % { unmatched\n\\end{doc}";
+        let out = format(src);
+        assert_eq!(out, "\\begin{doc}\n  x % { unmatched\n\\end{doc}\n");
+    }
 }

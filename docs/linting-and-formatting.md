@@ -8,7 +8,7 @@ order: 8
 
 ## Linter — `texforge check`
 
-Runs static analysis without compiling:
+Runs static analysis without compiling, including spell-check:
 
 | Check | What it verifies |
 |---|---|
@@ -17,6 +17,7 @@ Runs static analysis without compiling:
 | `\cite{key}` | key exists in the `.bib` file |
 | `\ref{label}` / `\label{label}` | cross-reference consistency |
 | `\begin{env}` / `\end{env}` | no unclosed environments |
+| Spelling | prose against language-specific dictionaries |
 
 Errors come with file, line and a suggestion:
 
@@ -30,7 +31,36 @@ ERROR [main.tex:12]
 ERROR [main.tex:23]
   \begin{figure} never closed
   suggestion: Add \end{figure}
+
+ERROR [main.tex:18]
+  mispeled — not in dictionary
 ```
+
+### Spell-Check
+
+Language is detected from the document:
+
+- `\usepackage[spanish]{babel}` — uses Spanish Hunspell dictionary
+- `\usepackage[polyglossia]{...}` — language extracted from polyglossia declaration
+- No declaration — falls back to `texforge config language` (default: `english`)
+
+Dictionaries download automatically into `~/.texforge/dicts/` on first use.
+
+Manage custom words with `texforge spell`:
+
+```bash
+# Add to global dictionary (all projects)
+texforge spell add "LaTeX" "UUID"
+
+# Add to current project only
+texforge spell add "ProjectCodename" --local
+
+# List and remove
+texforge spell list [--local]
+texforge spell remove "LaTeX" [--local]
+```
+
+Both scopes are unioned at check time — project-local and global words are both respected.
 
 ## Formatter — `texforge fmt`
 

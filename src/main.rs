@@ -12,11 +12,16 @@ mod domain;
 mod formatter;
 mod linter;
 mod manifest;
+mod pdftext;
 mod placeholders;
+mod raster;
 mod templates;
+mod texparse;
+mod texutil;
 mod utils;
 mod version;
 mod version_checker;
+mod wordcount;
 
 use anyhow::Result;
 use clap::Parser;

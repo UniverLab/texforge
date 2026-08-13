@@ -10,6 +10,18 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectConfig {
     pub document: DocumentConfig,
     pub build: BuildConfig,
+    #[serde(default)]
+    pub diagrams: Option<DiagramsConfig>,
+}
+
+/// `[diagrams]` section of `project.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagramsConfig {
+    /// Document-wide default style preset (`default`, `editorial`,
+    /// `monochrome`, `technical`). A `style=` on the environment itself
+    /// overrides this.
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +36,20 @@ pub struct BuildConfig {
     pub entry: String,
     #[serde(default)]
     pub bibliography: Option<String>,
+    #[serde(default)]
+    pub reproducible: Option<Reproducible>,
+}
+
+/// Reproducible-build setting from `project.toml` (`[build] reproducible`).
+///
+/// Accepts `true` to pin a fixed default epoch, `false` to disable, or a
+/// number to pin an explicit `SOURCE_DATE_EPOCH` value. Absent means the build
+/// is not reproducible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Reproducible {
+    Enabled(bool),
+    Epoch(u64),
 }
 
 /// Represents a `TexForge` project.
@@ -47,5 +73,254 @@ impl Project {
         let config: ProjectConfig = toml::from_str(&content)?;
 
         Ok(Self { root, config })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_config_deserialize_full() {
+        let toml_str = r#"
+[document]
+title = "My Thesis"
+author = "Jane"
+template = "general"
+
+[build]
+entry = "main.tex"
+bibliography = "refs.bib"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.document.title, "My Thesis");
+        assert_eq!(config.document.author, "Jane");
+        assert_eq!(config.document.template, "general");
+        assert_eq!(config.build.entry, "main.tex");
+        assert_eq!(config.build.bibliography, Some("refs.bib".to_string()));
+    }
+
+    #[test]
+    fn project_config_deserialize_no_bibliography() {
+        let toml_str = r#"
+[document]
+title = "Doc"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.build.bibliography, None);
+    }
+
+    #[test]
+    fn project_config_serialize_roundtrip() {
+        let config = ProjectConfig {
+            document: DocumentConfig {
+                title: "Test".to_string(),
+                author: "Author".to_string(),
+                template: "general".to_string(),
+            },
+            build: BuildConfig {
+                entry: "main.tex".to_string(),
+                bibliography: Some("refs.bib".to_string()),
+                reproducible: None,
+            },
+            diagrams: None,
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: ProjectConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.document.title, "Test");
+        assert_eq!(parsed.build.entry, "main.tex");
+    }
+
+    #[test]
+    fn project_config_debug_clone() {
+        let config = ProjectConfig {
+            document: DocumentConfig {
+                title: "T".to_string(),
+                author: "A".to_string(),
+                template: "general".to_string(),
+            },
+            build: BuildConfig {
+                entry: "main.tex".to_string(),
+                bibliography: None,
+                reproducible: None,
+            },
+            diagrams: None,
+        };
+        let cloned = config.clone();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("T"));
+        assert_eq!(cloned.document.title, "T");
+    }
+
+    #[test]
+    fn project_load_no_project_toml_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let result = Project::load();
+        std::env::set_current_dir(&orig).unwrap();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No project.toml"));
+    }
+
+    #[test]
+    fn project_load_valid_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("project.toml"),
+            "[document]\ntitle = \"T\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
+        )
+        .unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let result = Project::load();
+        std::env::set_current_dir(&orig).unwrap();
+        let project = result.unwrap();
+        assert_eq!(project.config.document.title, "T");
+        assert_eq!(project.config.build.entry, "main.tex");
+    }
+
+    #[test]
+    fn project_load_invalid_toml_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("project.toml"), "not valid {{{ toml").unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let result = Project::load();
+        std::env::set_current_dir(&orig).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn project_config_reproducible_true() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+reproducible = true
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.build.reproducible, Some(Reproducible::Enabled(true)));
+    }
+
+    #[test]
+    fn project_config_reproducible_false() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+reproducible = false
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.build.reproducible,
+            Some(Reproducible::Enabled(false))
+        );
+    }
+
+    #[test]
+    fn project_config_reproducible_explicit_epoch() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+reproducible = 1700000000
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.build.reproducible,
+            Some(Reproducible::Epoch(1700000000))
+        );
+    }
+
+    #[test]
+    fn project_config_reproducible_absent_is_off() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.build.reproducible, None);
+    }
+
+    #[test]
+    fn project_config_reproducible_roundtrip() {
+        let config = ProjectConfig {
+            document: DocumentConfig {
+                title: "T".to_string(),
+                author: "A".to_string(),
+                template: "general".to_string(),
+            },
+            build: BuildConfig {
+                entry: "main.tex".to_string(),
+                bibliography: None,
+                reproducible: Some(Reproducible::Epoch(1700000000)),
+            },
+            diagrams: None,
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let parsed: ProjectConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            parsed.build.reproducible,
+            Some(Reproducible::Epoch(1700000000))
+        );
+    }
+
+    #[test]
+    fn project_config_diagrams_style_present() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[diagrams]
+style = "editorial"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.diagrams.and_then(|d| d.style),
+            Some("editorial".to_string())
+        );
+    }
+
+    #[test]
+    fn project_config_diagrams_absent_is_none() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.diagrams.is_none());
     }
 }
