@@ -55,12 +55,21 @@ impl DiagramStyle {
     fn palette(self) -> Option<Palette> {
         match self {
             Self::Default => None,
+            // texforge's own editorial palette, the one its page on
+            // univerlab.org is typeset in (`data-surface='paper'`). The accent
+            // is the proofreader's vermilion change-bar, and the surface
+            // comment there states the rule this preset follows: it is used
+            // once. `background` stays pure white rather than taking the
+            // page's warm tint, because a diagram sits *on* the printed page —
+            // tinting its canvas would paint a visible grey panel on white
+            // paper. The tint becomes the node fill instead, so boxes read as
+            // paper stock raised off the sheet.
             Self::Editorial => Some(Palette {
                 background: "#FFFFFF",
-                foreground: "#2B2B2B",
-                neutral: "#8A8A8A",
-                neutral_light: "#F4F4F2",
-                accent: Some("#2F6F4F"),
+                foreground: "#1B1B1A",
+                neutral: "#54514C",
+                neutral_light: "#F5F5F3",
+                accent: Some("#B2362C"),
                 monospace: false,
             }),
             Self::Monochrome => Some(Palette {
@@ -350,7 +359,11 @@ mod tests {
     fn d2_editorial_style_prefix_contains_theme_overrides() {
         let prefix = d2_prefix(DiagramStyle::Editorial);
         assert!(prefix.contains("theme-overrides"));
-        assert!(prefix.contains("#2F6F4F"));
+        // Derived from the palette rather than hardcoded: this asserts the
+        // accent reaches the prefix, which is what can break. Retuning the
+        // palette is not a regression and should not fail here.
+        let accent = DiagramStyle::Editorial.palette().unwrap().accent.unwrap();
+        assert!(prefix.contains(accent));
     }
 
     #[test]
