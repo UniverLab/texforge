@@ -81,6 +81,7 @@ mod tests {
 
     #[test]
     fn validate_general_template() {
+        ensure_rustls();
         // "general" falls back to embedded, which has template.toml
         validate("general").unwrap();
     }
