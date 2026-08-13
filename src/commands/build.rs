@@ -340,6 +340,10 @@ fn write_png(path: &Path, width: usize, height: usize, rgba: &[u8]) -> Result<()
 mod tests {
     use super::*;
 
+    fn ensure_rustls() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     #[test]
     fn flag_without_value_wins_with_default_epoch() {
         assert_eq!(
@@ -529,6 +533,11 @@ mod tests {
 
     #[test]
     fn failed_rebuild_leaves_previous_preview_untouched() {
+        ensure_rustls();
+        if !tectonic_available() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("project.toml"),
