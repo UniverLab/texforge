@@ -114,7 +114,7 @@ pub(crate) fn render_env(
         result.push_str(&remaining[..start]);
 
         let after_begin = &remaining[start + begin_tag.len()..];
-        let (opts, after_opts) = parse_opts(after_begin);
+        let (opts, after_opts) = parse_opts(after_begin, env)?;
 
         let end = find_end_tag(after_opts, &end_tag, env)?;
         let diagram_src = after_opts[..end].trim();
@@ -296,26 +296,96 @@ fn render_d2(src: &str, sty: DiagramStyle) -> Result<String> {
     String::from_utf8(svg).context("D2 produced non-UTF8 SVG")
 }
 
+/// Option keys read anywhere in this module. An option outside this list is
+/// almost always a typo, so [`parse_opts`] warns instead of dropping it.
+const KNOWN_OPTION_KEYS: &[&str] = &[
+    "style",
+    "pos",
+    "width",
+    "height",
+    "scale",
+    "keepaspectratio",
+    "label",
+    "caption",
+];
+
 /// Parse `[key=val, key2=val2]` into a map. Returns `(map, rest_of_str)`.
-pub(crate) fn parse_opts(s: &str) -> (HashMap<String, String>, &str) {
+///
+/// A value may be wrapped in `{...}` — the LaTeX convention for "this may
+/// contain a comma" — in which case the comma inside no longer separates
+/// options; the outer braces are stripped from the stored value but nested
+/// braces are preserved. Brace depth is tracked in a single pass over the
+/// string, so an option is only split on a comma seen at depth zero.
+///
+/// An unrecognised key emits a warning (naming `env`) and is dropped rather
+/// than aborting the build; an unterminated `{` is a hard error, since there
+/// is no reasonable place to guess the value ended.
+pub(crate) fn parse_opts<'a>(s: &'a str, env: &str) -> Result<(HashMap<String, String>, &'a str)> {
     let s = s.trim_start_matches('\n').trim_start_matches('\r');
     if !s.starts_with('[') {
-        return (HashMap::new(), s);
+        return Ok((HashMap::new(), s));
     }
-    let Some(end) = s.find(']') else {
-        return (HashMap::new(), s);
-    };
-    let inner = &s[1..end];
-    let rest = &s[end + 1..];
+    let after = &s[1..];
 
-    let mut map = HashMap::new();
-    for part in inner.split(',') {
-        let part = part.trim();
-        if let Some((k, v)) = part.split_once('=') {
-            map.insert(k.trim().to_string(), v.trim().to_string());
+    let mut depth = 0i32;
+    let mut part_start = 0usize;
+    let mut parts: Vec<&str> = Vec::new();
+    let mut end_idx = None;
+    for (i, c) in after.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&after[part_start..i]);
+                part_start = i + 1;
+            }
+            ']' if depth == 0 => {
+                parts.push(&after[part_start..i]);
+                end_idx = Some(i);
+                break;
+            }
+            _ => {}
         }
     }
-    (map, rest)
+
+    let Some(end_idx) = end_idx else {
+        if depth > 0 {
+            let unterminated = &after[part_start..];
+            let option = unterminated
+                .split_once('=')
+                .map_or(unterminated, |(k, _)| k)
+                .trim();
+            anyhow::bail!(
+                "{env} diagram: unterminated '{{' in option '{option}' — every {{ needs a matching }}"
+            );
+        }
+        return Ok((HashMap::new(), s));
+    };
+    let rest = &after[end_idx + 1..];
+
+    let mut map = HashMap::new();
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = part.split_once('=') else {
+            eprintln!("warning: {env} diagram: unknown option '{part}' ignored");
+            continue;
+        };
+        let k = k.trim();
+        let v = v.trim();
+        if !KNOWN_OPTION_KEYS.contains(&k) {
+            eprintln!("warning: {env} diagram: unknown option '{k}' ignored");
+            continue;
+        }
+        let value = v
+            .strip_prefix('{')
+            .and_then(|v| v.strip_suffix('}'))
+            .unwrap_or(v);
+        map.insert(k.to_string(), value.to_string());
+    }
+    Ok((map, rest))
 }
 
 /// Collect .tex files reachable from entry via \input.
@@ -626,41 +696,112 @@ mod tests {
 
     #[test]
     fn parse_opts_no_brackets_returns_empty_map() {
-        let (map, rest) = parse_opts("hello");
+        let (map, rest) = parse_opts("hello", "mermaid").unwrap();
         assert!(map.is_empty());
         assert_eq!(rest, "hello");
     }
 
     #[test]
     fn parse_opts_width_and_pos() {
-        let (map, _) = parse_opts("[width=0.5\\linewidth, pos=t]");
+        let (map, _) = parse_opts("[width=0.5\\linewidth, pos=t]", "mermaid").unwrap();
         assert_eq!(map.get("width").map(String::as_str), Some("0.5\\linewidth"));
         assert_eq!(map.get("pos").map(String::as_str), Some("t"));
     }
 
     #[test]
     fn parse_opts_caption() {
-        let (map, _) = parse_opts("[caption=My diagram]");
+        let (map, _) = parse_opts("[caption=My diagram]", "mermaid").unwrap();
         assert_eq!(map.get("caption").map(String::as_str), Some("My diagram"));
     }
 
     #[test]
     fn parse_opts_label_and_height() {
-        let (map, _) = parse_opts("[label=fig:my-diagram, height=5cm]");
+        let (map, _) = parse_opts("[label=fig:my-diagram, height=5cm]", "mermaid").unwrap();
         assert_eq!(map.get("label").map(String::as_str), Some("fig:my-diagram"));
         assert_eq!(map.get("height").map(String::as_str), Some("5cm"));
     }
 
     #[test]
     fn parse_opts_style_alongside_others_any_order() {
-        let (map, _) = parse_opts("[pos=t, style=editorial, width=0.5\\linewidth]");
+        let (map, _) =
+            parse_opts("[pos=t, style=editorial, width=0.5\\linewidth]", "mermaid").unwrap();
         assert_eq!(map.get("style").map(String::as_str), Some("editorial"));
         assert_eq!(map.get("pos").map(String::as_str), Some("t"));
         assert_eq!(map.get("width").map(String::as_str), Some("0.5\\linewidth"));
 
-        let (map, _) = parse_opts("[style=mono, caption=A diagram]");
+        let (map, _) = parse_opts("[style=mono, caption=A diagram]", "mermaid").unwrap();
         assert_eq!(map.get("style").map(String::as_str), Some("mono"));
         assert_eq!(map.get("caption").map(String::as_str), Some("A diagram"));
+    }
+
+    #[test]
+    fn parse_opts_braced_caption_keeps_commas() {
+        let (map, _) = parse_opts("[caption={A, with commas}]", "mermaid").unwrap();
+        assert_eq!(
+            map.get("caption").map(String::as_str),
+            Some("A, with commas")
+        );
+    }
+
+    #[test]
+    fn parse_opts_braced_caption_preserves_nested_braces() {
+        let (map, _) = parse_opts("[caption={\\texttt{a, b}}]", "mermaid").unwrap();
+        assert_eq!(
+            map.get("caption").map(String::as_str),
+            Some("\\texttt{a, b}")
+        );
+    }
+
+    #[test]
+    fn parse_opts_unbraced_caption_unchanged() {
+        let (map, _) = parse_opts("[caption=simple]", "mermaid").unwrap();
+        assert_eq!(map.get("caption").map(String::as_str), Some("simple"));
+    }
+
+    #[test]
+    fn parse_opts_braced_value_mixed_with_others_any_order() {
+        let (map, _) = parse_opts(
+            "[style=editorial, width=0.5\\linewidth, caption={x, y}, pos=H]",
+            "mermaid",
+        )
+        .unwrap();
+        assert_eq!(map.get("style").map(String::as_str), Some("editorial"));
+        assert_eq!(map.get("width").map(String::as_str), Some("0.5\\linewidth"));
+        assert_eq!(map.get("caption").map(String::as_str), Some("x, y"));
+        assert_eq!(map.get("pos").map(String::as_str), Some("H"));
+    }
+
+    #[test]
+    fn parse_opts_unknown_key_warns_but_does_not_abort() {
+        let (map, _) = parse_opts("[style=default, frobnicate=yes, pos=t]", "mermaid").unwrap();
+        assert_eq!(map.get("style").map(String::as_str), Some("default"));
+        assert_eq!(map.get("pos").map(String::as_str), Some("t"));
+        assert!(!map.contains_key("frobnicate"));
+    }
+
+    #[test]
+    fn parse_opts_unterminated_brace_fails_naming_environment() {
+        let err = parse_opts("[caption={unterminated]", "mermaid").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("mermaid"), "message was: {message}");
+        assert!(message.contains("caption"), "message was: {message}");
+    }
+
+    /// TF-C: a caption with commas used to be silently truncated at the first
+    /// one — this is the exact broken line from the capabilities example
+    /// (commit 2b848dc), used verbatim to guard against regressing it.
+    #[test]
+    fn parse_opts_defect_tf_c_caption_with_commas_not_truncated() {
+        let (map, _) = parse_opts(
+            "[style=editorial, width=0.55\\linewidth, caption={Preset \\texttt{editorial}: paleta restringida, un solo acento, sin sombras}, pos=H]",
+            "mermaid",
+        )
+        .unwrap();
+        assert_eq!(
+            map.get("caption").map(String::as_str),
+            Some("Preset \\texttt{editorial}: paleta restringida, un solo acento, sin sombras")
+        );
+        assert_eq!(map.get("pos").map(String::as_str), Some("H"));
     }
 
     #[test]

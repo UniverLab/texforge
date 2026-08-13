@@ -59,6 +59,22 @@ digraph G {
 When a `caption` is given the diagram is wrapped in a `figure` environment
 at the requested position; without it the image is embedded inline.
 
+If an option value contains a comma, wrap it in braces — the same
+convention LaTeX packages already use for this:
+
+```latex
+\begin{mermaid}[caption={Preset \texttt{editorial}: paleta restringida, un solo acento}]
+flowchart LR
+  A --> B
+\end{mermaid}
+```
+
+Without the braces, the diagram intercepts commas as option separators,
+so `un solo acento` would be parsed as a second, unrecognized option and
+the caption would end at `restringida`. An unrecognized option prints a
+warning naming it and the environment, but the build continues; an
+unterminated `{` fails the build.
+
 ## Style presets
 
 By default, each renderer draws diagrams with whatever it ships as its own
