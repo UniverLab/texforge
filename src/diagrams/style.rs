@@ -149,7 +149,12 @@ pub fn mermaid_options(style: DiagramStyle) -> mermaid_rs_renderer::RenderOption
         font_size: 14.0,
         primary_color: p.neutral_light.to_string(),
         primary_text_color: p.foreground.to_string(),
-        primary_border_color: accent.to_string(),
+        // Shapes are drawn in ink; the accent is reserved for what connects
+        // them. Spending it on every node border as well turns "one accent"
+        // into "coloured everywhere", which is what the restrained presets
+        // exist to avoid — and a saturated accent on every outline reads as a
+        // warning rather than as a finish.
+        primary_border_color: p.neutral.to_string(),
         line_color: accent.to_string(),
         secondary_color: p.neutral_light.to_string(),
         tertiary_color: p.background.to_string(),
@@ -158,7 +163,7 @@ pub fn mermaid_options(style: DiagramStyle) -> mermaid_rs_renderer::RenderOption
         cluster_border: p.neutral.to_string(),
         background: p.background.to_string(),
         sequence_actor_fill: p.neutral_light.to_string(),
-        sequence_actor_border: accent.to_string(),
+        sequence_actor_border: p.neutral.to_string(),
         sequence_actor_line: p.neutral.to_string(),
         sequence_note_fill: p.neutral_light.to_string(),
         sequence_note_border: p.neutral.to_string(),
