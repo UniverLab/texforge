@@ -93,7 +93,7 @@ flowchart LR
 |---|---|
 | `default` | Each renderer's own untouched default. Omitting `style=` always renders this — no existing document changes appearance. |
 | `editorial` | Restrained palette, one accent colour, no drop shadows, thin strokes, generous whitespace. |
-| `mono` | Greyscale only — for documents printed in black and white. |
+| `monochrome` | Greyscale only — for documents printed in black and white. |
 | `technical` | Drafting register: uniform stroke weight, no fills, labels in a monospaced face where the renderer allows it. |
 
 An unrecognised style name (e.g. `style=editoral`) fails the build with a

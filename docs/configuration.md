@@ -67,4 +67,4 @@ entry = "main.tex"
 | `build.entry` | Entry `.tex` file passed to the engine |
 | `build.bibliography` | Optional `.bib` file used by the linter |
 | `build.reproducible` | Optional: pin `SOURCE_DATE_EPOCH` so identical source plus the same Tectonic version yields an identical PDF. `true` uses a fixed default epoch; a number pins an explicit epoch (`reproducible = 1700000000`); `false` or absent keeps the default behaviour. Overridden by `texforge build --reproducible` when that flag is present. |
-| `diagrams.style` | Optional: document-wide default diagram style preset (`default`, `editorial`, `mono`, `technical`; see [Diagrams](diagrams.md)). A `style=` on the diagram environment itself overrides this. |
+| `diagrams.style` | Optional: document-wide default diagram style preset (`default`, `editorial`, `monochrome`, `technical`; see [Diagrams](diagrams.md)). A `style=` on the diagram environment itself overrides this. |

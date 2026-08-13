@@ -17,8 +17,9 @@ pub struct ProjectConfig {
 /// `[diagrams]` section of `project.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagramsConfig {
-    /// Document-wide default style preset (`default`, `editorial`, `mono`,
-    /// `technical`). A `style=` on the environment itself overrides this.
+    /// Document-wide default style preset (`default`, `editorial`,
+    /// `monochrome`, `technical`). A `style=` on the environment itself
+    /// overrides this.
     #[serde(default)]
     pub style: Option<String>,
 }

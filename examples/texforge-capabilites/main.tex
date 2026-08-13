@@ -164,7 +164,7 @@
       A[Entrada] --> B[Proceso] --> C[Salida]
   \end{mermaid}
 
-  \begin{mermaid}[style=mono, width=0.55\linewidth, caption={Preset \texttt{mono}: escala de grises}, pos=H]
+  \begin{mermaid}[style=monochrome, width=0.55\linewidth, caption={Preset \texttt{monochrome}: escala de grises}, pos=H]
     flowchart LR
       A[Entrada] --> B[Proceso] --> C[Salida]
   \end{mermaid}
@@ -178,11 +178,11 @@
   o se imprimen a color y buscan un acabado sobrio. El preset
   \texttt{technical} conviene a diagramas que funcionan como planos o
   esquemas de referencia, con peso de trazo uniforme. El preset
-  \texttt{mono} tiene una razón menos obvia: existe para documentos que se
-  imprimen en blanco y negro, donde un diagrama a color puede perder
+  \texttt{monochrome} tiene una razón menos obvia: existe para documentos que
+  se imprimen en blanco y negro, donde un diagrama a color puede perder
   significado, porque dos colores que se distinguen en pantalla pueden
-  reducirse al mismo gris al imprimirse sin color; \texttt{mono} evita ese
-  problema por construcción, ya que nunca depende del color para
+  reducirse al mismo gris al imprimirse sin color; \texttt{monochrome} evita
+  ese problema por construcción, ya que nunca depende del color para
   distinguir nada. Omitir \texttt{style} equivale a \texttt{style=default},
   el aspecto propio de cada motor, como en los tres diagramas anteriores.
 

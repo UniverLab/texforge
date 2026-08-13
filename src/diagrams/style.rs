@@ -1,4 +1,4 @@
-//! Named diagram style presets: `default`, `editorial`, `mono`, `technical`.
+//! Named diagram style presets: `default`, `editorial`, `monochrome`, `technical`.
 //!
 //! Presets are declared here as data — one [`Palette`] per preset — and
 //! mapped onto each renderer's own theming vocabulary by the functions
@@ -23,14 +23,14 @@ pub enum DiagramStyle {
     /// generous whitespace.
     Editorial,
     /// Greyscale only — for black-and-white printing.
-    Mono,
+    Monochrome,
     /// Drafting register: uniform stroke weight, no fills, monospaced
     /// labels where the renderer allows it.
     Technical,
 }
 
 /// The valid style names, in the order errors should list them.
-pub const VALID_STYLE_NAMES: [&str; 4] = ["default", "editorial", "mono", "technical"];
+pub const VALID_STYLE_NAMES: [&str; 4] = ["default", "editorial", "monochrome", "technical"];
 
 impl DiagramStyle {
     /// Parse a style name from a `style=` attribute or `project.toml`.
@@ -42,7 +42,7 @@ impl DiagramStyle {
         match name {
             "default" => Ok(Self::Default),
             "editorial" => Ok(Self::Editorial),
-            "mono" => Ok(Self::Mono),
+            "monochrome" => Ok(Self::Monochrome),
             "technical" => Ok(Self::Technical),
             other => bail!(
                 "Unknown diagram style '{other}' — valid styles are: {}",
@@ -63,7 +63,7 @@ impl DiagramStyle {
                 accent: Some("#2F6F4F"),
                 monospace: false,
             }),
-            Self::Mono => Some(Palette {
+            Self::Monochrome => Some(Palette {
                 background: "#FFFFFF",
                 foreground: "#1A1A1A",
                 neutral: "#808080",
@@ -93,8 +93,8 @@ struct Palette {
     neutral: &'static str,
     neutral_light: &'static str,
     /// The one accent colour a preset uses; `None` for the greyscale-only
-    /// presets (`mono`, `technical`), so every field below falls back to a
-    /// neutral and the output stays saturation-free.
+    /// presets (`monochrome`, `technical`), so every field below falls back
+    /// to a neutral and the output stays saturation-free.
     accent: Option<&'static str>,
     /// Whether labels should render in a monospaced face.
     monospace: bool,
@@ -289,7 +289,10 @@ mod tests {
             DiagramStyle::parse("editorial").unwrap(),
             DiagramStyle::Editorial
         );
-        assert_eq!(DiagramStyle::parse("mono").unwrap(), DiagramStyle::Mono);
+        assert_eq!(
+            DiagramStyle::parse("monochrome").unwrap(),
+            DiagramStyle::Monochrome
+        );
         assert_eq!(
             DiagramStyle::parse("technical").unwrap(),
             DiagramStyle::Technical
@@ -304,6 +307,15 @@ mod tests {
         for name in VALID_STYLE_NAMES {
             assert!(msg.contains(name), "message missing '{name}': {msg}");
         }
+    }
+
+    #[test]
+    fn parse_rejects_old_mono_name() {
+        // `mono` was renamed to `monochrome`; the abbreviation must not be
+        // a silent alias, and the error should point at the new name.
+        let err = DiagramStyle::parse("mono").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("monochrome"), "message: {msg}");
     }
 
     #[test]
@@ -323,8 +335,8 @@ mod tests {
     }
 
     #[test]
-    fn mermaid_mono_style_has_no_accent() {
-        let opts = mermaid_options(DiagramStyle::Mono);
+    fn mermaid_monochrome_style_has_no_accent() {
+        let opts = mermaid_options(DiagramStyle::Monochrome);
         // No accent color: border and line colors fall back to the neutral.
         assert_eq!(opts.theme.primary_border_color, opts.theme.line_color);
     }

@@ -729,8 +729,8 @@ mod tests {
         assert_eq!(map.get("pos").map(String::as_str), Some("t"));
         assert_eq!(map.get("width").map(String::as_str), Some("0.5\\linewidth"));
 
-        let (map, _) = parse_opts("[style=mono, caption=A diagram]", "mermaid").unwrap();
-        assert_eq!(map.get("style").map(String::as_str), Some("mono"));
+        let (map, _) = parse_opts("[style=monochrome, caption=A diagram]", "mermaid").unwrap();
+        assert_eq!(map.get("style").map(String::as_str), Some("monochrome"));
         assert_eq!(map.get("caption").map(String::as_str), Some("A diagram"));
     }
 
@@ -1141,14 +1141,14 @@ mod tests {
     #[test]
     fn render_env_attribute_style_overrides_project_default() {
         let dir = tempfile::tempdir().unwrap();
-        let content = "\\begin{graphviz}[style=mono]\ndigraph G{ A -> B }\n\\end{graphviz}";
+        let content = "\\begin{graphviz}[style=monochrome]\ndigraph G{ A -> B }\n\\end{graphviz}";
         render_env(
             content,
             "graphviz",
             dir.path(),
             DiagramStyle::Editorial,
             |_, sty| {
-                assert_eq!(sty, DiagramStyle::Mono);
+                assert_eq!(sty, DiagramStyle::Monochrome);
                 Ok((vec![1, 2, 3], "pdf"))
             },
         )
@@ -1206,34 +1206,35 @@ mod tests {
     }
 
     /// Grayscale means R == G == B for every `fill`/`stroke` hex color —
-    /// the requirement `mono` exists to guarantee.
+    /// the requirement `monochrome` exists to guarantee.
     fn assert_grayscale_svg(svg: &str, label: &str) {
         for attr in ["fill", "stroke"] {
             for (r, g, b) in hex_colors_for_attr(svg, attr) {
                 assert!(
                     r == g && g == b,
-                    "{label}: non-grayscale {attr} color #{r:02X}{g:02X}{b:02X} under mono style"
+                    "{label}: non-grayscale {attr} color #{r:02X}{g:02X}{b:02X} under monochrome style"
                 );
             }
         }
     }
 
     #[test]
-    fn mono_style_mermaid_svg_is_grayscale() {
-        let svg = render_mermaid_with_config("flowchart LR\n  A --> B --> C", DiagramStyle::Mono)
-            .unwrap();
+    fn monochrome_style_mermaid_svg_is_grayscale() {
+        let svg =
+            render_mermaid_with_config("flowchart LR\n  A --> B --> C", DiagramStyle::Monochrome)
+                .unwrap();
         assert_grayscale_svg(&svg, "mermaid");
     }
 
     #[test]
-    fn mono_style_graphviz_svg_is_grayscale() {
-        let svg = render_graphviz("digraph G { A -> B }", DiagramStyle::Mono).unwrap();
+    fn monochrome_style_graphviz_svg_is_grayscale() {
+        let svg = render_graphviz("digraph G { A -> B }", DiagramStyle::Monochrome).unwrap();
         assert_grayscale_svg(&svg, "graphviz");
     }
 
     #[test]
-    fn mono_style_d2_svg_is_grayscale() {
-        let svg = render_d2("a -> b -> c", DiagramStyle::Mono).unwrap();
+    fn monochrome_style_d2_svg_is_grayscale() {
+        let svg = render_d2("a -> b -> c", DiagramStyle::Monochrome).unwrap();
         assert_grayscale_svg(&svg, "d2");
     }
 
@@ -1259,7 +1260,7 @@ mod tests {
         // still render successfully rather than fail the build.
         for sty in [
             DiagramStyle::Editorial,
-            DiagramStyle::Mono,
+            DiagramStyle::Monochrome,
             DiagramStyle::Technical,
         ] {
             let svg = render_graphviz("digraph G { A -> B }", sty).unwrap();
