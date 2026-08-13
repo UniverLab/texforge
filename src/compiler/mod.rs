@@ -439,6 +439,10 @@ fn current_target() -> Result<&'static str> {
 mod tests {
     use super::*;
 
+    fn ensure_rustls() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     #[test]
     fn command_sets_source_date_epoch_when_pinned() {
         let cmd = tectonic_command(
@@ -580,6 +584,7 @@ mod tests {
 
     #[test]
     fn find_tectonic_returns_path() {
+        ensure_rustls();
         let result = find_tectonic();
         // This test just verifies the function doesn't panic;
         // tectonic may or may not be installed.
