@@ -665,11 +665,13 @@ fn resolve_dict<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<&'a Di
 /// `sections` is `(number, title)` in document order (e.g. from the outline).
 /// A section title matches a page only when it appears as its own line in
 /// that page's extracted text — either the bare title, or the title with a
-/// leading `"<number> "` prefix, since a numbered `\section` renders that
-/// way (see `section_title_in_page`). A mention inside a sentence does not
-/// count. For each section, in order, we search forward from the page where
-/// the previous *matched* section was found for the first page whose text
-/// contains this section's title as a line.
+/// leading numbering prefix (`"1 "`, `"2.4. "`, `"2.4.1 "`), since a numbered
+/// `\section` renders that way (see `section_title_in_page`). A mention
+/// inside a sentence does not count, and neither does a table-of-contents
+/// entry, whose line carries dot leaders and a page number after the title
+/// instead of ending there. For each section, in order, we search forward
+/// from the page where the previous *matched* section was found for the
+/// first page whose text contains this section's title as a line.
 ///
 /// A page is opened by the *first* matched heading that begins on it with
 /// nothing but whitespace before it in the page's text — that is the
@@ -699,7 +701,7 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
             .iter()
             .enumerate()
             .skip(search_from)
-            .find(|(_, text)| section_title_in_page(text, num, title))
+            .find(|(_, text)| section_title_in_page(text, title))
             .map(|(idx, _)| idx);
         if let Some(page_idx) = found {
             matches.push((page_idx, num.clone(), title.clone()));
@@ -722,7 +724,7 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
             match_idx += 1;
         }
         if let Some((_, num, title)) = candidate {
-            if current.is_none() || section_title_opens_page(page, num, title) {
+            if current.is_none() || section_title_opens_page(page, title) {
                 current = Some((num.clone(), title.clone()));
             }
         }
@@ -735,27 +737,64 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
     out
 }
 
-/// True when a trimmed page line is the heading line for `(number, title)`:
-/// either the bare title, or the title with its auto-numbering prefix
-/// (`"1 Introduction"`), which is how a numbered `\section` renders in
-/// extracted PDF text. A mention inside a sentence never lands on a line by
-/// itself, so this rejects prose the same way either form.
-fn line_is_section_heading(line: &str, number: &str, needle: &str) -> bool {
+/// Strip a leading numbering prefix from `line`: one or more digit groups
+/// separated by dots (`2`, `2.4`, `2.4.1`), optionally followed by a
+/// trailing dot, then at least one whitespace character — the shape a
+/// numbered `\section`'s auto-numbering renders as (`"2.4. Estilos..."`,
+/// `"2.4.1 Something"`). Returns the remainder with leading whitespace
+/// trimmed, or `None` if `line` does not start with such a prefix.
+///
+/// A character walk, not a regex: the prefix grammar is small and fixed.
+fn strip_numbering_prefix(line: &str) -> Option<&str> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    if i >= chars.len() || !chars[i].is_ascii_digit() {
+        return None;
+    }
+    while i < chars.len() && chars[i].is_ascii_digit() {
+        i += 1;
+    }
+    while i < chars.len() && chars[i] == '.' {
+        if i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            i += 1;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+        } else {
+            // Trailing dot with nothing numeric after it: consume it and
+            // stop — the next character must be whitespace.
+            i += 1;
+            break;
+        }
+    }
+    if i >= chars.len() || !chars[i].is_whitespace() {
+        return None;
+    }
+    let byte_offset: usize = chars[..i].iter().map(|c| c.len_utf8()).sum();
+    Some(line[byte_offset..].trim_start())
+}
+
+/// True when a trimmed page line is the heading line for `title`: either the
+/// bare title, or the title with a leading numbering prefix stripped (see
+/// [`strip_numbering_prefix`]) — the two forms a `\section` and a numbered
+/// `\section` render as in extracted PDF text. Equality is required after
+/// stripping, so a table-of-contents line — title followed by dot leaders
+/// and a page number — does not match, and neither does a mention inside a
+/// sentence: neither form leaves the line ending exactly at the title.
+fn line_is_section_heading(line: &str, needle: &str) -> bool {
     if line == needle {
         return true;
     }
-    let Some(rest) = line.strip_prefix(number) else {
-        return false;
-    };
-    let Some(rest) = rest.strip_prefix(char::is_whitespace) else {
-        return false;
-    };
-    rest.trim_start() == needle
+    match strip_numbering_prefix(line) {
+        Some(rest) => rest == needle,
+        None => false,
+    }
 }
 
 /// True when `title` appears as its own line (trimmed, normalized) anywhere
 /// in `page_text`. A mention inside a sentence does not count.
-fn section_title_in_page(page_text: &str, number: &str, title: &str) -> bool {
+fn section_title_in_page(page_text: &str, title: &str) -> bool {
     let needle = normalize_pdf_text(title);
     let needle = needle.trim();
     if needle.is_empty() {
@@ -763,12 +802,12 @@ fn section_title_in_page(page_text: &str, number: &str, title: &str) -> bool {
     }
     page_text
         .lines()
-        .any(|line| line_is_section_heading(line.trim(), number, needle))
+        .any(|line| line_is_section_heading(line.trim(), needle))
 }
 
 /// True when `title`'s line is the first non-blank content on the page —
 /// i.e. nothing but whitespace precedes it.
-fn section_title_opens_page(page_text: &str, number: &str, title: &str) -> bool {
+fn section_title_opens_page(page_text: &str, title: &str) -> bool {
     let needle = normalize_pdf_text(title);
     let needle = needle.trim();
     if needle.is_empty() {
@@ -776,7 +815,7 @@ fn section_title_opens_page(page_text: &str, number: &str, title: &str) -> bool 
     }
     for line in page_text.lines() {
         let trimmed = line.trim();
-        if line_is_section_heading(trimmed, number, needle) {
+        if line_is_section_heading(trimmed, needle) {
             return true;
         }
         if !trimmed.is_empty() {
@@ -1003,6 +1042,70 @@ mod tests {
         assert_eq!(
             formatted,
             "page=1 section= title=\npage=2 section=1 title=Epsilon"
+        );
+    }
+
+    #[test]
+    fn line_is_section_heading_matches_dotted_numbering() {
+        // The real heading line from examples/texforge-capabilites.
+        assert!(line_is_section_heading(
+            "2.4. Estilos de Diagrama (style)",
+            "Estilos de Diagrama (style)"
+        ));
+    }
+
+    #[test]
+    fn line_is_section_heading_matches_single_level_numbering() {
+        assert!(line_is_section_heading(
+            "2. Diagramas Embebidos",
+            "Diagramas Embebidos"
+        ));
+    }
+
+    #[test]
+    fn line_is_section_heading_matches_three_level_numbering() {
+        assert!(line_is_section_heading("2.4.1 Something", "Something"));
+    }
+
+    #[test]
+    fn line_is_section_heading_rejects_table_of_contents_line_te_d() {
+        // TF-D: the table-of-contents entry from examples/texforge-capabilites
+        // carries the same numbering prefix and title as the real heading,
+        // but with dot leaders and a page number trailing it. That must not
+        // match — a false match here is the same class of lie TE9 removed.
+        assert!(!line_is_section_heading(
+            "2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . 3",
+            "Estilos de Diagrama (style)"
+        ));
+    }
+
+    #[test]
+    fn line_is_section_heading_matches_unnumbered_heading() {
+        assert!(line_is_section_heading(
+            "Estilos de Diagrama (style)",
+            "Estilos de Diagrama (style)"
+        ));
+    }
+
+    #[test]
+    fn page_breaks_numbered_heading_matches_and_toc_does_not_te_d() {
+        // TF-D: reproduces the bug with the real lines from
+        // examples/texforge-capabilites — a table of contents listing the
+        // heading (with dot leaders and a page number) must not be mistaken
+        // for the heading itself, which appears later as its own line.
+        let pages = vec![
+            "Table of Contents\n2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . 3"
+                .to_string(),
+            "Some other page with no heading.".to_string(),
+            "2.4. Estilos de Diagrama (style)\nBody text about diagram styles follows."
+                .to_string(),
+        ];
+        let sections = vec![("2.4".into(), "Estilos de Diagrama (style)".into())];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section= title=\npage=2 section= title=\npage=3 section=2.4 title=Estilos de Diagrama (style)"
         );
     }
 
