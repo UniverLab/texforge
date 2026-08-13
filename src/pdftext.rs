@@ -677,11 +677,22 @@ fn resolve_dict<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<&'a Di
 /// nothing but whitespace before it in the page's text — that is the
 /// heading that starts the page's content, as opposed to a heading that
 /// merely appears partway down a page whose start still belongs to the
-/// previous section. If that first matched heading is preceded by other
-/// text, the page keeps the section carried over from the previous page
-/// instead. A page with no carry-over yet (no section has opened before it)
-/// is opened by its first matched heading regardless of what precedes it,
-/// since there is nothing else to attribute the page to.
+/// previous section. A page with no carry-over yet (no section has opened
+/// before it) is opened by its first matched heading regardless of what
+/// precedes it, since there is nothing else to attribute the page to.
+///
+/// If the first matched heading is preceded by other text (a diagram or a
+/// table spilling over from the previous page, say) and a *second* heading
+/// also matched later on the same page, the page has demonstrably moved
+/// past that second heading too by the time it ends, even though neither
+/// one opened the page outright — so that page (and every page after it,
+/// until something opens cleanly again) is attributed to the last such
+/// later heading, preferring a top-level one over a subsection when both
+/// are present. A page whose only match is its (non-opening) first heading
+/// carries the previous page's section forward unchanged instead, since one
+/// non-opening match tells us nothing beyond what was already known — this
+/// is what keeps a heading mentioned partway down a page, with nothing
+/// after it, from being mistaken for that page's section.
 ///
 /// Matching keys on page position, not on a strict in-order text-equality
 /// chain: a title that fails to match anywhere (for example a heading whose
@@ -713,18 +724,21 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
     let mut current: Option<(String, String)> = None;
     let mut match_idx = 0usize;
     for (i, page) in normalized_pages.iter().enumerate() {
-        // Only the first heading matched on this page is a candidate to
-        // open it; later headings on the same page are consumed but never
-        // override `current` here.
-        let mut candidate: Option<&(usize, String, String)> = None;
+        let page_start = match_idx;
         while match_idx < matches.len() && matches[match_idx].0 == i {
-            if candidate.is_none() {
-                candidate = Some(&matches[match_idx]);
-            }
             match_idx += 1;
         }
-        if let Some((_, num, title)) = candidate {
+        let page_matches = &matches[page_start..match_idx];
+
+        if let Some((_, num, title)) = page_matches.first() {
             if current.is_none() || section_title_opens_page(page, title) {
+                current = Some((num.clone(), title.clone()));
+            } else if let Some((_, num, title)) = page_matches[1..]
+                .iter()
+                .rev()
+                .find(|(_, num, _)| !num.contains('.'))
+                .or_else(|| page_matches[1..].last())
+            {
                 current = Some((num.clone(), title.clone()));
             }
         }
@@ -1106,6 +1120,120 @@ mod tests {
         assert_eq!(
             formatted,
             "page=1 section= title=\npage=2 section= title=\npage=3 section=2.4 title=Estilos de Diagrama (style)"
+        );
+    }
+
+    #[test]
+    fn line_is_section_heading_rejects_leaderless_table_of_contents_line_tf_f() {
+        // TF-F: examples/texforge-capabilites' table of contents has a
+        // *second* shape for top-level entries — no dot leaders at all,
+        // just the title then a bare page number. `d9af352` only ever
+        // tested the dot-leader shape; this must be rejected too.
+        assert!(!line_is_section_heading("3. Matemáticas 4", "Matemáticas"));
+    }
+
+    #[test]
+    fn line_is_section_heading_matches_title_ending_in_a_number() {
+        // A heading can legitimately end in a digit (`Capítulo 2`); the
+        // leaderless-TOC rejection must key on what follows the title, not
+        // merely on the line ending in a number.
+        assert!(line_is_section_heading("Capítulo 2", "Capítulo 2"));
+        assert!(line_is_section_heading("5. Capítulo 2", "Capítulo 2"));
+    }
+
+    #[test]
+    fn page_breaks_leaderless_toc_entry_never_matches_tf_f() {
+        // TF-F: reproduces the second bug shape with the real lines from
+        // examples/texforge-capabilites — a leaderless top-level TOC entry
+        // must not be mistaken for the heading itself.
+        let pages = vec![
+            "Table of Contents\n3. Matemáticas 4".to_string(),
+            "Some other page with no heading.".to_string(),
+            "3. Matemáticas\nBody text about equations follows.".to_string(),
+        ];
+        let sections = vec![("3".into(), "Matemáticas".into())];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section= title=\npage=2 section= title=\npage=3 section=3 title=Matemáticas"
+        );
+    }
+
+    #[test]
+    fn page_breaks_full_example_structure_tf_f() {
+        // TF-F: a seven-page fixture reproducing
+        // examples/texforge-capabilites' structure — a table of contents
+        // mixing both TOC shapes (leaderless top-level entries, dot-leader
+        // subsection entries), then one top-level section per page. Every
+        // top-level section must be reported on the page where it begins;
+        // this is the shape of test the previous spec lacked.
+        let pages = vec![
+            "1. Introducción 2\n\
+             1.1. Antecedentes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2\n\
+             2. Diagramas Embebidos 2\n\
+             2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . . . . . . . . . . 3\n\
+             3. Matemáticas 4\n\
+             4. Citas Bibliográficas 5\n\
+             5. Listados de Código 5\n\
+             6. Tablas 6"
+                .to_string(),
+            "1. Introducción\nTexforge simplifica el flujo de trabajo académico.".to_string(),
+            "2. Diagramas Embebidos\nTexforge renderiza diagramas nativamente.".to_string(),
+            "3. Matemáticas\nLa fórmula cuadrática se expresa como sigue.".to_string(),
+            "4. Citas Bibliográficas\nTexforge gestiona automáticamente las referencias."
+                .to_string(),
+            "5. Listados de Código\nEjemplo de función en Python.".to_string(),
+            "6. Tablas\nComparación de motores de renderizado.".to_string(),
+        ];
+        let sections = vec![
+            ("1".into(), "Introducción".into()),
+            ("1.1".into(), "Antecedentes".into()),
+            ("2".into(), "Diagramas Embebidos".into()),
+            ("2.4".into(), "Estilos de Diagrama (style)".into()),
+            ("3".into(), "Matemáticas".into()),
+            ("4".into(), "Citas Bibliográficas".into()),
+            ("5".into(), "Listados de Código".into()),
+            ("6".into(), "Tablas".into()),
+        ];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section= title=\n\
+             page=2 section=1 title=Introducción\n\
+             page=3 section=2 title=Diagramas Embebidos\n\
+             page=4 section=3 title=Matemáticas\n\
+             page=5 section=4 title=Citas Bibliográficas\n\
+             page=6 section=5 title=Listados de Código\n\
+             page=7 section=6 title=Tablas"
+        );
+    }
+
+    #[test]
+    fn page_breaks_a_later_match_on_a_non_opening_page_advances_the_carry_tf_f() {
+        // TF-F: when a page's first heading doesn't open it (preceded by
+        // spillover from the previous section) but a *second* heading also
+        // matched further down the same page, the page has demonstrably
+        // moved past that second heading too — so it, not the stale
+        // earlier section, is what's reported, and what carries forward
+        // into pages with no heading of their own.
+        let pages = vec![
+            "Alpha\nBody under Alpha.".to_string(),
+            "Trailing Alpha content spills onto this page.\nBeta\nMore text.\nGamma\nBody."
+                .to_string(),
+            "No new heading here, still reads as later content.".to_string(),
+        ];
+        let sections = vec![
+            ("1".into(), "Alpha".into()),
+            ("2".into(), "Beta".into()),
+            ("3".into(), "Gamma".into()),
+        ];
+        let breaks = page_breaks(&pages, &sections);
+        let formatted = format_page_breaks(&breaks);
+        assert_eq!(
+            formatted,
+            "page=1 section=1 title=Alpha\npage=2 section=3 title=Gamma\npage=3 section=3 title=Gamma"
         );
     }
 
