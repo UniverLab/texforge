@@ -151,40 +151,99 @@
     engines -> pdf: "tectonic"
   \end{d2}
 
+  \clearpage
   \subsection{Estilos de Diagrama (\texttt{style})}\label{sec:estilos}
 
   Los tres entornos aceptan también un atributo \texttt{style}, combinable
-  con \texttt{width}, \texttt{pos} y \texttt{caption}. En vez de describir
-  cada preset con adjetivos, el mismo diagrama mínimo se repite a
-  continuación una vez por preset, para que la diferencia se vea
-  directamente:
+  con \texttt{width}, \texttt{pos} y \texttt{caption}. Un diagrama de tres
+  cajas apenas ejercita un relleno y un color de borde, así que en vez de
+  eso el mismo diagrama de secuencia --- con participantes, una nota, un
+  bloque \texttt{alt} y una barra de activación --- se repite a
+  continuación una vez por preset, para que la diferencia se vea en mucha
+  más superficie:
 
-  \begin{mermaid}[style=editorial, width=0.55\linewidth, caption={Preset \texttt{editorial}: paleta restringida, un solo acento, sin sombras}, pos=H]
-    flowchart LR
-      A[Entrada] --> B[Proceso] --> C[Salida]
+  \begin{mermaid}[style=editorial, width=0.85\linewidth, caption={Preset \texttt{editorial}: participantes y nota en tono papel con tinta oscura; el acento vermellón vive solo en las flechas de mensaje, nunca en el relleno de una caja}, pos=H]
+    sequenceDiagram
+    participant U as Usuario
+    participant CLI as texforge
+    participant V as Validador
+    participant M as Motor
+
+    U->>CLI: build
+    CLI->>V: valida sintaxis
+    alt sintaxis valida
+    V-->>CLI: ok
+    Note over CLI,M: cache de tectonic reutilizada
+    CLI->>M: compila
+    activate M
+    M-->>CLI: PDF generado
+    deactivate M
+    else error de sintaxis
+    V-->>CLI: linea N invalida
+    end
+    CLI-->>U: resultado
   \end{mermaid}
 
-  \begin{mermaid}[style=monochrome, width=0.55\linewidth, caption={Preset \texttt{monochrome}: escala de grises}, pos=H]
-    flowchart LR
-      A[Entrada] --> B[Proceso] --> C[Salida]
+  \begin{mermaid}[style=monochrome, width=0.85\linewidth, caption={Preset \texttt{monochrome}: el mismo diagrama sin un solo color, apto para impresión en blanco y negro}, pos=H]
+    sequenceDiagram
+    participant U as Usuario
+    participant CLI as texforge
+    participant V as Validador
+    participant M as Motor
+
+    U->>CLI: build
+    CLI->>V: valida sintaxis
+    alt sintaxis valida
+    V-->>CLI: ok
+    Note over CLI,M: cache de tectonic reutilizada
+    CLI->>M: compila
+    activate M
+    M-->>CLI: PDF generado
+    deactivate M
+    else error de sintaxis
+    V-->>CLI: linea N invalida
+    end
+    CLI-->>U: resultado
   \end{mermaid}
 
-  \begin{mermaid}[style=technical, width=0.55\linewidth, caption={Preset \texttt{technical}: trazo uniforme, sin relleno, etiquetas monoespaciadas}, pos=H]
-    flowchart LR
-      A[Entrada] --> B[Proceso] --> C[Salida]
+  \begin{mermaid}[style=technical, width=0.85\linewidth, caption={Preset \texttt{technical}: cajas sin relleno, trazo uniforme y etiquetas monoespaciadas, incluida la etiqueta del bloque \texttt{alt}}, pos=H]
+    sequenceDiagram
+    participant U as Usuario
+    participant CLI as texforge
+    participant V as Validador
+    participant M as Motor
+
+    U->>CLI: build
+    CLI->>V: valida sintaxis
+    alt sintaxis valida
+    V-->>CLI: ok
+    Note over CLI,M: cache de tectonic reutilizada
+    CLI->>M: compila
+    activate M
+    M-->>CLI: PDF generado
+    deactivate M
+    else error de sintaxis
+    V-->>CLI: linea N invalida
+    end
+    CLI-->>U: resultado
   \end{mermaid}
 
   El preset \texttt{editorial} sirve para documentos que se leen en pantalla
-  o se imprimen a color y buscan un acabado sobrio. El preset
-  \texttt{technical} conviene a diagramas que funcionan como planos o
-  esquemas de referencia, con peso de trazo uniforme. El preset
-  \texttt{monochrome} tiene una razón menos obvia: existe para documentos que
-  se imprimen en blanco y negro, donde un diagrama a color puede perder
-  significado, porque dos colores que se distinguen en pantalla pueden
-  reducirse al mismo gris al imprimirse sin color; \texttt{monochrome} evita
-  ese problema por construcción, ya que nunca depende del color para
-  distinguir nada. Omitir \texttt{style} equivale a \texttt{style=default},
-  el aspecto propio de cada motor, como en los tres diagramas anteriores.
+  o se imprimen a color y buscan un acabado sobrio: las cajas de los
+  participantes, la nota y la barra de activación comparten un neutro
+  cálido, y el acento vermellón se reserva para las flechas de mensaje, sin
+  gastarse nunca en un relleno. El preset \texttt{technical} conviene a
+  diagramas que funcionan como planos o esquemas de referencia: sin
+  relleno, con peso de trazo uniforme y etiquetas monoespaciadas hasta en
+  el rótulo del bloque \texttt{alt}. El preset \texttt{monochrome} tiene una
+  razón menos obvia: existe para documentos que se imprimen en blanco y
+  negro, donde un diagrama a color puede perder significado, porque dos
+  colores que se distinguen en pantalla pueden reducirse al mismo gris al
+  imprimirse sin color; \texttt{monochrome} evita ese problema por
+  construcción, ya que nunca depende del color para distinguir nada --- ni
+  siquiera una llamada de una respuesta. Omitir \texttt{style} equivale a
+  \texttt{style=default}, el aspecto propio de cada motor, como en los
+  diagramas de las secciones anteriores.
 
   También puede fijarse un preset por defecto para todo el documento en
   \texttt{project.toml}, bajo \texttt{[diagrams]} con \texttt{style = "..."};
