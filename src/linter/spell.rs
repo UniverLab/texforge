@@ -11,7 +11,7 @@ fn line_of(source: &str, offset: usize) -> usize {
     let offset = offset.min(source.len());
     1 + source[..offset].matches('\n').count()
 }
-use crate::texparse::{tokenize_with_spans, Token};
+use crate::texparse::{tokenize_with_spans, SpannedToken, Token};
 use crate::texutil::strip_empty_groups;
 
 /// Project-local whitelist filenames to check, in order. Also the order
@@ -639,6 +639,351 @@ fn load_project_whitelist(root: &Path) -> HashSet<String> {
     set
 }
 
+const ACCENT_COMMANDS: &[&str] = &[
+    "'", "`", "^", "\"", "~", "=", ".", "c", "v", "u", "H", "r", "k",
+];
+
+/// Commands that render no character at all and must therefore be *skipped*
+/// rather than treated as a word break. `\-` is a discretionary hyphen — a
+/// hint about where a line may break — and `\/` is an italic correction;
+/// both appear inside words. Measured on a real document: `impor\-tancia`
+/// was being reported as the two unknown words `impor` and `tancia`.
+const TRANSPARENT_COMMANDS: &[&str] = &["-", "/"];
+
+fn is_transparent_command(name: &str) -> bool {
+    TRANSPARENT_COMMANDS.contains(&name)
+}
+
+fn is_accent_command(name: &str) -> bool {
+    ACCENT_COMMANDS.contains(&name)
+}
+
+fn is_letter_form_accent(name: &str) -> bool {
+    matches!(name, "c" | "v" | "u" | "H" | "r" | "k")
+}
+
+fn accent_to_char(name: &str) -> Option<char> {
+    match name {
+        "'" => Some('\''),
+        "`" => Some('`'),
+        "^" => Some('^'),
+        "\"" => Some('"'),
+        "~" => Some('~'),
+        "=" => Some('='),
+        "." => Some('.'),
+        "c" => Some('c'),
+        "v" => Some('v'),
+        "u" => Some('u'),
+        "H" => Some('H'),
+        "r" => Some('r'),
+        "k" => Some('k'),
+        _ => None,
+    }
+}
+
+fn compose_accent(accent: char, base: char) -> Option<char> {
+    Some(match (accent, base) {
+        ('\'', 'a') => 'á',
+        ('\'', 'e') => 'é',
+        ('\'', 'i') => 'í',
+        ('\'', 'o') => 'ó',
+        ('\'', 'u') => 'ú',
+        ('\'', 'y') => 'ý',
+        ('\'', 'A') => 'Á',
+        ('\'', 'E') => 'É',
+        ('\'', 'I') => 'Í',
+        ('\'', 'O') => 'Ó',
+        ('\'', 'U') => 'Ú',
+        ('\'', 'Y') => 'Ý',
+        ('`', 'a') => 'à',
+        ('`', 'e') => 'è',
+        ('`', 'i') => 'ì',
+        ('`', 'o') => 'ò',
+        ('`', 'u') => 'ù',
+        ('`', 'A') => 'À',
+        ('`', 'E') => 'È',
+        ('`', 'I') => 'Ì',
+        ('`', 'O') => 'Ò',
+        ('`', 'U') => 'Ù',
+        ('^', 'a') => 'â',
+        ('^', 'e') => 'ê',
+        ('^', 'i') => 'î',
+        ('^', 'o') => 'ô',
+        ('^', 'u') => 'û',
+        ('^', 'A') => 'Â',
+        ('^', 'E') => 'Ê',
+        ('^', 'I') => 'Î',
+        ('^', 'O') => 'Ô',
+        ('^', 'U') => 'Û',
+        ('"', 'a') => 'ä',
+        ('"', 'e') => 'ë',
+        ('"', 'i') => 'ï',
+        ('"', 'o') => 'ö',
+        ('"', 'u') => 'ü',
+        ('"', 'A') => 'Ä',
+        ('"', 'E') => 'Ë',
+        ('"', 'I') => 'Ï',
+        ('"', 'O') => 'Ö',
+        ('"', 'U') => 'Ü',
+        ('~', 'a') => 'ã',
+        ('~', 'n') => 'ñ',
+        ('~', 'o') => 'õ',
+        ('~', 'A') => 'Ã',
+        ('~', 'N') => 'Ñ',
+        ('~', 'O') => 'Õ',
+        ('=', 'a') => 'ā',
+        ('=', 'e') => 'ē',
+        ('=', 'i') => 'ī',
+        ('=', 'o') => 'ō',
+        ('=', 'u') => 'ū',
+        ('=', 'A') => 'Ā',
+        ('=', 'E') => 'Ē',
+        ('=', 'I') => 'Ī',
+        ('=', 'O') => 'Ō',
+        ('=', 'U') => 'Ū',
+        ('.', 'a') => 'ȧ',
+        ('.', 'e') => 'ė',
+        ('.', 'o') => 'ȯ',
+        ('.', 'A') => 'Ȧ',
+        ('.', 'E') => 'Ė',
+        ('.', 'O') => 'Ȯ',
+        ('c', 'c') => 'ç',
+        ('c', 'C') => 'Ç',
+        ('c', 's') => 'ş',
+        ('c', 'S') => 'Ş',
+        ('c', 't') => 'ţ',
+        ('c', 'T') => 'Ţ',
+        ('v', 'c') => 'č',
+        ('v', 'C') => 'Č',
+        ('v', 's') => 'š',
+        ('v', 'S') => 'Š',
+        ('v', 'z') => 'ž',
+        ('v', 'Z') => 'Ž',
+        ('v', 'e') => 'ě',
+        ('v', 'E') => 'Ě',
+        ('v', 'r') => 'ř',
+        ('v', 'R') => 'Ř',
+        ('v', 'n') => 'ň',
+        ('v', 'N') => 'Ň',
+        ('u', 'a') => 'ă',
+        ('u', 'A') => 'Ă',
+        ('u', 'e') => 'ĕ',
+        ('u', 'E') => 'Ĕ',
+        ('u', 'i') => 'ĭ',
+        ('u', 'I') => 'Ĭ',
+        ('u', 'o') => 'ŏ',
+        ('u', 'O') => 'Ŏ',
+        ('u', 'u') => 'ŭ',
+        ('u', 'U') => 'Ŭ',
+        ('H', 'o') => 'ő',
+        ('H', 'O') => 'Ő',
+        ('H', 'u') => 'ű',
+        ('H', 'U') => 'Ű',
+        ('r', 'a') => 'å',
+        ('r', 'A') => 'Å',
+        ('r', 'u') => 'ů',
+        ('r', 'U') => 'Ů',
+        ('k', 'a') => 'ą',
+        ('k', 'A') => 'Ą',
+        ('k', 'e') => 'ę',
+        ('k', 'E') => 'Ę',
+        _ => return None,
+    })
+}
+
+fn extract_base_from_text_start(text: &str) -> Option<(char, usize)> {
+    let first_non_ws = text.find(|c: char| !c.is_whitespace())?;
+    let remaining = &text[first_non_ws..];
+
+    if remaining.starts_with('{') && remaining.len() >= 3 {
+        let inner = &remaining[1..];
+        if let Some(base) = inner.chars().next() {
+            if base.is_ascii_alphabetic() {
+                let after_base = &inner[base.len_utf8()..];
+                if after_base.starts_with('}') {
+                    let total_skip = first_non_ws + 1 + base.len_utf8() + 1;
+                    return Some((base, total_skip));
+                }
+            }
+        }
+    }
+
+    let base = remaining.chars().next()?;
+    if base.is_ascii_alphabetic() {
+        Some((base, first_non_ws + base.len_utf8()))
+    } else {
+        None
+    }
+}
+
+enum AccentBaseSource {
+    FromArgs,
+    FromNextText {
+        chars_to_skip: usize,
+    },
+    FromDotlessIJ {
+        extra_tokens_to_skip: usize,
+        chars_to_skip_in_last: usize,
+    },
+}
+
+fn try_resolve_accent(
+    name: &str,
+    args: &[String],
+    tokens: &[SpannedToken],
+    accent_idx: usize,
+) -> Option<(char, AccentBaseSource)> {
+    let accent_char = accent_to_char(name)?;
+
+    if is_letter_form_accent(name) && !args.is_empty() {
+        let arg = args[0].trim();
+        if arg.len() == 1 {
+            if let Some(base) = arg.chars().next() {
+                if base.is_ascii_alphabetic() {
+                    if let Some(composed) = compose_accent(accent_char, base) {
+                        return Some((composed, AccentBaseSource::FromArgs));
+                    }
+                }
+            }
+        }
+    }
+
+    let next_idx = accent_idx + 1;
+    if next_idx >= tokens.len() {
+        return None;
+    }
+
+    match &tokens[next_idx].token {
+        Token::Text(t) => {
+            if t == "{" {
+                let nn_idx = next_idx + 1;
+                if nn_idx < tokens.len() {
+                    if let Token::Command {
+                        name: ij_name,
+                        args: ij_args,
+                    } = &tokens[nn_idx].token
+                    {
+                        if (ij_name == "i" || ij_name == "j") && ij_args.is_empty() {
+                            let nnn_idx = nn_idx + 1;
+                            if nnn_idx < tokens.len() {
+                                if let Token::Text(closing) = &tokens[nnn_idx].token {
+                                    if closing.starts_with('}') {
+                                        let base = if ij_name == "i" { 'i' } else { 'j' };
+                                        if let Some(composed) = compose_accent(accent_char, base) {
+                                            let chars_to_skip =
+                                                if closing.len() > 1 { 1 } else { 0 };
+                                            return Some((
+                                                composed,
+                                                AccentBaseSource::FromDotlessIJ {
+                                                    extra_tokens_to_skip: 3,
+                                                    chars_to_skip_in_last: chars_to_skip,
+                                                },
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((base, skip)) = extract_base_from_text_start(t) {
+                if let Some(composed) = compose_accent(accent_char, base) {
+                    return Some((
+                        composed,
+                        AccentBaseSource::FromNextText {
+                            chars_to_skip: skip,
+                        },
+                    ));
+                }
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+fn build_spell_text(tokens: &[SpannedToken], source: &str) -> (String, Vec<(usize, usize)>) {
+    let mut out = String::new();
+    let mut line_chunks: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    let mut pending_text_skip: usize = 0;
+
+    while i < tokens.len() {
+        match &tokens[i].token {
+            Token::Text(t) => {
+                let skip = pending_text_skip;
+                pending_text_skip = 0;
+                let line = line_of(source, tokens[i].start);
+                let chunk = strip_empty_groups(&t[skip..]);
+                if !chunk.is_empty() {
+                    line_chunks.push((out.len(), line));
+                    out.push_str(&chunk);
+                }
+                i += 1;
+            }
+            Token::Command { name, args } if is_accent_command(name) => {
+                match try_resolve_accent(name, args, tokens, i) {
+                    Some((composed, source_kind)) => {
+                        let line = line_of(source, tokens[i].start);
+                        line_chunks.push((out.len(), line));
+                        out.push(composed);
+                        i += 1;
+                        match source_kind {
+                            AccentBaseSource::FromArgs => {}
+                            AccentBaseSource::FromNextText { chars_to_skip } => {
+                                pending_text_skip = chars_to_skip;
+                            }
+                            AccentBaseSource::FromDotlessIJ {
+                                extra_tokens_to_skip,
+                                chars_to_skip_in_last,
+                            } => {
+                                i += extra_tokens_to_skip - 1;
+                                pending_text_skip = chars_to_skip_in_last;
+                            }
+                        }
+                    }
+                    None => {
+                        out.push(' ');
+                        i += 1;
+                        pending_text_skip = 0;
+                    }
+                }
+            }
+            Token::Command { name, .. } if is_transparent_command(name) => {
+                // Emit nothing and do NOT push a separator: the characters on
+                // either side belong to the same word.
+                i += 1;
+                pending_text_skip = 0;
+            }
+            Token::Command { name, .. } if name == "i" || name == "j" => {
+                let line = line_of(source, tokens[i].start);
+                line_chunks.push((out.len(), line));
+                out.push(if name == "i" { 'i' } else { 'j' });
+                i += 1;
+                pending_text_skip = 0;
+            }
+            _ => {
+                out.push(' ');
+                i += 1;
+                pending_text_skip = 0;
+            }
+        }
+    }
+
+    (out, line_chunks)
+}
+
+fn line_for_offset(line_chunks: &[(usize, usize)], offset: usize) -> usize {
+    match line_chunks.binary_search_by_key(&offset, |(off, _)| *off) {
+        Ok(idx) => line_chunks[idx].1,
+        Err(0) => line_chunks.first().map_or(1, |&(_, l)| l),
+        Err(idx) => line_chunks[idx - 1].1,
+    }
+}
+
 /// Lint files for spelling mistakes. Returns warnings (never errors).
 /// If a dictionary cannot be obtained, returns Ok(vec![]) after printing a
 /// clear message (per spec: don't fail the build for missing dictionaries).
@@ -711,31 +1056,21 @@ pub fn lint_files(
 
     for (rel, source) in files {
         let tokenized = tokenize_with_spans(source);
-        for sp in &tokenized.tokens {
-            if let Token::Text(text) = &sp.token {
-                // Empty LaTeX groups ({}) are a ligature workaround that
-                // produces no glyph (e.g. `workf{}lows` renders as
-                // `workflows`); strip them before splitting so the joined
-                // word is checked, not its fragments.
-                let text = strip_empty_groups(text);
-                // Extract candidate words by splitting on non-alpha characters
-                for word in text.split(|c: char| !c.is_alphabetic()) {
-                    let w = word.trim();
-                    if w.is_empty() {
-                        continue;
-                    }
-                    let wl = w.to_lowercase();
-                    if wl.len() <= 1 {
-                        // skip short tokens to avoid noisy single-letter misses
-                        continue;
-                    }
-                    if !dict.contains(&wl) && !whitelist.contains(&wl) {
-                        // record first occurrence only
-                        unknowns
-                            .entry(wl)
-                            .or_insert_with(|| (rel.clone(), line_of(source, sp.start)));
-                    }
-                }
+        let (spell_text, line_chunks) = build_spell_text(&tokenized.tokens, source);
+        let spell_base = spell_text.as_ptr() as usize;
+        for word in spell_text.split(|c: char| !c.is_alphabetic()) {
+            let w = word.trim();
+            if w.is_empty() {
+                continue;
+            }
+            let wl = w.to_lowercase();
+            if wl.len() <= 1 {
+                continue;
+            }
+            if !dict.contains(&wl) && !whitelist.contains(&wl) {
+                let word_offset = word.as_ptr() as usize - spell_base;
+                let line = line_for_offset(&line_chunks, word_offset);
+                unknowns.entry(wl).or_insert_with(|| (rel.clone(), line));
             }
         }
     }
@@ -760,27 +1095,41 @@ pub fn lint_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn tokenizer_integration_does_not_flag_commands_or_labels() {
-        let src = r#"\documentclass{article}
-\begin{document}
-Hello world. This is some text. \label{sec:intro} More text.
-\end{document}"#;
-        // Create a tiny english dictionary that contains common words
-        let tmp = TempDir::new().unwrap();
-        let dict_dir = tmp.path().join(".texforge").join("dicts");
-        fs::create_dir_all(&dict_dir).unwrap();
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
         fs::write(
-            dict_dir.join("english.txt"),
+            dicts_dir.join("english.txt"),
             "hello\nworld\nthis\nis\nsome\ntext\nmore\n",
         )
         .unwrap();
 
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let src = r#"\documentclass{article}
+\begin{document}
+Hello world. This is some text. \label{sec:intro} More text.
+\end{document}"#;
+
         // Run lint_files against a single file
         let files = vec![("main.tex".to_string(), src.to_string())];
-        let findings = lint_files(&files, tmp.path(), Some("english")).unwrap();
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english")).unwrap();
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
         // Should be empty: the words used are in the tiny dictionary and commands/labels not emitted
         assert!(
             findings.is_empty(),
@@ -863,6 +1212,7 @@ Hello world. This is some text. \label{sec:intro} More text.
 
     #[test]
     fn ensure_dictionary_bails_in_test_harness_environment() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Simulate being run under a test harness like nextest by setting a
         // recognized environment variable. ensure_dictionary must not attempt
         // network activity in this case and should return an Err.
@@ -1124,6 +1474,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// checking Spanish prose against English words.
     #[test]
     fn spanish_document_with_only_english_dictionary_emits_no_unknown_word_warnings() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1167,6 +1518,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// proven by a Spanish word passing and an English-only word failing.
     #[test]
     fn spanish_document_checks_against_spanish_dictionary_not_english() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1210,6 +1562,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// findings) so the disagreement warning is the only finding produced.
     #[test]
     fn disagreement_warning_names_both_languages_and_points_at_declaration() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1257,6 +1610,7 @@ Hello world. This is some text. \label{sec:intro} More text.
 
     #[test]
     fn no_disagreement_warning_when_declared_matches_configured_default() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
 
@@ -1285,6 +1639,7 @@ Hello world. This is some text. \label{sec:intro} More text.
 
     #[test]
     fn no_disagreement_warning_without_babel_declaration() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1321,6 +1676,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// produce exactly one warning, not one per file.
     #[test]
     fn multi_file_project_with_matching_declarations_produces_one_warning() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1424,6 +1780,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// one language, `ensure_dictionary` must choose the Hunspell pair.
     #[test]
     fn ensure_dictionary_prefers_hunspell_pair_when_both_present() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1454,6 +1811,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// missing-dictionary path and its skip message), never a panic.
     #[test]
     fn lint_files_treats_dic_without_aff_as_no_dictionary_available() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1490,6 +1848,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// genuine misspelling (requirement 10).
     #[test]
     fn spanish_document_checks_against_installed_hunspell_pair() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1538,6 +1897,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// workaround.
     #[test]
     fn ligature_workaround_empty_groups_are_checked_as_joined_words() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1574,6 +1934,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// since a fragment is not something the author can search for.
     #[test]
     fn misspelled_word_with_empty_group_is_reported_as_joined_word() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1618,6 +1979,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// mid-word case.
     #[test]
     fn empty_group_at_start_end_and_doubled_behave_sanely() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -1650,6 +2012,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// path a user already tried before this feature existed (decision 2).
     #[test]
     fn global_whitelist_path_is_home_texforge_spell_words() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         let orig_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home.path());
@@ -1678,6 +2041,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// (requirement 6).
     #[test]
     fn a_global_only_word_is_accepted_in_a_project_with_no_whitelist_file() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1721,6 +2085,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// is best-effort, same as the project-local files.
     #[test]
     fn missing_global_whitelist_yields_no_error_and_no_findings_change() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1762,6 +2127,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// are both accepted together (decision 3).
     #[test]
     fn project_and_global_whitelists_union_rather_than_override() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1802,6 +2168,7 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// `--global` since global became the default (requirement 9).
     #[test]
     fn unknown_word_suggestion_names_spell_add_and_local_flag() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1844,5 +2211,293 @@ Hello world. This is some text. \label{sec:intro} More text.
             "suggestion should not point at --global now that it is the default: {}",
             suggestion
         );
+    }
+
+    // --- TF-spell: accent macro resolution ---
+
+    fn run_with_home<F, R>(spanish_words: &str, english_words: &str, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(dicts_dir.join("spanish.txt"), spanish_words).unwrap();
+        fs::write(dicts_dir.join("english.txt"), english_words).unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        let orig_nex = std::env::var("NEXTEST_RUN_ID").ok();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("NEXTEST_RUN_ID", "tf-spell-accent");
+
+        let result = f();
+
+        std::env::remove_var("NEXTEST_RUN_ID");
+        if let Some(v) = orig_nex {
+            std::env::set_var("NEXTEST_RUN_ID", v);
+        }
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        result
+    }
+
+    #[test]
+    fn symbol_form_accents_resolve_brace_and_direct() {
+        run_with_home("violación\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        violaci\\'{o}n\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "violación (brace form) must not be flagged: {:?}",
+                unknown
+            );
+        });
+    }
+
+    #[test]
+    fn symbol_form_accents_resolve_space_form() {
+        run_with_home("café\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        caf\\' e\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "café (symbol-form space variant \\' e) must not be flagged: {:?}",
+                unknown
+            );
+        });
+    }
+
+    #[test]
+    fn letter_form_accents_resolve_brace_form_through_lint_files() {
+        run_with_home("français\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        fran\\c{c}ais\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            assert!(
+                !findings.iter().any(|f| f.message.contains("fran")),
+                "français (letter-form \\c{{c}}) must not produce 'fran': {:?}",
+                findings
+            );
+            assert!(
+                !findings.iter().any(|f| f.message.contains("'ais'")),
+                "français (letter-form \\c{{c}}) must not eat 'ais': {:?}",
+                findings
+            );
+        });
+    }
+
+    #[test]
+    fn letter_form_accents_resolve_space_form_through_lint_files() {
+        run_with_home("č\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        \\v c\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "\\v c (space form) must resolve: {:?}",
+                unknown
+            );
+        });
+    }
+
+    #[test]
+    fn spanish_document_with_accent_macros_produces_zero_warnings() {
+        run_with_home(
+            "universidad\ncoincidencia\ncomparación\nnúmero\nmás\naquí\n",
+            "hello\nworld\n",
+            || {
+                let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                            universidad coincidencia comparaci\\'{o}n n\\'umero \
+                            m\\'as aqu\\'{\\i}\n\\end{document}";
+                let files = vec![("main.tex".to_string(), src.to_string())];
+                let project_root = TempDir::new().unwrap();
+                let findings = lint_files(&files, project_root.path(), None).unwrap();
+                let unknown: Vec<_> = findings
+                    .iter()
+                    .filter(|f| f.message.contains("Unknown word"))
+                    .collect();
+                assert!(
+                    unknown.is_empty(),
+                    "Spanish document with accent macros must produce zero unknown-word warnings: {:?}",
+                    unknown
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn discretionary_hyphen_does_not_split_a_word() {
+        // Measured on a real document: `impor\-tancia` was reported as the
+        // two unknown words `impor` and `tancia`. `\-` marks where a line
+        // MAY break; it renders nothing and must not break the word here.
+        run_with_home("importancia\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        impor\\-tancia\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "a discretionary hyphen must not split a word: {:?}",
+                unknown
+            );
+        });
+    }
+
+    #[test]
+    fn document_with_letter_form_macro_produces_zero_warnings() {
+        run_with_home("čeština\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        \\v{c}e\\v{s}tina\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "document with letter-form macros must produce zero warnings: {:?}",
+                unknown
+            );
+        });
+    }
+
+    #[test]
+    fn misspelling_with_accent_macro_is_reported_as_composed_word() {
+        run_with_home("hola\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        xyz\\'{a}bc\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            assert!(
+                findings.iter().any(|f| f.message.contains("xyzábc")),
+                "misspelling with accent must be reported as composed word 'xyzábc': {:?}",
+                findings
+            );
+        });
+    }
+
+    #[test]
+    fn fran_c_ais_does_not_eat_following_words() {
+        run_with_home(
+            "français\nmás\npalabras\n",
+            "hello\nworld\nmore\nwords\n",
+            || {
+                let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        fran\\c{c}ais m\\'as palabras\n\\end{document}";
+                let files = vec![("main.tex".to_string(), src.to_string())];
+                let project_root = TempDir::new().unwrap();
+                let findings = lint_files(&files, project_root.path(), None).unwrap();
+                let unknown: Vec<_> = findings
+                    .iter()
+                    .filter(|f| f.message.contains("Unknown word"))
+                    .collect();
+                assert!(
+                    unknown.is_empty(),
+                    "fran\\c{{c}}ais m\\'as palabras must produce zero unknown-word warnings \
+                 (must not eat 'ais', 'm\\'as', or 'palabras'): {:?}",
+                    unknown
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn unknown_macro_breaks_word_rather_than_absorbing_letters() {
+        run_with_home("hola\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        abc\\unknownmacro def\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown_words: Vec<_> = findings
+                .iter()
+                .filter_map(|f| {
+                    f.message
+                        .strip_prefix("Unknown word: '")
+                        .and_then(|s| s.strip_suffix('\''))
+                        .map(String::from)
+                })
+                .collect();
+            assert!(
+                unknown_words.contains(&"abc".to_string()),
+                "unknown macro must break word, leaving 'abc' to be checked: {:?}",
+                unknown_words
+            );
+            assert!(
+                unknown_words.contains(&"def".to_string()),
+                "text after unknown macro must not be swallowed: {:?}",
+                unknown_words
+            );
+        });
+    }
+
+    #[test]
+    fn dotless_i_with_accent_resolves() {
+        run_with_home("mercurio\níndice\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        mercurio \\'{\\i}ndice\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                !unknown.iter().any(|f| f.message.contains("'ndice'")),
+                "\\ '{{\\i}} must resolve to 'í', not leave 'ndice': {:?}",
+                unknown
+            );
+        });
+    }
+
+    #[test]
+    fn all_accent_forms_resolve_via_helper() {
+        assert_eq!(compose_accent('\'', 'e'), Some('é'));
+        assert_eq!(compose_accent('`', 'a'), Some('à'));
+        assert_eq!(compose_accent('^', 'o'), Some('ô'));
+        assert_eq!(compose_accent('"', 'u'), Some('ü'));
+        assert_eq!(compose_accent('~', 'n'), Some('ñ'));
+        assert_eq!(compose_accent('=', 'a'), Some('ā'));
+        assert_eq!(compose_accent('.', 'e'), Some('ė'));
+        assert_eq!(compose_accent('c', 'c'), Some('ç'));
+        assert_eq!(compose_accent('v', 's'), Some('š'));
+        assert_eq!(compose_accent('u', 'a'), Some('ă'));
+        assert_eq!(compose_accent('H', 'u'), Some('ű'));
+        assert_eq!(compose_accent('r', 'a'), Some('å'));
+        assert_eq!(compose_accent('k', 'e'), Some('ę'));
     }
 }

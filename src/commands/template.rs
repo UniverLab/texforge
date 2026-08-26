@@ -71,6 +71,21 @@ pub fn validate(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refresh cached templates, bypassing the TTL.
+pub fn refresh(name: Option<&str>) -> Result<()> {
+    match name {
+        Some(n) => {
+            println!("Refreshing template '{}'...", n);
+            templates::refresh(n)?;
+            println!("  ◇ Template '{}' refreshed", n);
+        }
+        None => {
+            templates::refresh_all()?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

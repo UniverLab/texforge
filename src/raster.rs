@@ -111,7 +111,7 @@ impl<'a> PdfDocument<'a> {
         let mut rgba = pixmap.data_as_u8_slice().to_vec();
         // Pages render on an opaque white base, so premultiplied equals direct;
         // force alpha anyway so compositors see a solid channel.
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         let ink_coverage = ink_coverage(&rgba);
@@ -164,7 +164,7 @@ impl<'a> PdfDocument<'a> {
 /// and antialiased edges count proportionally.
 pub fn ink_coverage(rgba: &[u8]) -> f64 {
     let mut ink = 0.0;
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         let luminance = (px[0] as u32 + px[1] as u32 + px[2] as u32) / 3;
         ink += 1.0 - luminance as f64 / 255.0;
     }
@@ -193,7 +193,7 @@ mod tests {
             assert_eq!((page.width, page.height), (612, 842));
             assert_eq!(page.rgba.len(), page.width * page.height * 4);
             assert!(
-                page.rgba.chunks_exact(4).all(|px| px[3] == 255),
+                page.rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255),
                 "alpha must be forced to 255"
             );
         }

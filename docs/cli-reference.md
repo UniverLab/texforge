@@ -42,6 +42,8 @@ texforge <command> [options]
 | `texforge template add <name>` | Download a template from the registry |
 | `texforge template remove <name>` | Remove an installed template |
 | `texforge template validate <name>` | Verify template compatibility |
+| `texforge template refresh` | Refresh all cached templates (bypass TTL) |
+| `texforge template refresh <name>` | Refresh one cached template (bypass TTL) |
 
 ## Spell-Check
 
@@ -90,6 +92,17 @@ Default scope is global (`~/.texforge/spell-words`). Both scopes are unioned at 
 | Command | Description |
 |---|---|
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, and project |
+
+## Uninstall
+
+| Command | Description |
+|---|---|
+| `texforge uninstall` | Remove everything texforge manages under `~/.texforge` |
+| `texforge uninstall --yes` | Skip the confirmation prompt |
+| `texforge uninstall --dry-run` | Print the plan without removing anything |
+| `texforge uninstall --include-spell-words` | Also remove the personal spell dictionary (preserved by default) |
+
+The texforge binary itself is never removed by this command. The personal spell dictionary (`~/.texforge/spell-words`) contains your own writing and is preserved unless `--include-spell-words` is passed.
 
 ## Configuration
 
