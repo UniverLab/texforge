@@ -42,6 +42,8 @@ texforge <command> [options]
 | `texforge template add <name>` | Download a template from the registry |
 | `texforge template remove <name>` | Remove an installed template |
 | `texforge template validate <name>` | Verify template compatibility |
+| `texforge template refresh` | Refresh all cached templates (bypass TTL) |
+| `texforge template refresh <name>` | Refresh one cached template (bypass TTL) |
 
 ## Spell-Check
 

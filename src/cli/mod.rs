@@ -189,6 +189,11 @@ enum TemplateAction {
     Remove { name: String },
     /// Validate template compatibility
     Validate { name: String },
+    /// Refresh cached templates (bypass TTL; all templates or one by name)
+    Refresh {
+        /// Template name to refresh (omit to refresh all cached templates)
+        name: Option<String>,
+    },
 }
 
 impl Cli {
@@ -235,6 +240,7 @@ impl Cli {
                 TemplateAction::Add { source } => commands::template::add(&source),
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
+                TemplateAction::Refresh { name } => commands::template::refresh(name.as_deref()),
             },
             Commands::Spell { action } => {
                 let action = match action {
