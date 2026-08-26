@@ -643,6 +643,17 @@ const ACCENT_COMMANDS: &[&str] = &[
     "'", "`", "^", "\"", "~", "=", ".", "c", "v", "u", "H", "r", "k",
 ];
 
+/// Commands that render no character at all and must therefore be *skipped*
+/// rather than treated as a word break. `\-` is a discretionary hyphen — a
+/// hint about where a line may break — and `\/` is an italic correction;
+/// both appear inside words. Measured on a real document: `impor\-tancia`
+/// was being reported as the two unknown words `impor` and `tancia`.
+const TRANSPARENT_COMMANDS: &[&str] = &["-", "/"];
+
+fn is_transparent_command(name: &str) -> bool {
+    TRANSPARENT_COMMANDS.contains(&name)
+}
+
 fn is_accent_command(name: &str) -> bool {
     ACCENT_COMMANDS.contains(&name)
 }
@@ -940,6 +951,12 @@ fn build_spell_text(tokens: &[SpannedToken], source: &str) -> (String, Vec<(usiz
                         pending_text_skip = 0;
                     }
                 }
+            }
+            Token::Command { name, .. } if is_transparent_command(name) => {
+                // Emit nothing and do NOT push a separator: the characters on
+                // either side belong to the same word.
+                i += 1;
+                pending_text_skip = 0;
             }
             Token::Command { name, .. } if name == "i" || name == "j" => {
                 let line = line_of(source, tokens[i].start);
@@ -2331,6 +2348,29 @@ Hello world. This is some text. \label{sec:intro} More text.
                 );
             },
         );
+    }
+
+    #[test]
+    fn discretionary_hyphen_does_not_split_a_word() {
+        // Measured on a real document: `impor\-tancia` was reported as the
+        // two unknown words `impor` and `tancia`. `\-` marks where a line
+        // MAY break; it renders nothing and must not break the word here.
+        run_with_home("importancia\n", "hello\nworld\n", || {
+            let src = "\\usepackage[spanish]{babel}\n\\begin{document}\n\
+                        impor\\-tancia\n\\end{document}";
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let project_root = TempDir::new().unwrap();
+            let findings = lint_files(&files, project_root.path(), None).unwrap();
+            let unknown: Vec<_> = findings
+                .iter()
+                .filter(|f| f.message.contains("Unknown word"))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "a discretionary hyphen must not split a word: {:?}",
+                unknown
+            );
+        });
     }
 
     #[test]
