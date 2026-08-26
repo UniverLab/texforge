@@ -90,7 +90,19 @@ x86_64 are published on the
 
 ## Uninstall
 
+To remove everything texforge manages (Tectonic engine, template cache, dictionary cache, configuration):
+
 ```bash
-rm -f ~/.local/bin/texforge   # texforge binary
-rm -rf ~/.texforge/           # tectonic engine + cached templates
+texforge uninstall
 ```
+
+This shows what it would remove and asks for confirmation. The personal spell dictionary (`~/.texforge/spell-words`) is preserved by default — it contains your own writing. To remove it as well:
+
+```bash
+texforge uninstall --include-spell-words
+```
+
+The texforge binary itself is not removed by this command. To remove it:
+
+- **If installed via the quick installer or a direct download:** `rm -f ~/.local/bin/texforge` (or the path shown by `texforge uninstall`).
+- **If installed via cargo:** `cargo uninstall texforge`.

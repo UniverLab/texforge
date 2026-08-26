@@ -93,6 +93,17 @@ Default scope is global (`~/.texforge/spell-words`). Both scopes are unioned at 
 |---|---|
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, and project |
 
+## Uninstall
+
+| Command | Description |
+|---|---|
+| `texforge uninstall` | Remove everything texforge manages under `~/.texforge` |
+| `texforge uninstall --yes` | Skip the confirmation prompt |
+| `texforge uninstall --dry-run` | Print the plan without removing anything |
+| `texforge uninstall --include-spell-words` | Also remove the personal spell dictionary (preserved by default) |
+
+The texforge binary itself is never removed by this command. The personal spell dictionary (`~/.texforge/spell-words`) contains your own writing and is preserved unless `--include-spell-words` is passed.
+
 ## Configuration
 
 | Command | Description |
