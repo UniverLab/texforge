@@ -102,6 +102,21 @@ fn print_meta(key: &str, value: Option<&str>) {
 }
 
 fn cmd_pages(project: &Project, pdf_path: &Path) -> Result<()> {
+    let (breaks, source) = build_page_breaks(project, pdf_path)?;
+    eprintln!("source: {}", source_label(source));
+    println!("{}", pdftext::format_page_breaks(&breaks));
+    Ok(())
+}
+
+fn build_page_breaks(
+    project: &Project,
+    pdf_path: &Path,
+) -> Result<(Vec<pdftext::PdfPageBreak>, pdftext::PageBreakSource)> {
+    if let Some((outline_entries, page_count)) = pdftext::read_pdf_outline(pdf_path)? {
+        let breaks = pdftext::page_breaks_from_outline(&outline_entries, page_count);
+        return Ok((breaks, pdftext::PageBreakSource::Outline));
+    }
+
     let page_texts = pdftext::extract_text_by_pages(pdf_path)?;
     let outline = outline::build_outline(
         &project.config.document.title,
@@ -114,8 +129,14 @@ fn cmd_pages(project: &Project, pdf_path: &Path) -> Result<()> {
         .map(|s| (s.number.clone(), s.title.clone()))
         .collect();
     let breaks = pdftext::page_breaks(&page_texts, &sections);
-    println!("{}", pdftext::format_page_breaks(&breaks));
-    Ok(())
+    Ok((breaks, pdftext::PageBreakSource::TextMatch))
+}
+
+fn source_label(source: pdftext::PageBreakSource) -> &'static str {
+    match source {
+        pdftext::PageBreakSource::Outline => "pdf-outline",
+        pdftext::PageBreakSource::TextMatch => "text-match",
+    }
 }
 
 fn cmd_check(project: &Project, pdf_path: &Path) -> Result<()> {

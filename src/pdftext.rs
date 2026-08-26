@@ -76,6 +76,26 @@ pub struct PdfPageBreak {
     pub title: Option<String>,
 }
 
+/// One entry in the PDF outline (bookmark tree).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfOutlineEntry {
+    /// Section title from the outline.
+    pub title: String,
+    /// 1-based destination page number.
+    pub page: usize,
+    /// Nesting level (0 = top-level).
+    pub level: usize,
+}
+
+/// Which path was used to derive the section-to-page mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageBreakSource {
+    /// PDF outline (bookmark tree).
+    Outline,
+    /// Text matching against LaTeX-derived sections.
+    TextMatch,
+}
+
 /// A distinct source word missing from the extracted PDF text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingWord {
@@ -798,6 +818,264 @@ fn section_title_in_page(page_text: &str, title: &str) -> bool {
     page_text
         .lines()
         .any(|line| line_is_section_heading(line.trim(), needle))
+}
+
+/// Read the PDF outline (bookmark tree) from a PDF file.
+///
+/// Returns `Ok(Some(entries))` when the PDF has an outline with at least one
+/// entry that resolves to a page, `Ok(None)` when the PDF has no outline or
+/// the outline is empty, and `Err` when the PDF cannot be parsed.
+///
+/// The outline lives inside compressed object streams in modern PDFs, so a
+/// raw byte search will miss it; use the parser.
+pub fn read_pdf_outline(path: &Path) -> Result<Option<(Vec<PdfOutlineEntry>, usize)>> {
+    let doc =
+        Document::load(path).with_context(|| format!("failed to open PDF {}", path.display()))?;
+    read_pdf_outline_from_doc(&doc)
+}
+
+/// Read the PDF outline from an already-loaded document.
+#[allow(dead_code)]
+pub fn read_pdf_outline_from_bytes(data: &[u8]) -> Result<Option<(Vec<PdfOutlineEntry>, usize)>> {
+    let doc = Document::load_mem(data).context("failed to parse PDF bytes")?;
+    read_pdf_outline_from_doc(&doc)
+}
+
+fn read_pdf_outline_from_doc(doc: &Document) -> Result<Option<(Vec<PdfOutlineEntry>, usize)>> {
+    let Ok(catalog) = doc.catalog() else {
+        return Ok(None);
+    };
+
+    let Ok(outlines_obj) = catalog.get(b"Outlines") else {
+        return Ok(None);
+    };
+
+    let Some(outlines_dict) = resolve_dict(doc, Some(outlines_obj)) else {
+        return Ok(None);
+    };
+
+    let pages_map = doc.get_pages();
+    let page_count = pages_map.len();
+    let mut entries = Vec::new();
+    let mut level_counters: Vec<usize> = vec![0; 1];
+
+    if let Ok(first) = outlines_dict.get(b"First") {
+        walk_outline_items(doc, first, 0, &pages_map, &mut entries, &mut level_counters);
+    }
+
+    if entries.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some((entries, page_count)))
+    }
+}
+
+fn walk_outline_items(
+    doc: &Document,
+    first_obj: &Object,
+    level: usize,
+    pages_map: &std::collections::BTreeMap<u32, ObjectId>,
+    entries: &mut Vec<PdfOutlineEntry>,
+    level_counters: &mut Vec<usize>,
+) {
+    while level_counters.len() <= level {
+        level_counters.push(0);
+    }
+    level_counters[level] += 1;
+
+    let Some(item_dict) = resolve_dict(doc, Some(first_obj)) else {
+        return;
+    };
+
+    let title = dict_text(item_dict, b"Title").unwrap_or_default();
+    let page = resolve_outline_page(doc, item_dict, pages_map);
+
+    if let Some(page_num) = page {
+        entries.push(PdfOutlineEntry {
+            title,
+            page: page_num,
+            level,
+        });
+    }
+
+    if let Ok(first_child) = item_dict.get(b"First") {
+        walk_outline_items(
+            doc,
+            first_child,
+            level + 1,
+            pages_map,
+            entries,
+            level_counters,
+        );
+    }
+
+    if let Ok(next) = item_dict.get(b"Next") {
+        walk_outline_items(doc, next, level, pages_map, entries, level_counters);
+    }
+}
+
+fn resolve_outline_page(
+    doc: &Document,
+    item: &Dictionary,
+    pages_map: &std::collections::BTreeMap<u32, ObjectId>,
+) -> Option<usize> {
+    if let Ok(dest) = item.get(b"Dest") {
+        if let Some(page_id) = extract_page_ref_from_dest(doc, dest) {
+            return pages_map
+                .iter()
+                .find(|(_, &id)| id == page_id)
+                .map(|(&n, _)| n as usize);
+        }
+    }
+
+    if let Ok(action) = item.get(b"A") {
+        if let Some(action_dict) = resolve_dict(doc, Some(action)) {
+            if let Ok(dest) = action_dict.get(b"D") {
+                if let Some(page_id) = extract_page_ref_from_dest(doc, dest) {
+                    return pages_map
+                        .iter()
+                        .find(|(_, &id)| id == page_id)
+                        .map(|(&n, _)| n as usize);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_page_ref_from_dest(doc: &Document, dest: &Object) -> Option<ObjectId> {
+    match dest {
+        Object::Reference(id) => Some(*id),
+        Object::Array(arr) => {
+            if let Some(Object::Reference(page_id)) = arr.first() {
+                Some(*page_id)
+            } else {
+                None
+            }
+        }
+        Object::String(name, _) => {
+            let name_str = String::from_utf8_lossy(name);
+            resolve_named_dest(doc, &name_str)
+        }
+        _ => None,
+    }
+}
+
+fn resolve_named_dest(doc: &Document, name: &str) -> Option<ObjectId> {
+    let catalog = doc.catalog().ok()?;
+    let names_obj = catalog.get(b"Names").ok()?;
+    let names_dict = resolve_dict(doc, Some(names_obj))?;
+    let dests_obj = names_dict.get(b"Dests").ok()?;
+    let dests_dict = resolve_dict(doc, Some(dests_obj))?;
+
+    walk_named_dest_tree(doc, dests_dict, name)
+}
+
+fn walk_named_dest_tree(doc: &Document, dict: &Dictionary, name: &str) -> Option<ObjectId> {
+    if let Ok(names_arr) = dict.get(b"Names") {
+        if let Some(entries) = resolve_array(doc, Some(names_arr)) {
+            for chunk in entries.chunks(2) {
+                if chunk.len() == 2 {
+                    if let Object::String(entry_name, _) = chunk[0] {
+                        if String::from_utf8_lossy(entry_name) == name {
+                            // The value can be either a dict with /D or a direct dest array
+                            if let Some(dest_dict) = resolve_dict(doc, Some(chunk[1])) {
+                                if let Ok(dest_arr) = dest_dict.get(b"D") {
+                                    if let Some(dest_items) = resolve_array(doc, Some(dest_arr)) {
+                                        if let Some(Object::Reference(page_id)) = dest_items.first()
+                                        {
+                                            return Some(*page_id);
+                                        }
+                                    }
+                                }
+                            } else if let Some(dest_items) = resolve_array(doc, Some(chunk[1])) {
+                                // Direct destination array [page_ref /XYZ ...]
+                                if let Some(Object::Reference(page_id)) = dest_items.first() {
+                                    return Some(*page_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(kids_arr) = dict.get(b"Kids") {
+        if let Some(kids) = resolve_array(doc, Some(kids_arr)) {
+            for kid in kids {
+                if let Some(kid_dict) = resolve_dict(doc, Some(kid)) {
+                    if let Some(result) = walk_named_dest_tree(doc, kid_dict, name) {
+                        return Some(result);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_array<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<Vec<&'a Object>> {
+    match obj? {
+        Object::Array(a) => Some(a.iter().collect()),
+        Object::Reference(id) => match doc.get_object(*id).ok()? {
+            Object::Array(a) => Some(a.iter().collect()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Build page breaks from a PDF outline.
+///
+/// Computes section numbers from the outline's nesting levels and maps each
+/// page to the section that opens it.
+pub fn page_breaks_from_outline(
+    entries: &[PdfOutlineEntry],
+    num_pages: usize,
+) -> Vec<PdfPageBreak> {
+    let numbered = compute_section_numbers(entries);
+    let mut out = Vec::with_capacity(num_pages);
+    let mut current: Option<(String, String)> = None;
+    let mut entry_idx = 0;
+
+    for page_num in 1..=num_pages {
+        while entry_idx < numbered.len() && numbered[entry_idx].0 == page_num {
+            let (_, num, title) = &numbered[entry_idx];
+            current = Some((num.clone(), title.clone()));
+            entry_idx += 1;
+        }
+        out.push(PdfPageBreak {
+            page: page_num,
+            section: current.as_ref().map(|(n, _)| n.clone()),
+            title: current.as_ref().map(|(_, t)| t.clone()),
+        });
+    }
+    out
+}
+
+fn compute_section_numbers(entries: &[PdfOutlineEntry]) -> Vec<(usize, String, String)> {
+    let mut counters: Vec<usize> = Vec::new();
+    let mut result = Vec::with_capacity(entries.len());
+
+    for entry in entries {
+        let level = entry.level;
+        while counters.len() <= level {
+            counters.push(0);
+        }
+        counters[level] += 1;
+        counters.truncate(level + 1);
+
+        let number: String = counters
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+        result.push((entry.page, number, entry.title.clone()));
+    }
+    result
 }
 
 /// Format page breaks for diff-friendly output: one line per page.
@@ -1539,5 +1817,86 @@ mod tests {
         }
         let missing = fidelity_missing_words(&source, &normalize_pdf_text(&raw));
         assert!(missing.is_empty(), "unexpected missing: {missing:?}");
+    }
+
+    const CAPABILITIES_PDF: &[u8] =
+        include_bytes!("../examples/texforge-capabilites/texforge-capabilites.pdf");
+
+    #[test]
+    fn capabilities_pdf_has_outline() {
+        let outline = read_pdf_outline_from_bytes(CAPABILITIES_PDF).unwrap();
+        assert!(outline.is_some(), "capabilities PDF must have an outline");
+        let (entries, page_count) = outline.unwrap();
+        assert!(!entries.is_empty(), "outline must have entries");
+        assert!(page_count > 0, "page count must be positive");
+        assert!(
+            entries.iter().any(|e| e.page > 0),
+            "outline entries must resolve to pages"
+        );
+    }
+
+    #[test]
+    fn pages_ligatures_fixture_has_no_outline() {
+        let outline = read_pdf_outline_from_bytes(PAGES_PDF).unwrap();
+        assert!(
+            outline.is_none(),
+            "pages-ligatures fixture should not have an outline"
+        );
+    }
+
+    #[test]
+    fn page_breaks_from_outline_computes_section_numbers() {
+        let entries = vec![
+            PdfOutlineEntry {
+                title: "Introduction".into(),
+                page: 1,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Background".into(),
+                page: 2,
+                level: 1,
+            },
+            PdfOutlineEntry {
+                title: "Methods".into(),
+                page: 3,
+                level: 0,
+            },
+        ];
+        let breaks = page_breaks_from_outline(&entries, 4);
+        assert_eq!(breaks.len(), 4);
+        assert_eq!(breaks[0].section.as_deref(), Some("1"));
+        assert_eq!(breaks[0].title.as_deref(), Some("Introduction"));
+        assert_eq!(breaks[1].section.as_deref(), Some("1.1"));
+        assert_eq!(breaks[1].title.as_deref(), Some("Background"));
+        assert_eq!(breaks[2].section.as_deref(), Some("2"));
+        assert_eq!(breaks[2].title.as_deref(), Some("Methods"));
+        assert_eq!(breaks[3].section.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn page_breaks_from_outline_handles_multiple_entries_on_same_page() {
+        let entries = vec![
+            PdfOutlineEntry {
+                title: "First".into(),
+                page: 1,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Second".into(),
+                page: 1,
+                level: 1,
+            },
+            PdfOutlineEntry {
+                title: "Third".into(),
+                page: 2,
+                level: 0,
+            },
+        ];
+        let breaks = page_breaks_from_outline(&entries, 2);
+        assert_eq!(breaks[0].section.as_deref(), Some("1.1"));
+        assert_eq!(breaks[0].title.as_deref(), Some("Second"));
+        assert_eq!(breaks[1].section.as_deref(), Some("2"));
+        assert_eq!(breaks[1].title.as_deref(), Some("Third"));
     }
 }
