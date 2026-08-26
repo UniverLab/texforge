@@ -170,7 +170,7 @@ mod tests {
             let path = dir.path().join("preview").join(name);
             let (w, h, rgba) = decode(&path);
             assert_eq!((w, h), (612, 842), "{name}");
-            assert!(rgba.chunks_exact(4).all(|px| px[3] == 255));
+            assert!(rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
         }
     }
 
