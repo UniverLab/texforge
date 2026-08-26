@@ -1031,7 +1031,9 @@ fn resolve_array<'a>(doc: &'a Document, obj: Option<&'a Object>) -> Option<Vec<&
 /// Build page breaks from a PDF outline.
 ///
 /// Computes section numbers from the outline's nesting levels and maps each
-/// page to the section that opens it.
+/// page to the section that opens it. A page with no outline entry carries
+/// forward the section that was open when the page began; pages before the
+/// first outline entry belong to no section.
 pub fn page_breaks_from_outline(
     entries: &[PdfOutlineEntry],
     num_pages: usize,
@@ -1898,5 +1900,116 @@ mod tests {
         assert_eq!(breaks[0].title.as_deref(), Some("Second"));
         assert_eq!(breaks[1].section.as_deref(), Some("2"));
         assert_eq!(breaks[1].title.as_deref(), Some("Third"));
+    }
+
+    #[test]
+    fn page_breaks_from_outline_heading_less_page_in_middle_of_section() {
+        let entries = vec![
+            PdfOutlineEntry {
+                title: "Introduction".into(),
+                page: 1,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Methods".into(),
+                page: 4,
+                level: 0,
+            },
+        ];
+        let breaks = page_breaks_from_outline(&entries, 5);
+        assert_eq!(breaks[0].section.as_deref(), Some("1"));
+        assert_eq!(breaks[1].section.as_deref(), Some("1"));
+        assert_eq!(breaks[2].section.as_deref(), Some("1"));
+        assert_eq!(breaks[3].section.as_deref(), Some("2"));
+        assert_eq!(breaks[4].section.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn page_breaks_from_outline_several_consecutive_heading_less_pages() {
+        let entries = vec![
+            PdfOutlineEntry {
+                title: "First".into(),
+                page: 1,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Second".into(),
+                page: 5,
+                level: 0,
+            },
+        ];
+        let breaks = page_breaks_from_outline(&entries, 6);
+        assert_eq!(breaks[0].section.as_deref(), Some("1"));
+        assert_eq!(breaks[1].section.as_deref(), Some("1"));
+        assert_eq!(breaks[2].section.as_deref(), Some("1"));
+        assert_eq!(breaks[3].section.as_deref(), Some("1"));
+        assert_eq!(breaks[4].section.as_deref(), Some("2"));
+        assert_eq!(breaks[5].section.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn page_breaks_from_outline_heading_less_page_after_subsection_ends() {
+        let entries = vec![
+            PdfOutlineEntry {
+                title: "Introduction".into(),
+                page: 1,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Background".into(),
+                page: 2,
+                level: 1,
+            },
+            PdfOutlineEntry {
+                title: "Methods".into(),
+                page: 4,
+                level: 0,
+            },
+        ];
+        let breaks = page_breaks_from_outline(&entries, 5);
+        assert_eq!(breaks[0].section.as_deref(), Some("1"));
+        assert_eq!(breaks[1].section.as_deref(), Some("1.1"));
+        assert_eq!(breaks[2].section.as_deref(), Some("1.1"));
+        assert_eq!(breaks[3].section.as_deref(), Some("2"));
+        assert_eq!(breaks[4].section.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn page_breaks_from_outline_pages_before_first_heading_are_unattributed() {
+        let entries = vec![PdfOutlineEntry {
+            title: "Introduction".into(),
+            page: 3,
+            level: 0,
+        }];
+        let breaks = page_breaks_from_outline(&entries, 4);
+        assert_eq!(breaks[0].section.as_deref(), None);
+        assert_eq!(breaks[1].section.as_deref(), None);
+        assert_eq!(breaks[2].section.as_deref(), Some("1"));
+        assert_eq!(breaks[3].section.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn page_breaks_from_outline_page_with_heading_is_unaffected() {
+        let entries = vec![
+            PdfOutlineEntry {
+                title: "First".into(),
+                page: 1,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Second".into(),
+                page: 2,
+                level: 0,
+            },
+            PdfOutlineEntry {
+                title: "Third".into(),
+                page: 3,
+                level: 0,
+            },
+        ];
+        let breaks = page_breaks_from_outline(&entries, 3);
+        assert_eq!(breaks[0].section.as_deref(), Some("1"));
+        assert_eq!(breaks[1].section.as_deref(), Some("2"));
+        assert_eq!(breaks[2].section.as_deref(), Some("3"));
     }
 }
