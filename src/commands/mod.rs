@@ -14,3 +14,4 @@ pub mod preview;
 pub mod spell;
 pub mod stats;
 pub mod template;
+pub mod uninstall;

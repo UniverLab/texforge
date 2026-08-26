@@ -2,12 +2,29 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
 use crate::utils;
 
 const REGISTRY_REPO: &str = "UniverLab/texforge-templates";
+
+/// How long a cached template is considered fresh before `resolve` attempts a
+/// background refresh. Twenty-four hours is a defensible default: templates
+/// rarely change more than once a day, but when they do (a bug fix, a new
+/// section), a user who builds at least once a day picks up the fix within a
+/// day without any manual intervention. Shorter would hit the network on
+/// almost every build; longer would leave users on a broken template for too
+/// long. Stored as seconds since the Unix epoch.
+const CACHE_TTL_SECS: u64 = 86_400;
+
+const CACHE_META_FILE: &str = ".cache_meta.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheMeta {
+    fetched_at: u64,
+}
 
 /// Embedded files for the "general" template (fallback when offline).
 const GENERAL_TEMPLATE_TOML: &str = include_str!("general/template.toml");
@@ -21,11 +38,24 @@ pub struct ResolvedTemplate {
     pub files: HashMap<String, Vec<u8>>,
 }
 
-/// Resolve a template by name: local cache → download → embedded fallback.
+/// Resolve a template by name: fresh cache → refresh stale cache → download → embedded fallback.
 pub fn resolve(name: &str) -> Result<ResolvedTemplate> {
     // 1. Check local cache
-    if let Ok(t) = load_from_cache(name) {
-        return Ok(t);
+    if let Ok((t, fetched_at)) = load_from_cache_with_meta(name) {
+        if !is_stale(fetched_at) {
+            return Ok(t);
+        }
+        // Stale: attempt a refresh, but fall back to the cached copy on failure.
+        match download(name) {
+            Ok(fresh) => return Ok(fresh),
+            Err(e) => {
+                eprintln!(
+                    "texforge: could not refresh template '{}' ({}); using cached copy",
+                    name, e
+                );
+                return Ok(t);
+            }
+        }
     }
 
     // 2. Try downloading from GitHub
@@ -43,6 +73,17 @@ pub fn resolve(name: &str) -> Result<ResolvedTemplate> {
         name,
         name
     );
+}
+
+fn is_stale(fetched_at: Option<u64>) -> bool {
+    let Some(fetched_at) = fetched_at else {
+        return true;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    now.saturating_sub(fetched_at) > CACHE_TTL_SECS
 }
 
 fn embedded_general() -> ResolvedTemplate {
@@ -63,12 +104,32 @@ fn embedded_general() -> ResolvedTemplate {
     ResolvedTemplate { files }
 }
 
-fn load_from_cache(name: &str) -> Result<ResolvedTemplate> {
+fn load_from_cache_with_meta(name: &str) -> Result<(ResolvedTemplate, Option<u64>)> {
     let dir = utils::templates_dir()?.join(name);
     if !dir.is_dir() {
         anyhow::bail!("not cached");
     }
-    load_dir_recursive(&dir)
+    let t = load_dir_recursive(&dir)?;
+    let fetched_at = read_cache_meta(&dir);
+    Ok((t, fetched_at))
+}
+
+fn read_cache_meta(dir: &Path) -> Option<u64> {
+    let meta_path = dir.join(CACHE_META_FILE);
+    let contents = std::fs::read_to_string(&meta_path).ok()?;
+    let meta: CacheMeta = serde_json::from_str(&contents).ok()?;
+    Some(meta.fetched_at)
+}
+
+fn write_cache_meta(dir: &Path) -> Result<()> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let meta = CacheMeta { fetched_at: now };
+    let json = serde_json::to_string(&meta)?;
+    std::fs::write(dir.join(CACHE_META_FILE), json)?;
+    Ok(())
 }
 
 fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
@@ -83,6 +144,9 @@ fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
                 .strip_prefix(base)?
                 .to_string_lossy()
                 .to_string();
+            if rel == CACHE_META_FILE {
+                continue;
+            }
             let content = std::fs::read(entry.path())?;
             files.insert(rel, content);
         }
@@ -92,6 +156,25 @@ fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
 
 /// Download a template tarball from GitHub and cache it locally.
 pub fn download(name: &str) -> Result<ResolvedTemplate> {
+    #[cfg(test)]
+    {
+        let override_fn = TEST_DOWNLOAD_OVERRIDE.with(|o| o.borrow().as_ref().map(|f| f(name)));
+        if let Some(result) = override_fn {
+            let files = result?;
+            let cache_dir = utils::templates_dir()?.join(name);
+            std::fs::create_dir_all(&cache_dir)?;
+            for (rel, content) in &files {
+                let dest = cache_dir.join(rel);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&dest, content)?;
+            }
+            write_cache_meta(&cache_dir)?;
+            return Ok(ResolvedTemplate { files });
+        }
+    }
+
     let url = format!(
         "https://api.github.com/repos/{}/tarball/main",
         REGISTRY_REPO
@@ -112,6 +195,7 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
     let mut archive = tar::Archive::new(decoder);
 
     let cache_dir = utils::templates_dir()?.join(name);
+    let cache_existed = cache_dir.is_dir();
     let mut files = HashMap::new();
     let prefix = format!("{}/", name);
 
@@ -145,12 +229,38 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
     }
 
     if files.is_empty() {
-        // Clean up empty cache dir
-        let _ = std::fs::remove_dir_all(&cache_dir);
+        if !cache_existed {
+            let _ = std::fs::remove_dir_all(&cache_dir);
+        }
         anyhow::bail!("Template '{}' not found in registry", name);
     }
 
+    write_cache_meta(&cache_dir)?;
+
     Ok(ResolvedTemplate { files })
+}
+
+#[cfg(test)]
+type DownloadOverride =
+    Box<dyn Fn(&str) -> std::result::Result<HashMap<String, Vec<u8>>, anyhow::Error>>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DOWNLOAD_OVERRIDE: std::cell::RefCell<Option<DownloadOverride>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_download_override<F>(f: F)
+where
+    F: Fn(&str) -> std::result::Result<HashMap<String, Vec<u8>>, anyhow::Error> + 'static,
+{
+    TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = Some(Box::new(f)));
+}
+
+#[cfg(test)]
+fn clear_download_override() {
+    TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = None);
 }
 
 /// List template names available in the remote registry.
@@ -210,6 +320,44 @@ pub fn remove_cached(name: &str) -> Result<PathBuf> {
     }
     std::fs::remove_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// Force-refresh a single cached template, bypassing the TTL.
+/// If the download fails and a cached copy exists, the cache is kept.
+pub fn refresh(name: &str) -> Result<()> {
+    let dir = utils::templates_dir()?.join(name);
+    let had_cache = dir.is_dir();
+    match download(name) {
+        Ok(_) => Ok(()),
+        Err(e) if had_cache => {
+            eprintln!(
+                "texforge: could not refresh template '{}' ({}); keeping cached copy",
+                name, e
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Force-refresh every cached template, bypassing the TTL.
+/// Templates that fail to refresh are reported on stderr but do not abort.
+pub fn refresh_all() -> Result<()> {
+    let names = list_cached()?;
+    if names.is_empty() {
+        println!("No cached templates to refresh.");
+        return Ok(());
+    }
+    for name in &names {
+        print!("Refreshing '{}'... ", name);
+        match download(name.as_str()) {
+            Ok(_) => println!("done"),
+            Err(e) => {
+                println!("failed ({})", e);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -362,7 +510,7 @@ mod tests {
 
     #[test]
     fn load_from_cache_nonexistent_errors() {
-        let result = load_from_cache("no-such-template-xyz-abc");
+        let result = load_from_cache_with_meta("no-such-template-xyz-abc");
         assert!(result.is_err());
     }
 
@@ -381,5 +529,189 @@ mod tests {
         // But utils::templates_dir() creates the dir, so we just test the function
         let result = list_cached();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn is_stale_returns_false_for_fresh_entry() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(!is_stale(Some(now)));
+        assert!(!is_stale(Some(now - CACHE_TTL_SECS / 2)));
+    }
+
+    #[test]
+    fn is_stale_returns_true_for_old_entry() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(is_stale(Some(now - CACHE_TTL_SECS - 1)));
+        assert!(is_stale(Some(0)));
+    }
+
+    #[test]
+    fn is_stale_returns_true_when_no_metadata() {
+        assert!(is_stale(None));
+    }
+
+    #[test]
+    fn fresh_cache_served_without_network() {
+        let templates_dir = crate::utils::templates_dir().unwrap();
+        let test_name = "__test_fresh_cache__";
+        let test_dir = templates_dir.join(test_name);
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(test_dir.join("main.tex"), "fresh-content").unwrap();
+        write_cache_meta(&test_dir).unwrap();
+
+        let result = resolve(test_name).unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert_eq!(result.files.get("main.tex").unwrap(), b"fresh-content");
+
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn stale_cache_falls_back_when_refresh_fails() {
+        let templates_dir = crate::utils::templates_dir().unwrap();
+        let test_name = "__test_stale_fallback__";
+        let test_dir = templates_dir.join(test_name);
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(test_dir.join("main.tex"), "stale-content").unwrap();
+        let old_meta = CacheMeta { fetched_at: 0 };
+        std::fs::write(
+            test_dir.join(CACHE_META_FILE),
+            serde_json::to_string(&old_meta).unwrap(),
+        )
+        .unwrap();
+
+        ensure_rustls();
+        let result = resolve(test_name).unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert_eq!(result.files.get("main.tex").unwrap(), b"stale-content");
+
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn cache_without_meta_is_treated_as_stale() {
+        let templates_dir = crate::utils::templates_dir().unwrap();
+        let test_name = "__test_no_meta_stale__";
+        let test_dir = templates_dir.join(test_name);
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(test_dir.join("main.tex"), "no-meta-content").unwrap();
+
+        let (_, fetched_at) = load_from_cache_with_meta(test_name).unwrap();
+        assert!(fetched_at.is_none());
+        assert!(is_stale(fetched_at));
+
+        ensure_rustls();
+        let result = resolve(test_name).unwrap();
+        assert_eq!(result.files.get("main.tex").unwrap(), b"no-meta-content");
+
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn write_and_read_cache_meta_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_cache_meta(tmp.path()).unwrap();
+        let fetched_at = read_cache_meta(tmp.path());
+        assert!(fetched_at.is_some());
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!((fetched_at.unwrap() as i64 - now as i64).unsigned_abs() < 5);
+    }
+
+    #[test]
+    fn load_dir_recursive_skips_cache_meta_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("main.tex"), "content").unwrap();
+        fs::write(tmp.path().join(CACHE_META_FILE), "{}").unwrap();
+
+        let result = load_dir_recursive(tmp.path()).unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert!(!result.files.contains_key(CACHE_META_FILE));
+        assert_eq!(result.files.len(), 1);
+    }
+
+    #[test]
+    fn embedded_fallback_works_when_no_cache() {
+        ensure_rustls();
+        let result = resolve("general").unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert!(result.files.contains_key("template.toml"));
+    }
+
+    #[test]
+    fn stale_cache_refresh_returns_fresh_content() {
+        let templates_dir = crate::utils::templates_dir().unwrap();
+        let test_name = "__test_stale_refresh__";
+        let test_dir = templates_dir.join(test_name);
+
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(test_dir.join("main.tex"), "stale-content").unwrap();
+        let old_meta = CacheMeta { fetched_at: 0 };
+        std::fs::write(
+            test_dir.join(CACHE_META_FILE),
+            serde_json::to_string(&old_meta).unwrap(),
+        )
+        .unwrap();
+
+        let old_ts = read_cache_meta(&test_dir).unwrap();
+
+        set_download_override(|_name| {
+            let mut files = HashMap::new();
+            files.insert("main.tex".into(), b"fresh-content".to_vec());
+            Ok(files)
+        });
+
+        let result = resolve(test_name).unwrap();
+        assert_eq!(result.files.get("main.tex").unwrap(), b"fresh-content");
+
+        let new_ts = read_cache_meta(&test_dir).unwrap();
+        assert!(new_ts > old_ts);
+
+        clear_download_override();
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn refresh_bypasses_ttl_on_fresh_entry() {
+        let templates_dir = crate::utils::templates_dir().unwrap();
+        let test_name = "__test_refresh_bypass_ttl__";
+        let test_dir = templates_dir.join(test_name);
+
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(test_dir.join("main.tex"), "original-content").unwrap();
+        write_cache_meta(&test_dir).unwrap();
+
+        let pre_ts = read_cache_meta(&test_dir).unwrap();
+        assert!(!is_stale(Some(pre_ts)));
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        set_download_override(|_name| {
+            let mut files = HashMap::new();
+            files.insert("main.tex".into(), b"refreshed-content".to_vec());
+            Ok(files)
+        });
+
+        refresh(test_name).unwrap();
+
+        let result = load_from_cache_with_meta(test_name).unwrap();
+        assert_eq!(
+            result.0.files.get("main.tex").unwrap(),
+            b"refreshed-content"
+        );
+
+        let post_ts = result.1.unwrap();
+        assert!(post_ts > pre_ts);
+
+        clear_download_override();
+        std::fs::remove_dir_all(&test_dir).unwrap();
     }
 }

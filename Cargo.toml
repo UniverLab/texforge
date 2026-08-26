@@ -1,6 +1,6 @@
 [package]
 name = "texforge"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 # Raised from 1.75: `hayro` (the pure-Rust PDF rasterizer) requires 1.92.
 rust-version = "1.92"

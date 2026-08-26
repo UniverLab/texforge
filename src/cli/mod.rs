@@ -113,6 +113,18 @@ enum Commands {
     },
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
+    /// Remove everything texforge manages under ~/.texforge
+    Uninstall {
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Print the plan without removing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Also remove the personal spell dictionary (your own writing)
+        #[arg(long)]
+        include_spell_words: bool,
+    },
     /// Manage global configuration
     Config {
         /// Key to get/set (name, email, institution, language)
@@ -189,6 +201,11 @@ enum TemplateAction {
     Remove { name: String },
     /// Validate template compatibility
     Validate { name: String },
+    /// Refresh cached templates (bypass TTL; all templates or one by name)
+    Refresh {
+        /// Template name to refresh (omit to refresh all cached templates)
+        name: Option<String>,
+    },
 }
 
 impl Cli {
@@ -235,6 +252,7 @@ impl Cli {
                 TemplateAction::Add { source } => commands::template::add(&source),
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
+                TemplateAction::Refresh { name } => commands::template::refresh(name.as_deref()),
             },
             Commands::Spell { action } => {
                 let action = match action {
@@ -261,6 +279,11 @@ impl Cli {
                 commands::spell::execute(action)
             }
             Commands::Doctor => commands::doctor::execute(),
+            Commands::Uninstall {
+                yes,
+                dry_run,
+                include_spell_words,
+            } => commands::uninstall::execute(yes, dry_run, include_spell_words),
             Commands::Config { key, value } => match (key, value) {
                 (None, None) => commands::config::wizard(),
                 (Some(k), None) if k == "list" => commands::config::list(),
