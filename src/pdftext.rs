@@ -1044,9 +1044,19 @@ pub fn page_breaks_from_outline(
     let mut entry_idx = 0;
 
     for page_num in 1..=num_pages {
+        // A page is attributed to the FIRST section that opens it, never the
+        // last — the rule `4947308` established for the text-matching path and
+        // that this one must honour too. Several sections routinely start on
+        // one page: in the capabilities example, page 2 opens sections 1, 1.1,
+        // 1.2, 2, 2.1, 2.2 and 2.3, and the answer is 1. Later entries on the
+        // same page are still consumed, just not reported.
+        let mut opened_here = false;
         while entry_idx < numbered.len() && numbered[entry_idx].0 == page_num {
-            let (_, num, title) = &numbered[entry_idx];
-            current = Some((num.clone(), title.clone()));
+            if !opened_here {
+                let (_, num, title) = &numbered[entry_idx];
+                current = Some((num.clone(), title.clone()));
+                opened_here = true;
+            }
             entry_idx += 1;
         }
         out.push(PdfPageBreak {
@@ -1847,6 +1857,39 @@ mod tests {
     }
 
     #[test]
+    fn page_breaks_from_outline_reports_the_first_section_on_a_page() {
+        // Ground truth read from the capabilities PDF's own table of contents:
+        // page 2 opens 1, 1.1, 1.2, 2, 2.1, 2.2 and 2.3. The answer is 1.
+        // Before this was fixed the outline path reported 2.3 — the last
+        // entry on the page — contradicting the rule the text-matching path
+        // has followed since `4947308`.
+        let e = |title: &str, page: usize, level: usize| PdfOutlineEntry {
+            title: title.into(),
+            page,
+            level,
+        };
+        let entries = vec![
+            e("Introduccion", 2, 0),
+            e("Antecedentes", 2, 1),
+            e("Objetivos", 2, 1),
+            e("Diagramas", 2, 0),
+            e("Mermaid", 2, 1),
+            e("Graphviz", 2, 1),
+            e("D2", 2, 1),
+            e("Estilos", 5, 1),
+        ];
+        let breaks = page_breaks_from_outline(&entries, 5);
+
+        assert_eq!(breaks[0].section, None, "page 1 is front matter");
+        assert_eq!(breaks[1].section.as_deref(), Some("1"));
+        assert_eq!(breaks[1].title.as_deref(), Some("Introduccion"));
+        // Pages 3 and 4 open nothing: they carry the last opened section.
+        assert_eq!(breaks[2].section.as_deref(), Some("1"));
+        assert_eq!(breaks[3].section.as_deref(), Some("1"));
+        assert_eq!(breaks[4].section.as_deref(), Some("2.4"));
+    }
+
+    #[test]
     fn page_breaks_from_outline_computes_section_numbers() {
         let entries = vec![
             PdfOutlineEntry {
@@ -1896,8 +1939,12 @@ mod tests {
             },
         ];
         let breaks = page_breaks_from_outline(&entries, 2);
-        assert_eq!(breaks[0].section.as_deref(), Some("1.1"));
-        assert_eq!(breaks[0].title.as_deref(), Some("Second"));
+        // The page is attributed to the FIRST section that opens it. This
+        // asserted "1.1" — the last entry on the page — which described what
+        // the code did rather than what the command promises ("which section
+        // opens each page"), and contradicted the text-matching path.
+        assert_eq!(breaks[0].section.as_deref(), Some("1"));
+        assert_eq!(breaks[0].title.as_deref(), Some("First"));
         assert_eq!(breaks[1].section.as_deref(), Some("2"));
         assert_eq!(breaks[1].title.as_deref(), Some("Third"));
     }
