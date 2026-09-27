@@ -298,7 +298,10 @@ fn binary_install_note() -> String {
         return "The texforge binary was not removed. Could not determine its location.".into();
     };
 
-    let is_cargo = crate::version_checker::current_exe_is_cargo_managed(&current_exe);
+    let is_cargo = crate::commands::update::is_cargo_installed(
+        &current_exe,
+        &crate::commands::update::cargo_bin_dir(),
+    );
 
     if is_cargo {
         format!(

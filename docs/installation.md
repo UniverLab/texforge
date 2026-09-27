@@ -48,23 +48,37 @@ Available on [crates.io](https://crates.io/crates/texforge).
 
 ## Updating texforge
 
-Texforge updates itself in place, **replacing the binary that is running**.
+The explicit command is the primary path:
 
-The check runs when you create or migrate a project with `texforge init` — not on every command, and never during a build. If a newer release exists, you are asked once, there and then. To update outside that flow, reach for the installer or `cargo` as below.
+```bash
+texforge update            # shows the newer version and asks (default answer: NO)
+texforge update --check    # exit 1 if an update is available, 0 if up to date
+texforge update --yes      # install without asking
+```
 
-**If you used the quick installer or downloaded a binary directly:**
+`texforge update` downloads the release asset for your platform, verifies its
+SHA256 checksum when the release ships one, and replaces the binary that is
+running (typically `~/.local/bin/texforge` for installer installs) atomically
+and in place. It never updates silently: you are always asked first, and
+declining leaves everything untouched. If the network or the GitHub API is
+unavailable, the command reports the error and exits non-zero — a failed
+check never reads as "you are up to date".
 
-Accept the update prompt, and it will overwrite the binary at its current location (typically `~/.local/bin/texforge`).
+`texforge init` still shows a passive notice (at most once a day) when a
+newer release exists; that notice never downloads unless you answer yes.
 
 **If you installed via `cargo install`:**
 
-Self-update is deliberately disabled — cargo owns that installation path and tracks its own versions. To update, run:
+Self-update is deliberately disabled — cargo owns that installation path and
+tracks its own versions. `texforge update` refuses and tells you to run:
 
 ```bash
 cargo install --force texforge
 ```
 
 **Why it matters:** Mixing install methods leaves two binaries on your system. The one on your PATH may not be the one that updated, leading to confusing version mismatches. Choose one method and stick with it.
+
+## From source
 
 ```bash
 git clone https://github.com/UniverLab/texforge.git

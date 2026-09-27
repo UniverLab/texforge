@@ -93,6 +93,20 @@ Default scope is global (`~/.texforge/spell-words`). Both scopes are unioned at 
 |---|---|
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, and project |
 
+## Maintenance
+
+| Command | Description |
+|---|---|
+| `texforge update` | Update to the latest stable release (always asks first; the prompt's default is **NO**) |
+| `texforge update --check` | Read-only check: exit `1` if an update is available, `0` if up to date |
+| `texforge update --yes` | Install the update without asking |
+
+`texforge update` fetches the latest stable GitHub release (drafts and prereleases excluded), downloads the asset for your platform, verifies its SHA256 checksum when the release ships one, and replaces the binary that is running — atomically, in place. It never updates silently.
+
+- A `cargo install` binary is refused: cargo owns that file, so run `cargo install --force texforge` instead (exits `0`).
+- A network or API failure is reported and exits non-zero.
+- `--check` never prompts, never downloads, and never touches local paths.
+
 ## Uninstall
 
 | Command | Description |

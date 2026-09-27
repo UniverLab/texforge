@@ -20,7 +20,6 @@ mod texparse;
 mod texutil;
 mod utils;
 mod version;
-mod version_checker;
 mod wordcount;
 
 use anyhow::Result;

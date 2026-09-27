@@ -113,6 +113,15 @@ enum Commands {
     },
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
+    /// Update texforge to the latest stable release (always asks first)
+    Update {
+        /// Only check: exit 1 when an update is available, 0 when up to date
+        #[arg(long)]
+        check: bool,
+        /// Install the update without asking (the prompt defaults to NO)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Remove everything texforge manages under ~/.texforge
     Uninstall {
         /// Skip the confirmation prompt
@@ -279,6 +288,17 @@ impl Cli {
                 commands::spell::execute(action)
             }
             Commands::Doctor => commands::doctor::execute(),
+            Commands::Update { check, yes } => {
+                // `update` reports status through exit codes — `--check` is 1
+                // for "update available" and 0 for "up to date" — so a non-zero
+                // code is a result, not an error to be wrapped in anyhow and
+                // printed as a failure. Exit explicitly instead.
+                let code = commands::update::run_update(check, yes)?;
+                if check || code != 0 {
+                    std::process::exit(code);
+                }
+                Ok(())
+            }
             Commands::Uninstall {
                 yes,
                 dry_run,
@@ -335,5 +355,41 @@ mod tests {
     fn spell_add_accepts_local_alone() {
         let result = Cli::try_parse_from(["texforge", "spell", "add", "docker", "--local"]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn update_with_no_flags_parses() {
+        let cli = Cli::try_parse_from(["texforge", "update"]).unwrap();
+        match cli.command {
+            Commands::Update { check, yes } => {
+                assert!(!check);
+                assert!(!yes);
+            }
+            _ => panic!("`texforge update` must parse into Commands::Update"),
+        }
+    }
+
+    #[test]
+    fn update_check_parses() {
+        let cli = Cli::try_parse_from(["texforge", "update", "--check"]).unwrap();
+        match cli.command {
+            Commands::Update { check, yes } => {
+                assert!(check);
+                assert!(!yes);
+            }
+            _ => panic!("`texforge update --check` must parse into Commands::Update"),
+        }
+    }
+
+    #[test]
+    fn update_yes_parses() {
+        let cli = Cli::try_parse_from(["texforge", "update", "--yes"]).unwrap();
+        match cli.command {
+            Commands::Update { check, yes } => {
+                assert!(!check);
+                assert!(yes);
+            }
+            _ => panic!("`texforge update --yes` must parse into Commands::Update"),
+        }
     }
 }
