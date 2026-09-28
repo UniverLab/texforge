@@ -228,7 +228,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("make", "Makefile"),
     ("mk", "Makefile"),
     ("rb", "Ruby"),
-    ("kt", "Plain Text"),
 ];
 
 /// `lang` values that deliberately mean "plain monospace, no highlighting" —
@@ -475,6 +474,9 @@ mod tests {
     fn unknown_language_is_none_not_an_error() {
         assert!(render("brainfuck", "+++").is_none());
         assert!(render("Brainfuck 9000", "+++").is_none());
+        // `kt` (Kotlin) ships no grammar and is not a documented alias: like
+        // every undocumented spelling it must warn, not resolve to plain text.
+        assert!(render("kt", "fun main() {}").is_none());
     }
 
     #[test]
@@ -546,6 +548,9 @@ mod tests {
             "tex",
             "r",
             "sql",
+            // the doc claims `sql` also matches "by name"
+            "mysql",
+            "postgresql",
             "clojure",
             "css",
             "diff",

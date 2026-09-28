@@ -275,6 +275,15 @@ mod tests {
         assert_eq!(stats.preamble_words, 2);
     }
 
+    /// `code` is in the tokenizer's verbatim list (docs/listings.md): a
+    /// listing's tokens are never prose, however word-shaped they are.
+    #[test]
+    fn code_content_is_not_counted() {
+        let src = "\\begin{document}\nwords\n\\begin{code}[lang=python]\ndef fibonacci number\n\\end{code}\nstill words\n\\end{document}";
+        let stats = count_document("Doc", &files_from(&[("main.tex", src)]));
+        assert_eq!(stats.preamble_words, 3, "listings words leaked into wc");
+    }
+
     #[test]
     fn non_prose_command_arguments_are_not_counted() {
         let src = r"\begin{document}

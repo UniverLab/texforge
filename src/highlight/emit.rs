@@ -21,12 +21,14 @@ pub(crate) const OVERFULL_CHAR_LIMIT: usize = 90;
 
 /// Everything `render_block` needs to place one block in the document: which
 /// build-copy file it came from (warnings point there — the build copy is what
-/// Tectonic reports errors in), the line the block opens on, and whether the
+/// Tectonic reports errors in), the line the body starts on, and whether the
 /// line-number gutter is on.
 pub(crate) struct EmitOpts<'a> {
     pub(crate) file: &'a str,
-    /// 1-based line of the `\begin{code}` / `\begin{lstlisting}` opener.
-    pub(crate) first_line: usize,
+    /// 1-based line (in the build copy) of the block's first body line.
+    /// Options spanning several lines shift the body off the `\begin` line;
+    /// this is the body's own line.
+    pub(crate) body_line: usize,
     pub(crate) numbers: bool,
 }
 
@@ -161,29 +163,34 @@ pub(crate) fn render_block(
             out.push('\n');
             out.push('\n');
         }
-        out.push_str("\\noindent");
-        if line.is_empty() {
-            // A blank source line still occupies a real line of output.
-            out.push_str("\\mbox{}");
-            continue;
-        }
-        // The space after the control word is skipped by TeX; without it the
-        // first code character would glue onto `\noindent` and form an
-        // undefined control sequence (`\noindenta`).
-        out.push(' ');
+        // The space after `\noindent` is skipped by TeX (it is the control
+        // word's delimiter); without it the first code character would glue
+        // onto `\noindent` and form an undefined control sequence.
+        out.push_str("\\noindent ");
         if opts.numbers {
+            // The gutter comes first so a numbered blank line still shows its
+            // number — the sequence must run 1, 2, 3 … over the source lines,
+            // never skipping the empty ones.
             out.push_str(&gutter(i + 1, width));
         }
-        match spans.and_then(|s| s.get(i)) {
-            Some(line_spans) => out.push_str(&render_runs(line_spans, used)),
-            None => escape_into(&mut out, line),
+        if line.is_empty() {
+            // A blank source line still occupies a real line of output; the
+            // gutter hbox already gives a numbered one its height.
+            if !opts.numbers {
+                out.push_str("\\mbox{}");
+            }
+        } else {
+            match spans.and_then(|s| s.get(i)) {
+                Some(line_spans) => out.push_str(&render_runs(line_spans, used)),
+                None => escape_into(&mut out, line),
+            }
         }
 
         let width_of_line = display_width(line, opts.numbers, width);
         if width_of_line > OVERFULL_CHAR_LIMIT {
             warnings.push(Warning {
                 file: opts.file.to_string(),
-                line: opts.first_line + 1 + i,
+                line: opts.body_line + i,
                 message: format!(
                     "code line is {width_of_line} chars wide — it may exceed the text width; split it"
                 ),
@@ -199,10 +206,10 @@ pub(crate) fn render_block(
 mod tests {
     use super::*;
 
-    fn opts(file: &str, first_line: usize, numbers: bool) -> EmitOpts<'_> {
+    fn opts(file: &str, body_line: usize, numbers: bool) -> EmitOpts<'_> {
         EmitOpts {
             file,
-            first_line,
+            body_line,
             numbers,
         }
     }
@@ -259,7 +266,24 @@ mod tests {
     #[test]
     fn blank_source_lines_become_real_lines() {
         let (out, _, _) = render("a\n\nb", None, &opts("main.tex", 1, false));
-        assert!(out.contains("\\noindent a\n\n\\noindent\\mbox{}\n\n\\noindent b"));
+        assert!(out.contains("\\noindent a\n\n\\noindent \\mbox{}\n\n\\noindent b"));
+    }
+
+    /// Numbering runs over *source* lines: a blank line still shows its
+    /// number instead of vanishing from the sequence (1, 2, 4 → 1, 2, 3).
+    #[test]
+    fn numbered_blank_lines_keep_their_number() {
+        let (out, _, _) = render("a\n\nb", None, &opts("main.tex", 1, true));
+        assert!(out.contains("\\hbox to 2em{1\\hss}"), "out: {out}");
+        assert!(
+            out.contains("\\hbox to 2em{2\\hss}}\\hspace{0.8em}\n\n\\noindent \\textcolor"),
+            "the blank line must carry number 2: {out}"
+        );
+        assert!(out.contains("\\hbox to 2em{3\\hss}"), "out: {out}");
+        assert!(
+            !out.contains("\\mbox{}"),
+            "the gutter box is the line: {out}"
+        );
     }
 
     #[test]
@@ -296,7 +320,7 @@ mod tests {
     fn overlong_lines_warn_with_the_build_copy_line_number() {
         let long = "x".repeat(100);
         let body = format!("short\n{long}\nshort");
-        let (_, _, warnings) = render(&body, None, &opts("chapters/one.tex", 10, false));
+        let (_, _, warnings) = render(&body, None, &opts("chapters/one.tex", 11, false));
         assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
         assert_eq!(warnings[0].file, "chapters/one.tex");
         assert_eq!(warnings[0].line, 12);

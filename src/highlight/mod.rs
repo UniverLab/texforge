@@ -16,6 +16,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::texparse;
 use crate::texutil;
 
 mod emit;
@@ -98,9 +99,20 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
         sources.push((rel, std::fs::read_to_string(path)?));
     }
 
-    // Fast gate. No hit → nothing is rewritten, nothing is injected, not one
-    // byte is written (T2: inertness is about writes, not just output).
-    if !sources.iter().any(|(_, content)| is_gated(content, cfg)) {
+    // Discover the blocks this pass owns, per file. The guards come from the
+    // shared tokenizer: a `\begin{code}` behind a `%`, or inside another
+    // verbatim body, is *not* a code block — such a document stays
+    // untouched (the "without a code block the pass is a no-op" guarantee),
+    // and a `code` example quoted inside an `lstlisting` is left for the
+    // listing that owns it.
+    let discovered: Vec<Vec<Target>> = sources
+        .iter()
+        .map(|(_, content)| target_blocks(content, cfg))
+        .collect();
+
+    // Fast gate. No real block → nothing is rewritten, nothing is injected,
+    // not one byte is written (T2: inertness is about writes, not output).
+    if discovered.iter().all(Vec::is_empty) {
         return Ok(Vec::new());
     }
 
@@ -111,13 +123,15 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
     let mut warnings = Vec::new();
     let mut rewritten_any = false;
 
-    for (rel, content) in sources.iter_mut() {
-        if !is_gated(content, cfg) {
+    for (index, (rel, content)) in sources.iter_mut().enumerate() {
+        let blocks = &discovered[index];
+        if blocks.is_empty() {
             continue;
         }
         let rewritten = rewrite_file(
             rel,
             content,
+            blocks,
             cfg,
             &mut colors,
             &mut has_gutter,
@@ -136,81 +150,121 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
     Ok(warnings)
 }
 
-/// Whether a file contains anything this pass could rewrite.
-fn is_gated(content: &str, cfg: Settings) -> bool {
-    content.contains("\\begin{code}") || (cfg.lstlisting && content.contains("\\begin{lstlisting}"))
+/// One block this pass owns: the byte offset of its `\begin{…}` tag and the
+/// environment name it is rewritten as. Offsets index the file as it was
+/// read — the original build copy.
+type Target = (usize, &'static str);
+
+/// Every block in `content` the pass owns, in source order.
+///
+/// The scan itself is the literal `\begin{env}` search the pass always did,
+/// narrowed by two guards the tokenizer already computed for us:
+///
+/// * an occurrence behind an unescaped `%` is a comment, not a block — the
+///   "without a code block the pass is a no-op" guarantee must cover a
+///   commented-out example, which the raw search cannot tell from a real
+///   one;
+/// * an occurrence inside a *foreign* verbatim body (`verbatim`, `minted`,
+///   or a non-opted-in `lstlisting`) belongs to the environment quoting it:
+///   a `code` sample shown inside a listing stays listing text.
+///
+/// Occurrences inside a block this pass itself owns are resolved by
+/// [`rewrite_file`]'s cursor: the outer block starts first and swallows them.
+fn target_blocks(content: &str, cfg: Settings) -> Vec<Target> {
+    let envs: &[&'static str] = if cfg.lstlisting {
+        &[CODE_ENV, LST_ENV]
+    } else {
+        &[CODE_ENV]
+    };
+    let foreign: Vec<(usize, usize)> = texparse::verbatim_blocks(content)
+        .into_iter()
+        .filter(|block| !envs.contains(&block.env.as_str()))
+        .map(|block| (block.begin_start, block.end_end))
+        .collect();
+
+    let mut found: Vec<Target> = Vec::new();
+    for &env in envs {
+        let tag = format!("\\begin{{{env}}}");
+        let mut search = 0usize;
+        while let Some(rel) = content[search..].find(&tag) {
+            let start = search + rel;
+            search = start + tag.len();
+            if in_comment(content, start) || foreign.iter().any(|&(a, b)| start >= a && start < b) {
+                continue;
+            }
+            found.push((start, env));
+        }
+    }
+    found.sort_unstable();
+    found
 }
 
-/// Rewrite every `code` block (and, when opted in, `lstlisting` block) in
-/// one file.
+/// Whether the byte at `offset` sits behind an unescaped `%` on its line.
+fn in_comment(content: &str, offset: usize) -> bool {
+    let line_start = content[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let prefix = &content[line_start..offset];
+    texutil::strip_comment(prefix).len() < prefix.len()
+}
+
+/// Rewrite every block the pass owns, in one left-to-right pass over the
+/// original content.
+///
+/// `blocks` comes from [`target_blocks`], so each entry is a real block this
+/// pass owns; the loop itself needs no comment or nesting rules — everything
+/// between two blocks (prose, comments, foreign verbatim bodies) is copied
+/// through byte for byte.
 fn rewrite_file(
     rel: &str,
     content: &str,
+    blocks: &[Target],
     cfg: Settings,
     colors: &mut BTreeSet<Rgb>,
     has_gutter: &mut bool,
     warnings: &mut Vec<Warning>,
 ) -> Result<String> {
-    let out = rewrite_env(
-        rel,
-        content,
-        CODE_ENV,
-        CODE_OPTION_KEYS,
-        cfg,
-        colors,
-        has_gutter,
-        warnings,
-    )?;
-    if cfg.lstlisting {
-        rewrite_env(
-            rel,
-            &out,
-            LST_ENV,
-            LSTLISTING_OPTION_KEYS,
-            cfg,
-            colors,
-            has_gutter,
-            warnings,
-        )
-    } else {
-        Ok(out)
-    }
-}
-
-/// The begin → options → end search loop, structurally the same shape as
-/// `diagrams::render_env` (whose caching/callback machinery does not apply
-/// here — nothing external is rendered). The eight parameters are the loop's
-/// whole context; bundling them would obscure the mirroring.
-///
-#[allow(clippy::too_many_arguments)]
-fn rewrite_env(
-    rel: &str,
-    content: &str,
-    env: &str,
-    known: &[&str],
-    cfg: Settings,
-    colors: &mut BTreeSet<Rgb>,
-    has_gutter: &mut bool,
-    warnings: &mut Vec<Warning>,
-) -> Result<String> {
-    let begin_tag = format!("\\begin{{{env}}}");
-    let end_tag = format!("\\end{{{env}}}");
-
     let mut result = String::with_capacity(content.len());
-    let mut remaining = content;
-    let mut pos = 0usize;
+    let mut cursor = 0usize;
 
-    while let Some(start) = remaining.find(&begin_tag) {
-        result.push_str(&remaining[..start]);
-        let block_start = pos + start;
-        let first_line = 1 + content[..block_start].matches('\n').count();
+    for &(start, env) in blocks {
+        if start < cursor {
+            // Quoted inside a block this pass already rewrote (a `code`
+            // sample inside an opted-in `lstlisting`): the outer block owns
+            // that text, this occurrence is not a block of its own.
+            continue;
+        }
+        let begin_tag = format!("\\begin{{{env}}}");
+        let end_tag = format!("\\end{{{env}}}");
+        let first_line = 1 + content[..start].matches('\n').count();
+        result.push_str(&content[cursor..start]);
 
-        let after_begin = &remaining[start + begin_tag.len()..];
-        let label = if env == CODE_ENV { CODE_ENV } else { LST_ENV };
-        let (opts, after_opts) = texutil::parse_opts(after_begin, label, known)?;
+        let after_begin = &content[start + begin_tag.len()..];
+        let known = if env == CODE_ENV {
+            CODE_OPTION_KEYS
+        } else {
+            LSTLISTING_OPTION_KEYS
+        };
+        let (opts, after_opts) = texutil::parse_opts(after_begin, env, known)?;
         let end = texutil::find_end_tag(after_opts, &end_tag, env)?;
 
-        let body = strip_one_newline(&after_opts[..end]).replace('\r', "");
+        // Absolute offset of `after_opts` in `content`. `parse_opts` consumes
+        // the option text (and may eat one leading newline), so the length
+        // it consumed must be added back before computing any line number
+        // or advancing `cursor` — otherwise every block after the first
+        // drifts.
+        let body_abs = start + begin_tag.len() + (after_begin.len() - after_opts.len());
+        let raw_body = &after_opts[..end];
+        // Line of the body's first source character: one past the newline
+        // `strip_one_newline` will eat, or the same line for an inline body.
+        let stripped_newline = if raw_body.starts_with("\r\n") {
+            2
+        } else if raw_body.starts_with('\n') {
+            1
+        } else {
+            0
+        };
+        let body_line = 1 + content[..body_abs + stripped_newline].matches('\n').count();
+
+        let body = strip_one_newline(raw_body).replace('\r', "");
         let numbers = numbers_for(env, &opts, cfg);
         if numbers {
             *has_gutter = true;
@@ -231,7 +285,7 @@ fn rewrite_env(
             spans.as_deref(),
             &EmitOpts {
                 file: rel,
-                first_line,
+                body_line,
                 numbers,
             },
             colors,
@@ -239,11 +293,10 @@ fn rewrite_env(
         );
         result.push_str(&rendered);
 
-        pos = block_start + begin_tag.len() + end + end_tag.len();
-        remaining = &after_opts[end + end_tag.len()..];
+        cursor = body_abs + end + end_tag.len();
     }
 
-    result.push_str(remaining);
+    result.push_str(&content[cursor..]);
     Ok(result)
 }
 
@@ -261,13 +314,14 @@ fn strip_one_newline(body: &str) -> &str {
 }
 
 /// The effective `numbers` value: the environment's option wins over the
-/// project default. `lstlisting` speaks `listings.sty`'s `left`/`right`.
+/// project default. `lstlisting` speaks `listings.sty`'s `left`/`right`,
+/// and `none` is how an author turns numbering off for one block.
 fn numbers_for(env: &str, opts: &HashMap<String, String>, cfg: Settings) -> bool {
     match opts.get("numbers") {
         None => cfg.numbers,
         Some(value) => match value.to_ascii_lowercase().as_str() {
             "left" | "right" | "true" => true,
-            "false" => false,
+            "false" | "none" => false,
             _ if env == LST_ENV => cfg.numbers,
             _ => false,
         },
@@ -401,6 +455,109 @@ mod tests {
             !block.contains("\\textcolor{"),
             "monochrome block must not colorize:\n{block}"
         );
+    }
+
+    /// A commented-out block is not a block: the "without a code block the
+    /// pass is a no-op" guarantee covers it, so a document whose only
+    /// `\begin{code}` sits behind a `%` stays byte-identical and compiles
+    /// exactly as it did before the feature existed.
+    #[test]
+    fn commented_code_block_is_inert() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{article}\n\\begin{document}\n\
+                    % \\begin{code}[lang=python]\n% def f(): pass\n% \\end{code}\n\
+                    Hello.\n\\end{document}\n";
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("main.tex")).unwrap(),
+            main,
+            "a commented-out \\begin{{code}} must not be rewritten or injected"
+        );
+    }
+
+    /// With a commented example *and* a real block in the same file, only the
+    /// real one is rewritten: the comment keeps its text and the preamble is
+    /// injected exactly once.
+    #[test]
+    fn commented_occurrence_does_not_shadow_the_real_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{article}\n\\begin{document}\n\
+                    % \\begin{code}[lang=python]\n% x = 1\n% \\end{code}\n\
+                    \\begin{code}[lang=python]\ny = 2\n\\end{code}\n\
+                    \\end{document}\n";
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("% \\begin{code}[lang=python]\n% x = 1\n% \\end{code}"),
+            "the commented example must survive verbatim:\n{out}"
+        );
+        assert_eq!(
+            out.matches("{\n\\tfxcodestyle").count(),
+            1,
+            "exactly one block may be rewritten:\n{out}"
+        );
+        assert_eq!(
+            out.matches("texforge code listings (injected").count(),
+            1,
+            "the preamble is injected once"
+        );
+    }
+
+    /// A `code` example quoted *inside* another verbatim environment is text
+    /// the quoting environment owns: without a real block of its own the
+    /// whole file stays untouched (the raw `find`-based gate would have
+    /// opened on the quoted tag and corrupted the listing).
+    #[test]
+    fn code_example_quoted_inside_a_listing_is_not_a_block() {
+        for opener in ["lstlisting", "verbatim"] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = format!(
+                "\\documentclass{{article}}\n\\begin{{document}}\n\
+                 \\begin{{{opener}}}\n\\begin{{code}}[lang=python]\nx = 1\n\\end{{code}}\n\
+                 \\end{{{opener}}}\n\\end{{document}}\n"
+            );
+            std::fs::write(dir.path().join("main.tex"), &main).unwrap();
+
+            let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+            assert!(warnings.is_empty(), "{opener}: warnings: {warnings:?}");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("main.tex")).unwrap(),
+                main,
+                "{opener}: a quoted \\begin{{code}} must stay inert"
+            );
+        }
+    }
+
+    /// With the opt-in on, a `code` example quoted inside an `lstlisting` is
+    /// owned by the listing: the listing is rewritten once and the quoted
+    /// tag inside it is not a second block (it would slice the output
+    /// backwards if it were).
+    #[test]
+    fn quoted_code_inside_an_opted_in_listing_is_swallowed_by_the_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{article}\n\\begin{document}\n\
+                    \\begin{lstlisting}[language=Python]\n\\begin{code}\nx = 1\n\\end{code}\n\
+                    \\end{lstlisting}\n\\end{document}\n";
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+
+        let cfg = Settings {
+            lstlisting: true,
+            ..Settings::default()
+        };
+        let warnings = run(dir.path(), "main.tex", cfg).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert_eq!(
+            out.matches("{\n\\tfxcodestyle").count(),
+            1,
+            "the listing owns its quoted \\begin{{code}}:\n{out}"
+        );
+        assert!(!out.contains("\\begin{lstlisting}"), "rewritten:\n{out}");
     }
 
     /// F4 — without `code` (and without the opt-in) the pass is a no-op:
@@ -546,6 +703,73 @@ mod tests {
         let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
         assert!(out.contains("\\textcolor{tfxgutter}"), "gutter expected");
         assert!(out.contains("\\definecolor{tfxgutter}"));
+    }
+
+    /// `numbers=none` is how a `listings` author turns numbering off for one
+    /// block; it must override the document-wide default like `false` does.
+    #[test]
+    fn lstlisting_numbers_none_overrides_document_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{lstlisting}[language=python, numbers=none]\nx = 1\n\\end{lstlisting}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        let cfg = Settings {
+            lstlisting: true,
+            numbers: true,
+            ..Settings::default()
+        };
+        let warnings = run(dir.path(), "main.tex", cfg).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            !out.contains("tfxgutter"),
+            "numbers=none means no gutter:\n{out}"
+        );
+    }
+
+    /// Warnings in the second and later blocks must name the right build-copy
+    /// lines: the option text the first block consumed (and the newline
+    /// `parse_opts` ate) must not shift every line number after it.
+    #[test]
+    fn warnings_in_later_blocks_keep_correct_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let long = "y".repeat(100);
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\
+             \\begin{{code}}[lang=python]\nx = 1\n\\end{{code}}\n\n\
+             \\begin{{code}}[lang=brainfuck, numbers=true]\n+++[->+<]\nshort\n\
+             {long}\n\\end{{code}}\n\\end{{document}}\n"
+        );
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert_eq!(warnings.len(), 2, "warnings: {warnings:?}");
+        assert!(warnings[0].message.contains("brainfuck"), "{warnings:?}");
+        assert_eq!(warnings[0].line, 7, "second \\begin sits on line 7");
+        assert!(warnings[1].message.contains("chars wide"), "{warnings:?}");
+        assert_eq!(warnings[1].line, 10, "the long line is line 10");
+    }
+
+    /// Options may span several lines; overfull warnings count from the body,
+    /// not from the `\begin` line.
+    #[test]
+    fn multiline_options_do_not_shift_line_warnings() {
+        let dir = tempfile::tempdir().unwrap();
+        let long = "z".repeat(100);
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\
+             \\begin{{code}}[lang=python,\n numbers=true]\na = 1\n{long}\n\
+             \\end{{code}}\n\\end{{document}}\n"
+        );
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert_eq!(warnings[0].line, 6, "body starts on line 5, long line is 6");
     }
 
     /// `input{}`ed files are rewritten too, and the preamble lands in the

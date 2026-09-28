@@ -92,8 +92,22 @@ paper. An unknown theme name fails the build and lists the valid names.
   own overfull boxes as well.
 - Special characters (`\ { } $ & # _ % ~ ^ < >`) are escaped at the
   character level, so code can never be misread as LaTeX. `|` prints as-is.
-- Warnings name **build-copy** line numbers — the same coordinates
-  Tectonic's own errors use (the diagram pass shifts lines first).
+- The overfull-line and unknown-language warnings name the line numbers of
+  the build copy **as the listing pass received it** — before the blocks
+  are rewritten and before the preamble is injected. Without a diagram
+  block in front of them those are exactly your source file's line
+  numbers; the diagram pass (and, later, the rewrite and injection here)
+  move the finished build copy, so Tectonic's own errors — reported
+  against that finished copy — can sit on a different line than a listing
+  warning does. (An unknown *option* warns without a line: the option
+  parser is shared with the diagram blocks.)
+- Only a real block counts: a `\begin{code}` behind a `%`, or quoted
+  inside `verbatim`/`lstlisting`, is text — the pass ignores it and the
+  document stays byte-identical.
+- `code` is a verbatim environment for `texforge check`, `fmt` and `wc`
+  (like `lstlisting` and `minted`): code never triggers prose linter rules,
+  never counts as words, and `texforge fmt` passes its body through
+  untouched.
 - The `code` environment name and the `\tfx` command prefix are reserved:
   defining them yourself fails the build with a file:line error telling you
   to rename.
@@ -110,8 +124,9 @@ lstlisting = true
 Then `\begin{lstlisting}[language=Python, numbers=left]…\end{lstlisting}`
 blocks are rewritten the same way: `language=` (case-insensitive, `[ISO]`
 dialect prefixes stripped) carries over, `numbers=left|right` turns the
-gutter on, and every other `listings` option is dropped with the usual
-unknown-option warning.
+gutter on (and `numbers=none` turns it off, even against a document-wide
+`[highlight] numbers = true`), and every other `listings` option is dropped
+with the usual unknown-option warning.
 
 ## Why not minted
 

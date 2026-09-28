@@ -14,6 +14,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::texparse;
 use crate::texutil;
 
 /// Severity of a lint finding.
@@ -91,7 +92,11 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     let mut all_labels = HashSet::new();
     for file in &tex_files {
         let content = std::fs::read_to_string(file)?;
-        for line in content.lines() {
+        let verbatim_lines = texparse::verbatim_body_lines(&content);
+        for (index, line) in content.lines().enumerate() {
+            if verbatim_lines.contains(&(index + 1)) {
+                continue; // a `\label` in code is text, not a label
+            }
             let line = texutil::strip_comment(line);
             for label in texutil::extract_commands(&line, "label") {
                 all_labels.insert(label.to_string());
@@ -108,6 +113,11 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
             .to_string_lossy()
             .to_string();
         let content = std::fs::read_to_string(file)?;
+        // Lines wholly inside a verbatim body (`code`, `lstlisting`,
+        // `verbatim`, `minted`) are source code: their `\input`, `\cite` and
+        // `\begin{…}` are not document markup and must reach no line-based
+        // rule. The tokenizer-based rules below already skip them.
+        let verbatim_lines = texparse::verbatim_body_lines(&content);
 
         check_references(
             root,
@@ -116,12 +126,13 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
             bib_file,
             &bib_keys,
             &all_labels,
+            &verbatim_lines,
             &mut errors,
         );
-        check_environments(&rel, &content, &mut errors);
-        check_diagram_blocks(&rel, &content, "mermaid", &mut errors);
-        check_diagram_blocks(&rel, &content, "graphviz", &mut errors);
-        check_diagram_blocks(&rel, &content, "d2", &mut errors);
+        check_environments(&rel, &content, &verbatim_lines, &mut errors);
+        check_diagram_blocks(&rel, &content, "mermaid", &verbatim_lines, &mut errors);
+        check_diagram_blocks(&rel, &content, "graphviz", &verbatim_lines, &mut errors);
+        check_diagram_blocks(&rel, &content, "d2", &verbatim_lines, &mut errors);
         errors.extend(glyphs::lint_file(&rel, &content));
         file_contents.push((rel, content));
     }
@@ -186,6 +197,7 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
 }
 
 /// Check \input, \includegraphics, \cite, \ref references.
+#[allow(clippy::too_many_arguments)]
 fn check_references(
     root: &Path,
     rel: &str,
@@ -193,10 +205,14 @@ fn check_references(
     bib_file: Option<&str>,
     bib_keys: &HashSet<String>,
     all_labels: &HashSet<String>,
+    verbatim_lines: &HashSet<usize>,
     errors: &mut Vec<LintFinding>,
 ) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
+        if verbatim_lines.contains(&line_num) {
+            continue; // code, not markup
+        }
         let line = texutil::strip_comment(line);
 
         check_input_references(root, rel, line_num, &line, errors);
@@ -291,7 +307,11 @@ fn collect_cited_keys(
     nocite_star: &mut bool,
 ) {
     for (_, content) in file_contents {
-        for line in content.lines() {
+        let verbatim_lines = texparse::verbatim_body_lines(content);
+        for (i, line) in content.lines().enumerate() {
+            if verbatim_lines.contains(&(i + 1)) {
+                continue; // a `\cite` in code cites nothing
+            }
             let line = texutil::strip_comment(line);
             for arg in texutil::extract_commands(&line, "cite") {
                 for key in arg.split(',') {
@@ -381,12 +401,23 @@ fn check_inputminted_references(
 }
 
 /// Check for unclosed \begin{env} environments.
-fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintFinding>) {
+fn check_environments(
+    rel: &str,
+    content: &str,
+    verbatim_lines: &HashSet<usize>,
+    errors: &mut Vec<LintFinding>,
+) {
     // Stack of (env_name, line_number)
     let mut stack: Vec<(&str, usize)> = Vec::new();
 
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
+        // Body lines of a verbatim region are opaque — but the `\begin` and
+        // `\end` lines themselves are visible, so `code`/`lstlisting` still
+        // have to balance like every other environment.
+        if verbatim_lines.contains(&line_num) {
+            continue;
+        }
         let trimmed = line.trim();
 
         // Skip comments
@@ -436,9 +467,20 @@ fn check_environments(rel: &str, content: &str, errors: &mut Vec<LintFinding>) {
 }
 
 /// Check mermaid/graphviz blocks: unclosed and invalid pos option.
-fn check_diagram_blocks(rel: &str, content: &str, env: &str, errors: &mut Vec<LintFinding>) {
+fn check_diagram_blocks(
+    rel: &str,
+    content: &str,
+    env: &str,
+    verbatim_lines: &HashSet<usize>,
+    errors: &mut Vec<LintFinding>,
+) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
+        // A `\begin{mermaid}` quoted inside `code` (or any verbatim body) is
+        // sample text, not a diagram block.
+        if verbatim_lines.contains(&line_num) {
+            continue;
+        }
         let trimmed = line.trim();
 
         if !trimmed.starts_with(&format!("\\begin{{{}}}", env)) {
@@ -901,19 +943,86 @@ mod tests {
         );
     }
 
-    /// A `code` block is balanced environments like any other: the linter
-    /// must not flag it (its body is opaque the same way `mermaid` bodies
-    /// already are — documented in docs/listings.md).
+    /// A `code` block is verbatim to the linter (`code` is in
+    /// `crate::texparse`'s verbatim list, like `lstlisting` and `minted`):
+    /// bodies full of prose-fatal glyphs (`&`, `#`, `$`, `100%`, straight
+    /// quotes, `...`) must produce no findings at any severity — documented
+    /// in docs/listings.md.
     #[test]
-    fn code_environment_has_no_error_findings() {
+    fn code_environment_body_is_opaque_to_every_rule() {
         let (dir, entry) = setup(
             "\\documentclass{article}\n\\begin{document}\n\
-             \\begin{code}[lang=python]\nx = 1\n\\end{code}\n\\end{document}",
+             \\begin{code}[lang=bash]\n#!/bin/bash\n\
+             if [ \"$a\" = 1 ] && grep -q 'x' f; then echo 100% ...; fi\n\
+             \\end{code}\n\\end{document}",
         );
         let findings = lint(dir.path(), &entry, None).unwrap();
         assert!(
-            findings.iter().all(|f| f.severity != Severity::Error),
-            "findings: {findings:?}"
+            findings.is_empty(),
+            "code body must be opaque to every linter rule: {findings:?}"
+        );
+    }
+
+    /// Markup *quoted* inside a verbatim body is code, not document: the
+    /// line-based reference, environment and diagram checks must not see it
+    /// (the tokenizer-based rules already skip it). Markup just outside the
+    /// block keeps being checked, so the guard is the body, not the file.
+    #[test]
+    fn verbatim_body_markup_is_not_checked_as_document_markup() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=latex]\n\\input{inside.tex}\n\\includegraphics{inside.png}\n\
+             \\cite{inside}\n\\ref{inside}\n\\begin{mermaid}\n\\end{code}\n\
+             \\input{outside.tex}\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "outside.tex"),
+            "markup outside the block must still be checked: {findings:?}"
+        );
+        for inside in [
+            "inside.tex",
+            "inside.png",
+            "\\ref{inside}",
+            "\\cite{inside}",
+            "mermaid",
+        ] {
+            assert!(
+                !has_error(&findings, inside),
+                "{inside:?} inside a code block must be opaque: {findings:?}"
+            );
+        }
+    }
+
+    /// The same opacity for `lstlisting` — its body was always verbatim to
+    /// LaTeX, and now it is verbatim to the linter too.
+    #[test]
+    fn lstlisting_body_markup_is_not_checked_as_document_markup() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{lstlisting}\n\\input{inside.tex}\n\\begin{figure}\n\\end{lstlisting}\n\
+             \\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            findings.is_empty(),
+            "listing body must be opaque: {findings:?}"
+        );
+    }
+
+    /// A `\label` that only exists inside a code block defines nothing — the
+    /// block is verbatim — so a real `\ref` to it is reported.
+    #[test]
+    fn a_label_defined_only_inside_code_is_not_a_definition() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=latex]\n\\label{sec:ghost}\n\\end{code}\n\
+             \\ref{sec:ghost}\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "\\ref{sec:ghost}"),
+            "a code body cannot define a label: {findings:?}"
         );
     }
 

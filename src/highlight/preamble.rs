@@ -11,6 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::texparse;
 use crate::texutil;
 
 use super::engine::Rgb;
@@ -79,12 +80,19 @@ pub(crate) fn injected_block(
 /// Does any of these sources visibly load `color` or `xcolor`?
 ///
 /// Text scan on comment-stripped lines (so a commented-out `\usepackage`
-/// does not count). The runtime `\@ifpackageloaded` guard is the correctness
-/// mechanism; this scan only spares the author a redundant line.
+/// does not count), skipping verbatim body lines (so a `\usepackage{xcolor}`
+/// quoted as sample code does not count — it is escaped text, not a real
+/// load; without this a code example would suppress the `\usepackage{color}`
+/// the listing actually needs). The runtime `\@ifpackageloaded` guard is the
+/// correctness mechanism; this scan only spares the author a redundant line.
 pub(crate) fn color_pkg_visible_load(files: &[(String, String)]) -> bool {
-    files
-        .iter()
-        .any(|(_, content)| content.lines().any(line_loads_color))
+    files.iter().any(|(_, content)| {
+        let verbatim_lines = texparse::verbatim_body_lines(content);
+        content
+            .lines()
+            .enumerate()
+            .any(|(index, line)| !verbatim_lines.contains(&(index + 1)) && line_loads_color(line))
+    })
 }
 
 fn line_loads_color(line: &str) -> bool {
@@ -157,30 +165,46 @@ pub(crate) fn check_collisions(files: &[(String, String)]) -> Result<()> {
     ];
 
     for (file, content) in files {
+        // Text inside a verbatim body is source the pass will escape, not a
+        // macro the document defines: a `code` (or `lstlisting`) block that
+        // *quotes* `\newenvironment{code}` — documenting this very feature —
+        // must not collide with itself. The `\begin`/`\end` lines stay
+        // visible; only whole body lines are skipped.
+        let verbatim_lines = texparse::verbatim_body_lines(content);
         for (index, raw_line) in content.lines().enumerate() {
             let line = index + 1;
+            if verbatim_lines.contains(&line) {
+                continue;
+            }
             let line_text = texutil::strip_comment(raw_line);
 
             for definition in DEFINITIONS {
-                if let Some(pos) = line_text.find(definition) {
+                // Scan every occurrence, not just the first: a lookalike
+                // (`\def\codefoo`) must not shield a real definition later
+                // on the same line.
+                let mut search = line_text.as_str();
+                while let Some(pos) = search.find(definition) {
                     let end = pos + definition.len();
-                    let next = line_text[end..].chars().next();
+                    let next = search[end..].chars().next();
                     // `\def\codefoo` does not define `code`.
-                    if (definition.starts_with("\\def") || definition.starts_with("\\let"))
-                        && next.is_some_and(|c| c.is_ascii_alphabetic())
-                    {
-                        continue;
+                    let lookalike = (definition.starts_with("\\def")
+                        || definition.starts_with("\\let"))
+                        && next.is_some_and(|c| c.is_ascii_alphabetic());
+                    if !lookalike {
+                        anyhow::bail!(
+                            "the 'code' environment is already defined in {file}:{line} — \
+                             texforge rewrites \\begin{{code}} blocks itself and requires it to \
+                             be free; rename your definition"
+                        );
                     }
-                    anyhow::bail!(
-                        "the 'code' environment is already defined in {file}:{line} — \
-                         texforge rewrites \\begin{{code}} blocks itself and requires it to be \
-                         free; rename your definition"
-                    );
+                    search = &search[end..];
                 }
             }
 
-            if let Some(pos) = line_text.find("\\tfx") {
-                if line_text[pos + 4..]
+            let mut search = line_text.as_str();
+            while let Some(pos) = search.find("\\tfx") {
+                let after = &search[pos + "\\tfx".len()..];
+                if after
                     .chars()
                     .next()
                     .is_some_and(|c| c.is_ascii_alphabetic())
@@ -190,6 +214,7 @@ pub(crate) fn check_collisions(files: &[(String, String)]) -> Result<()> {
                          reserved for texforge code highlighting; rename it"
                     );
                 }
+                search = after;
             }
         }
     }
@@ -263,6 +288,25 @@ mod tests {
     }
 
     #[test]
+    fn color_pkg_load_quoted_in_code_is_not_a_real_load() {
+        // A `\usepackage{xcolor}` shown as sample code is escaped text, not a
+        // preamble load: it must not suppress the `\usepackage{color}` the
+        // rewritten listing needs (otherwise `\definecolor` would be
+        // undefined at runtime).
+        assert!(!color_pkg_visible_load(&files(&[(
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=latex]\n\\usepackage{xcolor}\n\\end{code}\n\\end{document}",
+        )])));
+        // …but a real load alongside the example still counts.
+        assert!(color_pkg_visible_load(&files(&[(
+            "main.tex",
+            "\\documentclass{article}\n\\usepackage{xcolor}\n\\begin{document}\n\
+             \\begin{code}[lang=latex]\n\\usepackage{xcolor}\n\\end{code}\n\\end{document}",
+        )])));
+    }
+
+    #[test]
     fn collision_detection_names_file_and_line() {
         let err = check_collisions(&files(&[(
             "main.tex",
@@ -293,6 +337,57 @@ mod tests {
         assert!(
             check_collisions(&files(&[("main.tex", "\\def\\codebase{}\n\\def\\mytfx{}")])).is_ok()
         );
+    }
+
+    /// A lookalike on the same line (`\def\codefoo`, `\let\tfx\relax`) must
+    /// not shield a real collision further along: every occurrence counts.
+    #[test]
+    fn collision_detection_catches_second_definition_on_a_line() {
+        let err = check_collisions(&files(&[("main.tex", "\\def\\codebase{}\\def\\code{x}")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("main.tex:1"), "{err}");
+        assert!(err.contains("already defined"), "{err}");
+
+        let err = check_collisions(&files(&[(
+            "main.tex",
+            "\\let\\tfx\\relax\\let\\tfxcode\\relax",
+        )]))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("main.tex:1"), "{err}");
+        assert!(err.contains("\\tfx"), "{err}");
+    }
+
+    /// Definitions *quoted* inside a verbatim body are sample text the pass
+    /// will escape — they define nothing, so they must not collide (nor may
+    /// a `\tfx…` token inside a listing's own body).
+    #[test]
+    fn definitions_quoted_inside_a_verbatim_body_do_not_collide() {
+        assert!(
+            check_collisions(&files(&[(
+                "main.tex",
+                "\\begin{code}[lang=latex]\n\\newenvironment{code}{a}{b}\n\\end{code}",
+            )]))
+            .is_ok(),
+            "a quoted \\newenvironment{{code}} inside a block is text"
+        );
+        assert!(
+            check_collisions(&files(&[(
+                "main.tex",
+                "\\begin{lstlisting}\n\\newcommand{\\tfxmine}{x}\n\\end{lstlisting}",
+            )]))
+            .is_ok(),
+            "a quoted \\tfx… inside a listing body is text"
+        );
+        // …but the same definitions outside a body still fail.
+        let err = check_collisions(&files(&[(
+            "main.tex",
+            "\\begin{code}[lang=latex]\n\\end{code}\n\\newenvironment{code}{a}{b}",
+        )]))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already defined"), "{err}");
     }
 
     #[test]
