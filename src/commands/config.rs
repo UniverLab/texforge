@@ -201,7 +201,19 @@ pub fn wizard() -> Result<()> {
 mod tests {
     use super::*;
 
+    /// `XDG_CONFIG_HOME` lives in the process environment while Rust runs
+    /// tests in parallel threads: two `with_temp_config` tests overlapping
+    /// would swap the variable out from under each other and read the other
+    /// one's temp directory, failing an otherwise valid `set`/`get`
+    /// roundtrip. Serialising this module's config tests is what makes those
+    /// roundtrips deterministic. A poisoned lock (one test already failed) is
+    /// still usable — the failure itself is reported by the panicking test.
+    static TEMP_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn with_temp_config(f: impl FnOnce()) {
+        let _guard = TEMP_CONFIG_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());

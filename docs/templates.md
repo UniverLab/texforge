@@ -1,7 +1,7 @@
 ---
 title: Templates
 description: Install, manage and validate LaTeX templates from the registry.
-order: 6
+order: 7
 ---
 
 # Templates

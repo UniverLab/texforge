@@ -12,6 +12,8 @@ use crate::commands::init::BANNER;
 use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::{Project, Reproducible};
+use crate::highlight;
+use crate::highlight::HighlightTheme;
 use crate::raster::PdfDocument;
 use crate::utils::sanitize_filename;
 
@@ -55,6 +57,25 @@ fn resolve_default_style(project: &Project) -> Result<diagrams::style::DiagramSt
     }
 }
 
+/// Resolve `project.toml`'s `[highlight]` section into the code-listing
+/// pass's settings, mirroring [`resolve_default_style`]: an absent section
+/// keeps every default (github theme, no `lstlisting` rewrite, no gutter),
+/// and an unrecognised theme fails the build by name instead of silently
+/// falling back to `github`.
+fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
+    let Some(section) = project.config.highlight.as_ref() else {
+        return Ok(highlight::Settings::default());
+    };
+    Ok(highlight::Settings {
+        theme: match section.theme.as_deref() {
+            Some(name) => HighlightTheme::parse(name)?,
+            None => HighlightTheme::default(),
+        },
+        lstlisting: section.lstlisting.unwrap_or(false),
+        numbers: section.numbers.unwrap_or(false),
+    })
+}
+
 /// Compile project to PDF using a temp directory, output named after the document title.
 pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     let project = Project::load()?;
@@ -67,6 +88,7 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     }
 
     let default_style = resolve_default_style(&project)?;
+    let highlight_cfg = resolve_highlight(&project)?;
 
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path();
@@ -78,6 +100,9 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
         build_dir,
         default_style,
     )?;
+    // After diagrams: the code pass rewrites what diagrams just copied, and
+    // its warning line numbers are build-copy coordinates (like Tectonic's).
+    highlight::process(build_dir, &project.config.build.entry, highlight_cfg)?;
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -220,12 +245,19 @@ fn run_build(
         Ok(style) => style,
         Err(e) => return WatchResult::Err(e.to_string()),
     };
+    let highlight_cfg = match resolve_highlight(project) {
+        Ok(cfg) => cfg,
+        Err(e) => return WatchResult::Err(e.to_string()),
+    };
     if let Err(e) = diagrams::process(
         &project.root,
         &project.config.build.entry,
         build_dir,
         default_style,
     ) {
+        return WatchResult::Err(e.to_string());
+    }
+    if let Err(e) = highlight::process(build_dir, &project.config.build.entry, highlight_cfg) {
         return WatchResult::Err(e.to_string());
     }
     let entry_filename = Path::new(&project.config.build.entry)
@@ -402,6 +434,7 @@ mod tests {
                 diagrams: style.map(|s| crate::domain::project::DiagramsConfig {
                     style: Some(s.to_string()),
                 }),
+                highlight: None,
             },
         }
     }
@@ -429,6 +462,58 @@ mod tests {
         let project = project_with_diagrams_style(Some("editoral"));
         let err = resolve_default_style(&project).unwrap_err();
         assert!(err.to_string().contains("editoral"));
+    }
+
+    fn project_with_highlight(
+        theme: Option<&str>,
+        lstlisting: Option<bool>,
+        numbers: Option<bool>,
+    ) -> Project {
+        let mut project = project_with_diagrams_style(None);
+        project.config.highlight = Some(crate::domain::project::HighlightConfig {
+            theme: theme.map(str::to_string),
+            lstlisting,
+            numbers,
+        });
+        project
+    }
+
+    #[test]
+    fn highlight_defaults_when_the_section_is_absent() {
+        let project = project_with_diagrams_style(None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings, highlight::Settings::default());
+        assert_eq!(settings.theme, HighlightTheme::Github);
+        assert!(!settings.lstlisting);
+        assert!(!settings.numbers);
+    }
+
+    #[test]
+    fn highlight_section_is_honoured() {
+        let project = project_with_highlight(Some("one-light"), Some(true), Some(true));
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.theme, HighlightTheme::OneLight);
+        assert!(settings.lstlisting);
+        assert!(settings.numbers);
+    }
+
+    #[test]
+    fn partial_highlight_section_keeps_other_defaults() {
+        let project = project_with_highlight(None, Some(true), None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.theme, HighlightTheme::Github);
+        assert!(settings.lstlisting);
+        assert!(!settings.numbers);
+    }
+
+    #[test]
+    fn invalid_highlight_theme_fails_naming_valid_ones() {
+        let project = project_with_highlight(Some("dracula"), None, None);
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("dracula"), "{err}");
+        for name in ["github", "one-light"] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
     }
 
     fn tectonic_available() -> bool {
@@ -563,6 +648,7 @@ mod tests {
                     reproducible: None,
                 },
                 diagrams: None,
+                highlight: None,
             },
         };
         let build_dir = dir.path().join(".texforge-build");

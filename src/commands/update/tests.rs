@@ -525,6 +525,31 @@ fn checksum_mismatch_is_fatal_and_changes_nothing() {
     assert_eq!(std::fs::read(&exe).unwrap(), b"old");
 }
 
+#[test]
+fn checksum_binary_mode_marker_still_verifies() {
+    // `sha256sum -b` prefixes the file name with `*` ("hash *asset").
+    // The verifier must strip it: a matching digest passes, and a
+    // mismatched digest under `*` is still fatal rather than skipped.
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let asset_bytes = tar_bytes(BIN_NAME, b"new");
+    let mut downloader = FakeDownloader::new(asset_bytes);
+    let asset = asset_name(
+        GITHUB_REPO,
+        &fake_newer_version(),
+        "x86_64-unknown-linux-musl",
+        "tar.gz",
+    );
+    downloader.checksums =
+        Some(format!("{} *{asset}\n", sha256_hex(&downloader.asset)).into_bytes());
+    let deps = install_deps(&exe, &cargo_bin, &downloader, &|| {
+        panic!("--yes skips the prompt")
+    });
+
+    assert_eq!(run_update_with(false, true, &deps).unwrap(), 0);
+    assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+}
+
 // ── Extraction ──────────────────────────────────────────────
 
 #[test]

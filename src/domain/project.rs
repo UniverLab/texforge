@@ -12,6 +12,23 @@ pub struct ProjectConfig {
     pub build: BuildConfig,
     #[serde(default)]
     pub diagrams: Option<DiagramsConfig>,
+    #[serde(default)]
+    pub highlight: Option<HighlightConfig>,
+}
+
+/// `[highlight]` section of `project.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HighlightConfig {
+    /// Syntax-highlighting palette (`github`, `one-light`).
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Rewrite `\begin{lstlisting}` blocks too (off by default: without the
+    /// opt-in, `listings` users keep real `listings.sty` behaviour).
+    #[serde(default)]
+    pub lstlisting: Option<bool>,
+    /// Number every line of every block unless the block says otherwise.
+    #[serde(default)]
+    pub numbers: Option<bool>,
 }
 
 /// `[diagrams]` section of `project.toml`.
@@ -129,6 +146,7 @@ entry = "main.tex"
                 reproducible: None,
             },
             diagrams: None,
+            highlight: None,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: ProjectConfig = toml::from_str(&toml_str).unwrap();
@@ -150,6 +168,7 @@ entry = "main.tex"
                 reproducible: None,
             },
             diagrams: None,
+            highlight: None,
         };
         let cloned = config.clone();
         let debug_str = format!("{:?}", config);
@@ -279,6 +298,7 @@ entry = "main.tex"
                 reproducible: Some(Reproducible::Epoch(1700000000)),
             },
             diagrams: None,
+            highlight: None,
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let parsed: ProjectConfig = toml::from_str(&serialized).unwrap();
@@ -322,5 +342,64 @@ entry = "main.tex"
 "#;
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
         assert!(config.diagrams.is_none());
+    }
+
+    #[test]
+    fn project_config_highlight_full_section() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+theme = "one-light"
+lstlisting = true
+numbers = true
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.theme.as_deref(), Some("one-light"));
+        assert_eq!(highlight.lstlisting, Some(true));
+        assert_eq!(highlight.numbers, Some(true));
+    }
+
+    #[test]
+    fn project_config_highlight_absent_is_none() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.highlight.is_none());
+    }
+
+    #[test]
+    fn project_config_highlight_partial_keeps_nones() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+theme = "github"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.theme.as_deref(), Some("github"));
+        assert_eq!(highlight.lstlisting, None);
+        assert_eq!(highlight.numbers, None);
     }
 }

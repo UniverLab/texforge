@@ -169,7 +169,7 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
                 target: Ok(target),
                 downloader: &RealDownloader,
                 confirm: &|| {
-                    inquire::Confirm::new(&format!("Update to {latest}? [y/N]"))
+                    inquire::Confirm::new(&format!("Update to {latest}?"))
                         .with_default(false)
                         .prompt()
                         .unwrap_or(false)
@@ -179,13 +179,16 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
         }
         // No newer release, or a read-only `--check`: hand the network
         // result to the same hermetic core, which owns all user-visible
-        // output, the cargo guard, and consent.
+        // output, the cargo guard, and consent. The executable facts below
+        // are placeholders: neither path reaches them (`--check` returns
+        // before the cargo guard; "up to date" returns before the prompt),
+        // so they must never name a real location.
         _ => {
             let deps = UpdateDeps {
                 current: &current,
                 releases: Ok(releases),
-                exe: Path::new("/tmp/texforge-update-test/texforge"),
-                cargo_bin: Path::new("/tmp/texforge-update-test/not-cargo"),
+                exe: Path::new(""),
+                cargo_bin: Path::new(""),
                 target: Ok(release_target()),
                 downloader: &RealDownloader,
                 confirm: &|| false,
@@ -537,10 +540,14 @@ fn verify_checksum_if_present(
     };
 
     let text = String::from_utf8_lossy(&sums);
-    let Some(line) = text
-        .lines()
-        .find(|line| line.split_whitespace().nth(1) == Some(asset))
-    else {
+    // `sha256sum -b` (binary mode) prefixes the file name with `*`; plain
+    // `sha256sum` separates with two spaces. Accept both, like the asset
+    // lookup in `scripts/install.sh` should.
+    let Some(line) = text.lines().find(|line| {
+        line.split_whitespace()
+            .nth(1)
+            .is_some_and(|name| name.trim_start_matches('*') == asset)
+    }) else {
         return Ok(());
     };
     let expected = line.split_whitespace().next().unwrap_or("");

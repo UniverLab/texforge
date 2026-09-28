@@ -78,6 +78,20 @@ layout-rs = "0.1"
 # D2 diagram rendering (pure-Rust port of the d2lang pipeline, MPL-2.0)
 d2-little = "0.7.1-1"
 
+# Syntax highlighting for the `code` environment (route 3: colors are resolved
+# in Rust and emitted as plain LaTeX, so no listings/minted/shell-escape).
+# `default-features = false` + `regex-fancy` keeps the engine pure Rust: the
+# `onig` backend would drag a C toolchain in, and syntect's `default-fancy`
+# preset would drag its bundled yaml/plist syntax+theme assets (we ship our own
+# pre-dumped, curated syntax set instead — see scripts/regen-syntaxes).
+# fancy-regex stays a duplicate of d2-little's 0.14 copy (syntect 5.3 needs
+# ^0.16); the size of that duplication is what the release-size gate measures.
+syntect = { version = "5.3", default-features = false, features = [
+    "parsing",
+    "regex-fancy",
+    "dump-load",
+] }
+
 # Pure-Rust PDF rasterization (no C toolchain, no -sys crates)
 hayro = "0.7.1"
 

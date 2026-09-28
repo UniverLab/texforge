@@ -10,6 +10,7 @@ mod config;
 mod diagrams;
 mod domain;
 mod formatter;
+mod highlight;
 mod linter;
 mod manifest;
 mod pdftext;

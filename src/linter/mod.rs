@@ -901,6 +901,22 @@ mod tests {
         );
     }
 
+    /// A `code` block is balanced environments like any other: the linter
+    /// must not flag it (its body is opaque the same way `mermaid` bodies
+    /// already are — documented in docs/listings.md).
+    #[test]
+    fn code_environment_has_no_error_findings() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python]\nx = 1\n\\end{code}\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            findings.iter().all(|f| f.severity != Severity::Error),
+            "findings: {findings:?}"
+        );
+    }
+
     /// Error-severity findings are detected independently of any deny-warnings flag
     /// (flag logic lives in the command layer; the linter just tags severity).
     #[test]

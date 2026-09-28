@@ -135,3 +135,5 @@ express part of a preset.
   per-edge only. Node fill/border colour and edge colour carry over, but a
   document-wide background is not expressible, and neither is a
   monospaced label face (`technical`'s font rule has no effect here).
+
+See also: highlight source code with the [`code` environment](listings.md) — native syntax highlighting with no `listings`/`minted` setup.

@@ -9,7 +9,7 @@
 const INDENT: &str = "  ";
 
 /// Environments whose content must be passed through untouched.
-const VERBATIM_ENVS: &[&str] = &["verbatim", "lstlisting", "minted", "Verbatim"];
+const VERBATIM_ENVS: &[&str] = &["verbatim", "lstlisting", "minted", "Verbatim", "code"];
 
 /// Format LaTeX source code with consistent style.
 pub fn format(source: &str) -> String {
@@ -479,6 +479,16 @@ mod tests {
         let src = "\\begin{minted}\n  raw\n\\end{minted}";
         let out = format(src);
         assert_eq!(out, "\\begin{minted}\n  raw\n\\end{minted}\n");
+    }
+
+    #[test]
+    fn code_content_preserved() {
+        let src = "\\begin{code}[lang=python]\n    def f():\n        pass\n\\end{code}";
+        let out = format(src);
+        assert_eq!(
+            out,
+            "\\begin{code}[lang=python]\n    def f():\n        pass\n\\end{code}\n"
+        );
     }
 
     #[test]

@@ -13,6 +13,8 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 
+use crate::texutil;
+
 pub mod style;
 use style::DiagramStyle;
 
@@ -183,9 +185,7 @@ fn resolve_style(
 
 /// Find the end tag position and validate it exists.
 fn find_end_tag(after_opts: &str, end_tag: &str, env: &str) -> Result<usize> {
-    after_opts
-        .find(end_tag)
-        .with_context(|| format!("\\begin{{{}}} without matching \\end{{{}}}", env, env))
+    texutil::find_end_tag(after_opts, end_tag, env)
 }
 
 /// Validate the pos option is one of the allowed values.
@@ -311,81 +311,12 @@ const KNOWN_OPTION_KEYS: &[&str] = &[
 
 /// Parse `[key=val, key2=val2]` into a map. Returns `(map, rest_of_str)`.
 ///
-/// A value may be wrapped in `{...}` — the LaTeX convention for "this may
-/// contain a comma" — in which case the comma inside no longer separates
-/// options; the outer braces are stripped from the stored value but nested
-/// braces are preserved. Brace depth is tracked in a single pass over the
-/// string, so an option is only split on a comma seen at depth zero.
-///
-/// An unrecognised key emits a warning (naming `env`) and is dropped rather
-/// than aborting the build; an unterminated `{` is a hard error, since there
-/// is no reasonable place to guess the value ended.
+/// Thin wrapper over [`crate::texutil::parse_opts`], which diagrams share with
+/// the code-listing pass (`crate::highlight`). The message label keeps the
+/// historical `"mermaid diagram: …"` wording; see [`crate::texutil::parse_opts`]
+/// for the brace-handling rules.
 pub(crate) fn parse_opts<'a>(s: &'a str, env: &str) -> Result<(HashMap<String, String>, &'a str)> {
-    let s = s.trim_start_matches('\n').trim_start_matches('\r');
-    if !s.starts_with('[') {
-        return Ok((HashMap::new(), s));
-    }
-    let after = &s[1..];
-
-    let mut depth = 0i32;
-    let mut part_start = 0usize;
-    let mut parts: Vec<&str> = Vec::new();
-    let mut end_idx = None;
-    for (i, c) in after.char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => depth -= 1,
-            ',' if depth == 0 => {
-                parts.push(&after[part_start..i]);
-                part_start = i + 1;
-            }
-            ']' if depth == 0 => {
-                parts.push(&after[part_start..i]);
-                end_idx = Some(i);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    let Some(end_idx) = end_idx else {
-        if depth > 0 {
-            let unterminated = &after[part_start..];
-            let option = unterminated
-                .split_once('=')
-                .map_or(unterminated, |(k, _)| k)
-                .trim();
-            anyhow::bail!(
-                "{env} diagram: unterminated '{{' in option '{option}' — every {{ needs a matching }}"
-            );
-        }
-        return Ok((HashMap::new(), s));
-    };
-    let rest = &after[end_idx + 1..];
-
-    let mut map = HashMap::new();
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let Some((k, v)) = part.split_once('=') else {
-            eprintln!("warning: {env} diagram: unknown option '{part}' ignored");
-            continue;
-        };
-        let k = k.trim();
-        let v = v.trim();
-        if !KNOWN_OPTION_KEYS.contains(&k) {
-            eprintln!("warning: {env} diagram: unknown option '{k}' ignored");
-            continue;
-        }
-        let value = v
-            .strip_prefix('{')
-            .and_then(|v| v.strip_suffix('}'))
-            .unwrap_or(v);
-        map.insert(k.to_string(), value.to_string());
-    }
-    Ok((map, rest))
+    texutil::parse_opts(s, &format!("{env} diagram"), KNOWN_OPTION_KEYS)
 }
 
 /// Collect .tex files reachable from entry via \input.

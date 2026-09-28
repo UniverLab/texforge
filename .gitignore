@@ -35,6 +35,10 @@ target/
 # AI agent workspaces
 .mimocode/
 
+# Maintainer-only syntax-dump tool (scripts/regen-syntaxes) — upstream clone
+scripts/regen-syntaxes/vendor/
+/vendor/
+
 # End of https://www.toptal.com/developers/gitignore/api/rust
 
 .mimocode/

@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local paths touched.
 - Network or API failures are reported loudly (non-zero exit) for the
   explicit command, and stay silent on the passive `texforge init` notice.
+- Syntax-highlighted code listings: the `code` environment (`[highlight]`
+  config with `theme`, `lstlisting`, `numbers`), rendered by a pure-Rust
+  syntect pass into plain LaTeX needing only `color.sty` — no
+  `listings`/`minted` setup, no shell-escape. `texforge check` now warns on
+  `\usepackage{minted}` and suggests `code` instead.
 
 ### Changed
 

@@ -1,7 +1,7 @@
 ---
 title: CLI Reference
 description: Every texforge command and flag.
-order: 9
+order: 10
 ---
 
 # CLI Reference

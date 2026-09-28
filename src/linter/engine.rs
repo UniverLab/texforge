@@ -10,6 +10,7 @@
 //! |---|---|---|
 //! | `inputenc` loaded | `\usepackage[utf8]{inputenc}` | [`Severity::Warning`] — ignored |
 //! | `epstopdf` loaded | `\usepackage{epstopdf}` | [`Severity::Warning`] — no EPS conversion |
+//! | `minted` loaded | `\usepackage{minted}` | [`Severity::Warning`] — needs `-shell-escape`, which texforge never enables; suggests the `code` environment |
 //! | `\DisableLigatures` with microtype | `\usepackage{microtype}` + `\DisableLigatures` | [`Severity::Error`] — build fails |
 //! | `\setmainfont{Latin Modern Roman}` with fontspec | `\usepackage{fontspec}` + `\setmainfont{Latin Modern Roman}` | [`Severity::Error`] — build fails |
 //!
@@ -65,6 +66,14 @@ pub const ENGINE_RULES: &[EngineRule] = &[
                   supports only the pdfTeX and LuaTeX drivers, so included .eps graphics are not \
                   converted to a renderable format",
         suggestion: "Convert the .eps files to PDF or PNG and \\includegraphics those instead",
+    },
+    EngineRule {
+        severity: Severity::Warning,
+        triggers: &[TriggerKind::Package("minted")],
+        message: "\\usepackage{minted} cannot work under Tectonic: minted shells out to Pygments \
+                  (via `-shell-escape`), which texforge never enables",
+        suggestion: "Use the texforge 'code' environment instead — native syntax highlighting \
+                     with no external process (see docs/listings.md)",
     },
     EngineRule {
         severity: Severity::Error,
@@ -203,6 +212,44 @@ mod tests {
         );
         assert!(has_severity_with(&findings, ".eps", Severity::Warning));
         assert!(has_severity_with(&findings, "XeTeX", Severity::Warning));
+    }
+
+    #[test]
+    fn minted_package_warns_with_code_env_suggestion() {
+        let findings = lint(
+            r"\documentclass{article}
+\usepackage{minted}
+\begin{document}
+\end{document}",
+        );
+        assert!(
+            has_severity_with(&findings, "minted", Severity::Warning),
+            "findings: {findings:?}"
+        );
+        let finding = findings
+            .iter()
+            .find(|f| f.message.contains("minted"))
+            .expect("a minted finding");
+        assert_eq!(finding.severity, Severity::Warning);
+        let suggestion = finding.suggestion.as_deref().unwrap_or_default();
+        assert!(suggestion.contains("code"), "suggestion: {suggestion}");
+        assert!(
+            suggestion.contains("docs/listings.md"),
+            "suggestion: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn minted_without_usepackage_is_clean() {
+        // A minted *environment* or a commented load must not fire the rule:
+        // only the package load is a trigger.
+        let findings = lint(
+            r"\documentclass{article}
+% \usepackage{minted}
+\begin{document}
+\end{document}",
+        );
+        assert!(!has_severity_with(&findings, "minted", Severity::Warning));
     }
 
     #[test]

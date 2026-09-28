@@ -1,7 +1,7 @@
 ---
 title: Configuration
 description: Global user configuration and the project.toml manifest.
-order: 7
+order: 8
 ---
 
 # Configuration
@@ -57,6 +57,11 @@ entry = "main.tex"
 
 # [diagrams]
 # style = "editorial"               # optional: document-wide diagram style default
+
+# [highlight]
+# theme = "github"                  # optional: syntax palette ("github", "one-light")
+# lstlisting = true                 # optional: also rewrite lstlisting blocks
+# numbers = true                    # optional: number every code block
 ```
 
 | Key | Description |
@@ -68,3 +73,6 @@ entry = "main.tex"
 | `build.bibliography` | Optional `.bib` file used by the linter |
 | `build.reproducible` | Optional: pin `SOURCE_DATE_EPOCH` so identical source plus the same Tectonic version yields an identical PDF. `true` uses a fixed default epoch; a number pins an explicit epoch (`reproducible = 1700000000`); `false` or absent keeps the default behaviour. Overridden by `texforge build --reproducible` when that flag is present. |
 | `diagrams.style` | Optional: document-wide default diagram style preset (`default`, `editorial`, `monochrome`, `technical`; see [Diagrams](diagrams.md)). A `style=` on the diagram environment itself overrides this. |
+| `highlight.theme` | Optional: code-listing palette (`github`, `one-light`; see [Code listings](listings.md)). |
+| `highlight.lstlisting` | Optional: also rewrite `\begin{lstlisting}` blocks with native highlighting (default `false` — without it, `listings` users keep real `listings.sty` behaviour). |
+| `highlight.numbers` | Optional: number every line of every code block unless the block sets `numbers=` itself. |

@@ -1,0 +1,46 @@
+\documentclass{article}
+% ---- texforge code listings (injected; do not edit, rebuild to refresh) ----
+\makeatletter
+\@ifpackageloaded{color}{}{\@ifpackageloaded{xcolor}{}{\usepackage{color}}}%
+\makeatother
+\newcommand{\tfxcodestyle}{\ttfamily\small\setlength{\parindent}{0pt}\setlength{\parskip}{0pt}}
+\definecolor{tfxcol005cc5}{rgb}{0.000,0.361,0.773}
+\definecolor{tfxcol032f62}{rgb}{0.012,0.184,0.384}
+\definecolor{tfxcol6a737d}{rgb}{0.416,0.451,0.490}
+\definecolor{tfxcold73a49}{rgb}{0.843,0.227,0.286}
+\definecolor{tfxgutter}{rgb}{0.431,0.467,0.506}
+% ---- end texforge code listings ----
+\begin{document}
+\section{Demo}
+{
+\tfxcodestyle
+
+\noindent \textcolor{tfxgutter}{\hbox to 2em{1\hss}}\hspace{0.8em}\textcolor{tfxcold73a49}{def}~\textcolor{tfxcol005cc5}{fib}(n):
+
+\noindent \textcolor{tfxgutter}{\hbox to 2em{2\hss}}\hspace{0.8em}~~~~~~~~s~\textcolor{tfxcold73a49}{=}~\textcolor{tfxcol032f62}{"hi"}
+
+\noindent \textcolor{tfxgutter}{\hbox to 2em{3\hss}}\hspace{0.8em}~~~~\textcolor{tfxcold73a49}{if}~n~\textcolor{tfxcold73a49}{\(<\)}~\textcolor{tfxcol005cc5}{2}:
+
+\noindent \textcolor{tfxgutter}{\hbox to 2em{4\hss}}\hspace{0.8em}~~~~~~~~\textcolor{tfxcold73a49}{return}~n~~\textcolor{tfxcol6a737d}{\#~base}
+
+\noindent \textcolor{tfxgutter}{\hbox to 2em{5\hss}}\hspace{0.8em}~~~~\$\_\textcolor{tfxcold73a49}{\%\&}\textcolor{tfxcol6a737d}{\#\{\}\textasciicircum{}\textasciitilde{}\textbackslash{}|\(<\)\(>\)}
+
+\noindent\mbox{}
+
+\noindent \textcolor{tfxgutter}{\hbox to 2em{7\hss}}\hspace{0.8em}~~~~\textcolor{tfxcold73a49}{return}~fib(n~\textcolor{tfxcold73a49}{-}~\textcolor{tfxcol005cc5}{1})~\textcolor{tfxcold73a49}{+}~fib(n~\textcolor{tfxcold73a49}{-}~\textcolor{tfxcol005cc5}{2})
+\par
+}
+
+{
+\tfxcodestyle
+
+\noindent \#~Notes
+
+\noindent\mbox{}
+
+\noindent Some~*markdown*~here.
+\par
+}
+
+Prose after the blocks.
+\end{document}

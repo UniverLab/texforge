@@ -216,6 +216,7 @@ entry = "main.tex"
                     reproducible: None,
                 },
                 diagrams: None,
+                highlight: None,
             },
         };
         (dir, project)
@@ -388,6 +389,7 @@ entry = "main.tex"
                     reproducible: None,
                 },
                 diagrams: None,
+                highlight: None,
             },
         };
         let err = execute_for_project(&project, PdfAction::Info).unwrap_err();
