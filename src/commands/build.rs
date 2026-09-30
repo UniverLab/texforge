@@ -102,12 +102,12 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     )?;
     // After diagrams: the code pass rewrites what diagrams just copied, and
     // its warning line numbers are build-copy coordinates (like Tectonic's).
-    highlight::process(build_dir, &project.config.build.entry, highlight_cfg)?;
+    let line_map = highlight::process(build_dir, &project.config.build.entry, highlight_cfg)?;
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    compiler::compile(build_dir, &entry_filename, verbose, epoch)?;
+    compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map)?;
 
     let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
     let pdf_dest = project.root.join(&pdf_name);
@@ -264,15 +264,16 @@ fn run_build(
     ) {
         return WatchResult::Err(e.to_string());
     }
-    if let Err(e) = highlight::process(build_dir, &project.config.build.entry, highlight_cfg) {
-        return WatchResult::Err(e.to_string());
-    }
+    let line_map = match highlight::process(build_dir, &project.config.build.entry, highlight_cfg) {
+        Ok(map) => map,
+        Err(e) => return WatchResult::Err(e.to_string()),
+    };
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    match compiler::compile(build_dir, &entry_filename, verbose, epoch) {
-        Ok(()) => {
+    match compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map) {
+        Ok(_) => {
             let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
             let pdf_dest = project.root.join(&pdf_name);
             let pdf_src = build_dir.join(
@@ -572,9 +573,23 @@ mod tests {
             return;
         }
         let dir = fixture();
-        compiler::compile(dir.path(), "main.tex", false, Some(compiler::DEFAULT_EPOCH)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(compiler::DEFAULT_EPOCH),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let first = std::fs::read(dir.path().join("main.pdf")).unwrap();
-        compiler::compile(dir.path(), "main.tex", false, Some(compiler::DEFAULT_EPOCH)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(compiler::DEFAULT_EPOCH),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let second = std::fs::read(dir.path().join("main.pdf")).unwrap();
         assert_eq!(first, second);
     }
@@ -586,9 +601,23 @@ mod tests {
             return;
         }
         let dir = fixture();
-        compiler::compile(dir.path(), "main.tex", false, Some(1700000000)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(1700000000),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let first = std::fs::read(dir.path().join("main.pdf")).unwrap();
-        compiler::compile(dir.path(), "main.tex", false, Some(1700000000)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(1700000000),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let second = std::fs::read(dir.path().join("main.pdf")).unwrap();
         assert_eq!(first, second);
     }
@@ -600,7 +629,14 @@ mod tests {
             return;
         }
         let dir = fixture();
-        compiler::compile(dir.path(), "main.tex", false, None).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         assert!(dir.path().join("main.pdf").exists());
     }
 

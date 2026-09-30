@@ -14,14 +14,11 @@ use anyhow::{Context, Result};
 use crate::texparse;
 use crate::texutil;
 
-use super::engine::Rgb;
+use super::engine::{HighlightTheme, Rgb};
 
 pub(crate) const BEGIN_MARKER: &str =
     "% ---- texforge code listings (injected; do not edit, rebuild to refresh) ----";
 pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
-
-/// The gutter colour, always under the fixed name `tfxgutter`.
-const GUTTER: Rgb = Rgb::new(0x6e, 0x77, 0x81);
 
 /// Build the injected preamble block.
 ///
@@ -31,11 +28,13 @@ const GUTTER: Rgb = Rgb::new(0x6e, 0x77, 0x81);
 /// * `color_pkg_visible_load` — the author already loads `color`/`xcolor`
 ///   themselves; the `\usepackage{color}` inside the guard is then dropped
 ///   (the guard itself stays, as defense in depth for classes such as beamer
-///   that load `xcolor` behind the scan's back).
+///   that load `xcolor` behind the scan's back);
+/// * `theme` — the active highlight theme (frame tint/border + gutter).
 pub(crate) fn injected_block(
     colors: &BTreeSet<Rgb>,
     has_gutter: bool,
     color_pkg_visible_load: bool,
+    theme: HighlightTheme,
 ) -> String {
     let load_color = if color_pkg_visible_load {
         ""
@@ -59,6 +58,18 @@ pub(crate) fn injected_block(
         r"\newcommand{\tfxcodestyle}{\ttfamily\small\setlength{\parindent}{0pt}\setlength{\parskip}{0pt}}",
     );
     out.push('\n');
+    // Zero-metric overlay helper: the frame rules carry ink but report no
+    // size, so page breaking and line widths stay exactly as without it.
+    out.push_str(r"\newcommand{\tfxsmash}[1]{\setbox0=\hbox{#1}\ht0=0pt\dp0=0pt\box0}");
+    out.push('\n');
+    out.push_str(&format!(
+        "\\definecolor{{tfxtint}}{{rgb}}{{{}}}\n",
+        theme.tint().to_rgb_list()
+    ));
+    out.push_str(&format!(
+        "\\definecolor{{tfxframe}}{{rgb}}{{{}}}\n",
+        theme.frame().to_rgb_list()
+    ));
     for color in colors {
         out.push_str(&format!(
             "\\definecolor{{{}}}{{rgb}}{{{}}}\n",
@@ -69,7 +80,7 @@ pub(crate) fn injected_block(
     if has_gutter {
         out.push_str(&format!(
             "\\definecolor{{tfxgutter}}{{rgb}}{{{}}}\n",
-            GUTTER.to_rgb_list()
+            theme.comment().to_rgb_list()
         ));
     }
     out.push_str(END_MARKER);
@@ -154,8 +165,9 @@ fn package_list_loads_color(list: &str) -> bool {
 
 /// Insert the injected block into the entry file, right before
 /// `\begin{document}`. Fails with a clear message (never a panic) when the
-/// anchor is missing — such a document does not compile anyway.
-pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<()> {
+/// anchor is missing — such a document does not compile anyway. Returns the
+/// 1-based line the anchor sits on, so the caller can shift its line map.
+pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<usize> {
     let content =
         std::fs::read_to_string(entry).with_context(|| format!("entry '{}'", entry.display()))?;
     let anchor = "\\begin{document}";
@@ -165,12 +177,13 @@ pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<()> {
             entry.display()
         );
     };
+    let anchor_line = 1 + content[..pos].matches('\n').count();
     let mut out = String::with_capacity(content.len() + block.len());
     out.push_str(&content[..pos]);
     out.push_str(block);
     out.push_str(&content[pos..]);
     std::fs::write(entry, out).with_context(|| format!("entry '{}'", entry.display()))?;
-    Ok(())
+    Ok(anchor_line)
 }
 
 /// Refuse to rewrite a document that already owns the `code` environment or
@@ -274,7 +287,7 @@ mod tests {
         let mut used = BTreeSet::new();
         used.insert(Rgb::new(0x03, 0x2f, 0x62));
         used.insert(Rgb::new(0x00, 0x00, 0x00));
-        let block = injected_block(&used, false, false);
+        let block = injected_block(&used, false, false, HighlightTheme::Github);
         let first = block.find("\\definecolor{tfxcol000000}").unwrap();
         let second = block.find("\\definecolor{tfxcol032f62}").unwrap();
         assert!(first < second, "colors must be sorted by name:\n{block}");
@@ -287,13 +300,26 @@ mod tests {
 
     #[test]
     fn gutter_color_only_when_numbered() {
-        let block = injected_block(&BTreeSet::new(), true, false);
-        assert!(block.contains("\\definecolor{tfxgutter}{rgb}{0.431,0.467,0.506}"));
+        let block = injected_block(&BTreeSet::new(), true, false, HighlightTheme::Github);
+        assert!(block.contains("\\definecolor{tfxgutter}{rgb}{0.416,0.451,0.490}"));
+        let one_light = injected_block(&BTreeSet::new(), true, false, HighlightTheme::OneLight);
+        assert!(one_light.contains("\\definecolor{tfxgutter}{rgb}{0.627,0.631,0.655}"));
+    }
+
+    #[test]
+    fn frame_colors_come_from_the_theme() {
+        let block = injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github);
+        assert!(block.contains("\\definecolor{tfxtint}{rgb}{0.965,0.973,0.980}"));
+        assert!(block.contains("\\definecolor{tfxframe}{rgb}{0.765,0.780,0.796}"));
+        assert!(block.contains("\\newcommand{\\tfxsmash}"));
+        let one_light = injected_block(&BTreeSet::new(), false, false, HighlightTheme::OneLight);
+        assert!(one_light.contains("\\definecolor{tfxtint}{rgb}{0.980,0.980,0.980}"));
+        assert!(one_light.contains("\\definecolor{tfxframe}{rgb}{0.851,0.851,0.863}"));
     }
 
     #[test]
     fn visible_color_load_drops_the_usepackage_but_keeps_the_guard() {
-        let block = injected_block(&BTreeSet::new(), false, true);
+        let block = injected_block(&BTreeSet::new(), false, true, HighlightTheme::Github);
         assert!(!block.contains("\\usepackage{color}"), "{block}");
         assert!(block.contains(r"\@ifpackageloaded{color}"), "{block}");
         assert!(block.contains(r"\@ifpackageloaded{xcolor}"), "{block}");

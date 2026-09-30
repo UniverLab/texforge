@@ -1,11 +1,12 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
 
+use crate::highlight::LineMap;
 use crate::linter::Severity;
 
 /// Fixed `SOURCE_DATE_EPOCH` value used when reproducible mode is enabled
@@ -22,8 +23,16 @@ pub const DEFAULT_EPOCH: u64 = 1700000000;
 ///
 /// On a successful build, warnings emitted by the engine are parsed and
 /// printed to the console — summarized per file, or every occurrence with
-/// `verbose` — without changing the success exit code.
-pub fn compile(root: &Path, entry: &str, verbose: bool, epoch: Option<u64>) -> Result<()> {
+/// `verbose` — without changing the success exit code. The returned warnings
+/// are attributed through `line_map`, so warnings inside rewritten listing
+/// blocks point at the author's source file and line, not the build copy.
+pub fn compile(
+    root: &Path,
+    entry: &str,
+    verbose: bool,
+    epoch: Option<u64>,
+    line_map: &LineMap,
+) -> Result<Vec<CompileWarning>> {
     let tectonic = find_tectonic()?;
 
     let output = tectonic_command(&tectonic, root, entry, epoch)
@@ -34,11 +43,19 @@ pub fn compile(root: &Path, entry: &str, verbose: bool, epoch: Option<u64>) -> R
     let stdout = String::from_utf8_lossy(&output.stdout);
     let raw = format!("{}{}", stdout, stderr);
 
-    let warnings = parse_warnings(&raw);
+    let mut warnings = parse_warnings(&raw);
+    if !line_map.is_empty() {
+        for warning in &mut warnings {
+            if let Some((file, line)) = line_map.get(&warning.file, warning.line) {
+                warning.file = file.to_string();
+                warning.line = line;
+            }
+        }
+    }
 
     if output.status.success() {
         print_warnings(&warnings, verbose);
-        return Ok(());
+        return Ok(warnings);
     }
 
     let errors = parse_errors(&raw);
@@ -136,7 +153,7 @@ fn parse_tectonic_error(rest: &str, errors: &mut Vec<CompileError>) {
 
 /// A single TeX/Tectonic warning parsed from compiler output.
 #[derive(Debug, PartialEq, Eq)]
-struct CompileWarning {
+pub(crate) struct CompileWarning {
     file: String,
     line: usize,
     severity: Severity,
@@ -192,12 +209,26 @@ fn is_source_path(path: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
+/// Split a Tectonic `warning: <file>:<line>: <message>` re-emit, mirroring
+/// [`parse_tectonic_error`]. Returns `None` when the shape does not yield a
+/// file and a line (e.g. `warning: warnings were issued by the TeX
+/// engine…`) — callers then fall through to the raw-log file-stack logic.
+fn parse_tectonic_warning_prefix(rest: &str) -> Option<(String, usize, String)> {
+    let (loc, message) = rest.split_once(": ")?;
+    let (file, line_str) = loc.rsplit_once(':')?;
+    let line = line_str.parse::<usize>().ok()?;
+    Some((file.trim().to_string(), line, message.trim().to_string()))
+}
+
 /// Parse TeX/Tectonic stdout/stderr into structured warnings.
 ///
 /// Attribution: the engine prints file opens as `(path` and closes as `)`;
 /// warnings seen while a file is open are credited to that file. Line numbers
 /// come from `at lines N--M` / `on input line N` markers when the engine
-/// reports them.
+/// reports them. Tectonic additionally re-emits warnings as
+/// `warning: <file>:<line>: <message>` (the file may lack its `.tex`
+/// extension for `\input` targets, and the line is the paragraph's end
+/// line) — those carry their own attribution and are parsed first.
 fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
     let mut warnings = Vec::new();
     let mut file_stack: Vec<String> = Vec::new();
@@ -212,6 +243,20 @@ fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
             if is_source_path(path) {
                 file_stack.push(path.to_string());
                 continue;
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("warning: ") {
+            if let Some((file, line, message)) = parse_tectonic_warning_prefix(rest) {
+                if let Some(kind) = warning_kind(&message) {
+                    warnings.push(CompileWarning {
+                        file,
+                        line,
+                        severity: Severity::Warning,
+                        kind,
+                        message,
+                    });
+                    continue;
+                }
             }
         }
         let Some(kind) = warning_kind(trimmed) else {
@@ -249,19 +294,34 @@ fn format_warnings(warnings: &[CompileWarning], verbose: bool) -> String {
             ));
         }
     } else {
-        let mut by_file: BTreeMap<&str, BTreeMap<&str, usize>> = BTreeMap::new();
+        let mut by_file: BTreeMap<&str, BTreeMap<&str, (usize, BTreeSet<usize>)>> = BTreeMap::new();
         for w in warnings {
             let file = if w.file.is_empty() {
                 "(unknown)"
             } else {
                 w.file.as_str()
             };
-            *by_file.entry(file).or_default().entry(w.kind).or_default() += 1;
+            let entry = by_file.entry(file).or_default().entry(w.kind).or_default();
+            entry.0 += 1;
+            if w.line > 0 {
+                entry.1.insert(w.line);
+            }
         }
         for (file, kinds) in by_file {
             let counts: Vec<String> = kinds
                 .into_iter()
-                .map(|(kind, n)| format!("{n} {kind}"))
+                .map(|(kind, (count, lines))| {
+                    if lines.is_empty() {
+                        format!("{count} {kind}")
+                    } else {
+                        let list = lines
+                            .iter()
+                            .map(|line| line.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{count} {kind} (lines {list})")
+                    }
+                })
                 .collect();
             out.push_str(&format!("  {file}: {}\n", counts.join(", ")));
         }
@@ -797,5 +857,112 @@ mod tests {
     fn format_warnings_empty_is_empty() {
         assert!(format_warnings(&[], false).is_empty());
         assert!(format_warnings(&[], true).is_empty());
+    }
+
+    #[test]
+    fn parse_warnings_tectonic_prefixed_overfull() {
+        let raw =
+            "warning: main.tex:8: Overfull \\hbox (12.0pt too wide) in paragraph at lines 7--8";
+        let warnings = parse_warnings(raw);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].file, "main.tex");
+        assert_eq!(warnings[0].line, 8);
+        assert_eq!(warnings[0].kind, "overfull hbox");
+        assert!(warnings[0].message.contains("Overfull"));
+    }
+
+    #[test]
+    fn parse_warnings_tectonic_prefix_without_location_falls_through() {
+        // Tectonic's own summary line carries no file:line — it must not
+        // become a phantom warning.
+        let raw = "warning: warnings were issued by the TeX engine.";
+        assert!(parse_warnings(raw).is_empty());
+    }
+
+    #[test]
+    fn line_map_remaps_build_lines_and_extensionless_files() {
+        let mut map = LineMap::default();
+        map.file_mut("body.tex").extend([1, 1, 4]);
+        // Tectonic prints `\input` targets without the extension.
+        assert_eq!(map.get("body", 3), Some(("body.tex", 4)));
+        assert_eq!(map.get("./body.tex", 1), Some(("body.tex", 1)));
+        assert_eq!(map.get("main.tex", 1), None);
+    }
+
+    #[test]
+    fn summary_reports_source_lines_and_verbose_prints_main_tex_line() {
+        let warnings = vec![
+            CompileWarning {
+                file: "main.tex".into(),
+                line: 12,
+                severity: Severity::Warning,
+                kind: "overfull hbox",
+                message: "Overfull \\hbox (12.0pt too wide)".into(),
+            },
+            CompileWarning {
+                file: "main.tex".into(),
+                line: 12,
+                severity: Severity::Warning,
+                kind: "overfull hbox",
+                message: "Overfull \\hbox (12.0pt too wide)".into(),
+            },
+            CompileWarning {
+                file: "main.tex".into(),
+                line: 19,
+                severity: Severity::Warning,
+                kind: "overfull hbox",
+                message: "Overfull \\hbox (9.0pt too wide)".into(),
+            },
+        ];
+        let out = format_warnings(&warnings, false);
+        assert!(
+            out.contains("main.tex: 3 overfull hbox (lines 12, 19)"),
+            "{out}"
+        );
+        let verbose = format_warnings(&warnings, true);
+        assert!(verbose.contains("[main.tex:12]"), "{verbose}");
+        assert!(verbose.contains("[main.tex:19]"), "{verbose}");
+    }
+
+    /// An overfull line inside a rewritten block is reported as
+    /// `main.tex:<source line>`, not as the build copy's shifted line.
+    /// Skips (never fails) without Tectonic.
+    #[test]
+    fn overfull_inside_a_block_is_reported_as_main_tex_line() {
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let long = "x".repeat(150);
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\
+             \\begin{{code}}\nshort\n{long}\n\\end{{code}}\n\\end{{document}}\n"
+        );
+        std::fs::write(dir.path().join("main.tex"), &main).unwrap();
+        // Source line 5 holds the long code line.
+        let map = crate::highlight::process(
+            dir.path(),
+            "main.tex",
+            crate::highlight::Settings::default(),
+        )
+        .unwrap();
+        let warnings = compile(dir.path(), "main.tex", false, None, &map).unwrap();
+        let overfull: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.kind == "overfull hbox")
+            .collect();
+        assert!(
+            !overfull.is_empty(),
+            "expected a TeX overfull, got {warnings:?}"
+        );
+        assert!(
+            overfull.iter().all(|w| w.file == "main.tex"),
+            "{overfull:?}"
+        );
+        assert!(
+            overfull.iter().any(|w| w.line == 5),
+            "the long line is source line 5: {overfull:?}"
+        );
     }
 }

@@ -60,6 +60,15 @@ impl Rgb {
             f64::from(self.b) / 255.0
         )
     }
+
+    /// Mix the colour over white: `(c*a + 255*(100-a) + 50)/100` per
+    /// channel, integer-rounded. Used for the frame hairline (comment
+    /// at 40%).
+    pub fn over_white(self, alpha_pct: u8) -> Self {
+        let a = u16::from(alpha_pct);
+        let mix = |c: u8| ((u16::from(c) * a + 255 * (100 - a) + 50) / 100) as u8;
+        Self::new(mix(self.r), mix(self.g), mix(self.b))
+    }
 }
 
 impl From<Color> for Rgb {
@@ -126,6 +135,21 @@ impl HighlightTheme {
             Self::OneLight => 1,
         }
     }
+
+    /// The block background tint for this theme.
+    pub fn tint(self) -> Rgb {
+        self.spec().tint
+    }
+
+    /// The theme's comment colour (also the gutter colour).
+    pub fn comment(self) -> Rgb {
+        self.spec().comment
+    }
+
+    /// The frame hairline: comment at 40% over white.
+    pub fn frame(self) -> Rgb {
+        self.comment().over_white(40)
+    }
 }
 
 /// A theme as data: the base foreground every unscoped token inherits, and a
@@ -134,6 +158,10 @@ impl HighlightTheme {
 struct ThemeSpec {
     name: &'static str,
     base: Rgb,
+    /// Block background tint (FR1).
+    tint: Rgb,
+    /// The theme's comment colour (gutter + frame base).
+    comment: Rgb,
     /// `(scope selector, colour)`; deeper selectors win inside syntect's own
     /// scoring, so list order is not load-bearing.
     rules: &'static [(&'static str, Rgb)],
@@ -143,6 +171,8 @@ struct ThemeSpec {
 const GITHUB: ThemeSpec = ThemeSpec {
     name: "github",
     base: Rgb::new(0x24, 0x29, 0x2e),
+    tint: Rgb::new(0xf6, 0xf8, 0xfa),
+    comment: Rgb::new(0x6a, 0x73, 0x7d),
     rules: &[
         ("comment", Rgb::new(0x6a, 0x73, 0x7d)),
         ("string", Rgb::new(0x03, 0x2f, 0x62)),
@@ -173,6 +203,8 @@ const GITHUB: ThemeSpec = ThemeSpec {
 const ONE_LIGHT: ThemeSpec = ThemeSpec {
     name: "one-light",
     base: Rgb::new(0x38, 0x3a, 0x42),
+    tint: Rgb::new(0xfa, 0xfa, 0xfa),
+    comment: Rgb::new(0xa0, 0xa1, 0xa7),
     rules: &[
         ("comment", Rgb::new(0xa0, 0xa1, 0xa7)),
         ("string", Rgb::new(0x50, 0xa1, 0x4f)),
@@ -657,5 +689,54 @@ mod tests {
             .unwrap();
         assert_eq!(lines.len(), 3);
         assert!(lines[1].iter().all(|s| s.text == "\n" || s.text.is_empty()));
+    }
+
+    #[test]
+    fn over_white_mixes_toward_white() {
+        assert_eq!(
+            Rgb::new(0x6a, 0x73, 0x7d).over_white(40),
+            Rgb::new(195, 199, 203)
+        );
+        assert_eq!(
+            Rgb::new(0xa0, 0xa1, 0xa7).over_white(40),
+            Rgb::new(217, 217, 220)
+        );
+        assert_eq!(
+            Rgb::new(0x12, 0x34, 0x56).over_white(100),
+            Rgb::new(0x12, 0x34, 0x56)
+        );
+        assert_eq!(
+            Rgb::new(0x12, 0x34, 0x56).over_white(0),
+            Rgb::new(255, 255, 255)
+        );
+    }
+
+    #[test]
+    fn theme_tint_comment_and_frame_values() {
+        assert_eq!(HighlightTheme::Github.tint(), Rgb::new(0xf6, 0xf8, 0xfa));
+        assert_eq!(HighlightTheme::Github.comment(), Rgb::new(0x6a, 0x73, 0x7d));
+        assert_eq!(HighlightTheme::Github.frame(), Rgb::new(195, 199, 203));
+        assert_eq!(
+            HighlightTheme::Github.tint().to_rgb_list(),
+            "0.965,0.973,0.980"
+        );
+        assert_eq!(
+            HighlightTheme::Github.frame().to_rgb_list(),
+            "0.765,0.780,0.796"
+        );
+        assert_eq!(
+            HighlightTheme::Github.comment().to_rgb_list(),
+            "0.416,0.451,0.490"
+        );
+        assert_eq!(HighlightTheme::OneLight.tint(), Rgb::new(0xfa, 0xfa, 0xfa));
+        assert_eq!(
+            HighlightTheme::OneLight.comment(),
+            Rgb::new(0xa0, 0xa1, 0xa7)
+        );
+        assert_eq!(HighlightTheme::OneLight.frame(), Rgb::new(217, 217, 220));
+        assert_eq!(
+            HighlightTheme::OneLight.tint().to_rgb_list(),
+            "0.980,0.980,0.980"
+        );
     }
 }

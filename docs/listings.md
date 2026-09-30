@@ -77,9 +77,34 @@ are conveniences for the spellings authors actually type.
 ## Themes
 
 Two light palettes: `github` (default) and `one-light`, set with
-`[highlight] theme`. Both are light-only by design: no block background is
-ever painted, so a dark theme's white foreground text would disappear on
-paper. An unknown theme name fails the build and lists the valid names.
+`[highlight] theme`. Both are light-only by design: the frame tints are
+light (`github` `#f6f8fa`, `one-light` `#fafafa`), so a dark theme's white
+foreground text would disappear on paper. An unknown theme name fails the
+build and lists the valid names.
+
+## The frame
+
+Every rewritten block (`code`, or an opted-in `lstlisting`) renders inside
+a frame: a very light background tint from the theme (`github` `#f6f8fa`,
+`one-light` `#fafafa`), a 0.4pt hairline border in the theme's comment
+colour at 40% (`github` `#c3c7cb`, `one-light` `#d9d9dc`), 4pt inner
+padding left and right, 3pt top and bottom, full text width — plain LaTeX
+(`color.sty` rules only, no `tcolorbox`/`mdframed`).
+
+The frame is painted per line with zero-size overlays, so page breaking
+works exactly as without it and a block split across pages stays open at
+the break: the first fragment has no bottom border, the second no top
+border, and both keep their side borders and tint.
+
+With `numbers`, the gutter sits inside the frame: numbers right-aligned in
+the theme's comment colour, separated from the code by a 0.3pt rule in the
+border colour.
+
+Vertical rhythm is `\medskip` before and after every block. The paragraph
+right after a block is not indented — unless you left a blank line after
+`\end{code}`, in which case the normal paragraph indent applies. A block
+never starts at the very bottom of a page with fewer than two lines on it:
+the first two and the last two lines are glued together.
 
 ## Behaviour notes
 
@@ -97,9 +122,11 @@ paper. An unknown theme name fails the build and lists the valid names.
   are rewritten and before the preamble is injected. Without a diagram
   block in front of them those are exactly your source file's line
   numbers; the diagram pass (and, later, the rewrite and injection here)
-  move the finished build copy, so Tectonic's own errors — reported
-  against that finished copy — can sit on a different line than a listing
-  warning does. (An unknown *option* warns without a line: the option
+  move the finished build copy. Engine (Tectonic) warnings inside
+  rewritten blocks are remapped back through the build-copy line map, so
+  `texforge build` reports them as your source file and line (files
+  reached via `\input` may be reported with or without `.tex`; the map
+  normalises both). (An unknown *option* warns without a line: the option
   parser is shared with the diagram blocks.)
 - Only a real block counts: a `\begin{code}` behind a `%`, or quoted
   inside `verbatim`/`lstlisting`, is text — the pass ignores it and the

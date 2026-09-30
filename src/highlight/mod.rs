@@ -21,9 +21,11 @@ use crate::texutil;
 
 mod emit;
 mod engine;
+mod linemap;
 mod preamble;
 
 pub use engine::HighlightTheme;
+pub use linemap::LineMap;
 
 use emit::EmitOpts;
 use engine::Rgb;
@@ -72,18 +74,28 @@ pub struct Warning {
 }
 
 /// Run the pass and print warnings in the diagrams' `warning: …` shape.
-pub fn process(build_dir: &Path, entry: &str, cfg: Settings) -> Result<()> {
-    for warning in run(build_dir, entry, cfg)? {
+/// Returns the build-copy → source line map for the compiler's warning
+/// attribution.
+pub fn process(build_dir: &Path, entry: &str, cfg: Settings) -> Result<LineMap> {
+    let (warnings, line_map) = run_inner(build_dir, entry, cfg)?;
+    for warning in &warnings {
         eprintln!(
             "warning: {}:{}: {}",
             warning.file, warning.line, warning.message
         );
     }
-    Ok(())
+    Ok(line_map)
 }
 
 /// Run the pass, returning warnings instead of printing them.
+/// Test-only helper: production builds go through [`process`] (which also
+/// returns the line map); unit tests use this to assert warnings alone.
+#[cfg(test)]
 pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>> {
+    Ok(run_inner(build_dir, entry, cfg)?.0)
+}
+
+fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warning>, LineMap)> {
     let paths = texutil::collect_tex_files(build_dir, entry).files;
 
     // Read everything first: the collision check must see every original —
@@ -113,7 +125,7 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
     // Fast gate. No real block → nothing is rewritten, nothing is injected,
     // not one byte is written (T2: inertness is about writes, not output).
     if discovered.iter().all(Vec::is_empty) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), LineMap::default()));
     }
 
     preamble::check_collisions(&sources)?;
@@ -122,32 +134,36 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
     let mut has_gutter = false;
     let mut warnings = Vec::new();
     let mut rewritten_any = false;
+    let mut line_map = LineMap::default();
 
     for (index, (rel, content)) in sources.iter_mut().enumerate() {
         let blocks = &discovered[index];
         if blocks.is_empty() {
             continue;
         }
-        let rewritten = rewrite_file(
-            rel,
-            content,
-            blocks,
-            cfg,
-            &mut colors,
-            &mut has_gutter,
-            &mut warnings,
-        )?;
-        std::fs::write(build_dir.join(rel), &rewritten)?;
+        let mut origins = Vec::new();
+        let mut state = RewriteState {
+            colors: &mut colors,
+            has_gutter: &mut has_gutter,
+            warnings: &mut warnings,
+            origins: &mut origins,
+        };
+        let rewritten = rewrite_file(rel, content, blocks, cfg, &mut state)?;
+        std::fs::write(build_dir.join(rel.as_str()), &rewritten)?;
+        if !origins.is_empty() {
+            *line_map.file_mut(rel) = origins;
+        }
         *content = rewritten;
         rewritten_any = true;
     }
 
     if rewritten_any {
         let color_loaded = preamble::color_pkg_visible_load(&sources);
-        let block = preamble::injected_block(&colors, has_gutter, color_loaded);
-        preamble::inject_entry(&build_dir.join(entry), &block)?;
+        let block = preamble::injected_block(&colors, has_gutter, color_loaded, cfg.theme);
+        let anchor = preamble::inject_entry(&build_dir.join(entry), &block)?;
+        line_map.shift_for_injection(entry, anchor, block.lines().count());
     }
-    Ok(warnings)
+    Ok((warnings, line_map))
 }
 
 /// One block this pass owns: the byte offset of its `\begin{…}` tag and the
@@ -213,16 +229,39 @@ fn in_comment(content: &str, offset: usize) -> bool {
 /// pass owns; the loop itself needs no comment or nesting rules — everything
 /// between two blocks (prose, comments, foreign verbatim bodies) is copied
 /// through byte for byte.
+///
+/// Besides the rewritten text, `state.origins` receives one pass-input line
+/// per output line, so the build can map finished-copy lines back to the
+/// source (copied regions map 1:1; block lines map through the emission).
+struct RewriteState<'a> {
+    colors: &'a mut BTreeSet<Rgb>,
+    has_gutter: &'a mut bool,
+    warnings: &'a mut Vec<Warning>,
+    origins: &'a mut Vec<usize>,
+}
+
+/// Push copied source text, recording one origin per output line. `src_line`
+/// is the source line `text` starts on and advances past its newlines.
+fn push_text(result: &mut String, origins: &mut Vec<usize>, text: &str, src_line: &mut usize) {
+    result.push_str(text);
+    for ch in text.chars() {
+        if ch == '\n' {
+            *src_line += 1;
+            origins.push(*src_line);
+        }
+    }
+}
+
 fn rewrite_file(
     rel: &str,
     content: &str,
     blocks: &[Target],
     cfg: Settings,
-    colors: &mut BTreeSet<Rgb>,
-    has_gutter: &mut bool,
-    warnings: &mut Vec<Warning>,
+    state: &mut RewriteState,
 ) -> Result<String> {
     let mut result = String::with_capacity(content.len());
+    let mut origins: Vec<usize> = vec![1];
+    let mut src_line = 1usize;
     let mut cursor = 0usize;
 
     for &(start, env) in blocks {
@@ -235,7 +274,12 @@ fn rewrite_file(
         let begin_tag = format!("\\begin{{{env}}}");
         let end_tag = format!("\\end{{{env}}}");
         let first_line = 1 + content[..start].matches('\n').count();
-        result.push_str(&content[cursor..start]);
+        push_text(
+            &mut result,
+            &mut origins,
+            &content[cursor..start],
+            &mut src_line,
+        );
 
         let after_begin = &content[start + begin_tag.len()..];
         let known = if env == CODE_ENV {
@@ -267,7 +311,7 @@ fn rewrite_file(
         let body = strip_one_newline(raw_body).replace('\r', "");
         let numbers = numbers_for(env, &opts, cfg);
         if numbers {
-            *has_gutter = true;
+            *state.has_gutter = true;
         }
 
         let lang = lang_for(env, &opts);
@@ -275,28 +319,61 @@ fn rewrite_file(
             Some(spans) => Some(spans),
             None => {
                 let warning = unknown_language_warning(env, &lang, first_line, rel);
-                warnings.push(warning);
+                state.warnings.push(warning);
                 None
             }
         };
 
+        // The `\end{env}` tag starts here: its line owns the stanza's
+        // closing lines in the line map.
+        let end_line = 1 + content[..body_abs + end].matches('\n').count();
+        let mut block_origins = Vec::new();
         let rendered = emit::render_block(
             &body,
             spans.as_deref(),
             &EmitOpts {
                 file: rel,
+                first_line,
                 body_line,
+                end_line,
                 numbers,
             },
-            colors,
-            warnings,
+            state.colors,
+            state.warnings,
+            &mut block_origins,
         );
+        // The emission's first line continues the current output line, whose
+        // origin the copied text above already recorded — append the rest.
         result.push_str(&rendered);
+        if block_origins.len() > 1 {
+            origins.extend_from_slice(&block_origins[1..]);
+        }
+        src_line = end_line;
 
         cursor = body_abs + end + end_tag.len();
+
+        // Vertical rhythm: `\medskip` after every block, and `\noindent` for
+        // the paragraph that follows — unless the author left a blank line,
+        // in which case the normal paragraph indent applies.
+        let rest = &content[cursor..];
+        let after = rest
+            .strip_prefix("\r\n")
+            .or_else(|| rest.strip_prefix('\n'))
+            .unwrap_or(rest);
+        let followed_by_prose = after
+            .lines()
+            .next()
+            .is_some_and(|line| !line.trim().is_empty());
+        result.push('\n');
+        origins.push(end_line);
+        result.push_str("\\medskip");
+        if followed_by_prose {
+            result.push_str("\\noindent ");
+        }
     }
 
-    result.push_str(&content[cursor..]);
+    push_text(&mut result, &mut origins, &content[cursor..], &mut src_line);
+    state.origins.extend(origins);
     Ok(result)
 }
 
@@ -452,8 +529,12 @@ mod tests {
         let block_end = out.find("\\par\n}").unwrap();
         let block = &out[block_start..block_end];
         assert!(
-            !block.contains("\\textcolor{"),
+            !block.contains("\\textcolor{tfxcol"),
             "monochrome block must not colorize:\n{block}"
+        );
+        assert!(
+            block.contains("\\textcolor{tfxtint}"),
+            "even a monochrome block sits in the frame:\n{block}"
         );
     }
 
@@ -824,6 +905,124 @@ mod tests {
         assert!(main.contains("\\newcommand{\\tfxcodestyle}"), "{main}");
     }
 
+    /// FR2 — the paragraph after a block starts without indent, unless the
+    /// author left a blank line after `\end{code}` (then the normal
+    /// paragraph indent applies).
+    #[test]
+    fn noindent_follows_the_block_unless_the_author_left_a_blank_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python]\nx = 1\n\\end{code}\nProse.\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("}\n\\medskip\\noindent \nProse."),
+            "the glued paragraph must be suppressed:\n{out}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python]\nx = 1\n\\end{code}\n\nProse.\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("}\n\\medskip\n\nProse."),
+            "a blank line keeps the normal indent:\n{out}"
+        );
+    }
+
+    /// FR5 — every output line of a rewritten file maps back to the source
+    /// line the pass received.
+    #[test]
+    fn line_map_attributes_a_code_line_to_its_source_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}\na = 1\nb = 2\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        // Source line 5 holds `b = 2` (plain block: escaped `b~=~2`).
+        let build_line = rewritten
+            .lines()
+            .position(|line| line.contains("b~=~2"))
+            .expect("the second code line must be in the build copy")
+            + 1;
+        assert_eq!(map.get("main.tex", build_line), Some(("main.tex", 5)));
+        // The blank separator right after it — the line Tectonic reports for
+        // the paragraph — maps to the code line above, not below.
+        assert_eq!(map.get("main.tex", build_line + 1), Some(("main.tex", 5)));
+    }
+
+    /// Bless-or-compare helper for the frame snapshots below.
+    fn bless_or_compare(name: &str, actual: &str) {
+        let path = format!(
+            "{}/src/highlight/snapshots/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        if std::env::var_os("TEXFORGE_BLESS").is_some() {
+            std::fs::create_dir_all(format!(
+                "{}/src/highlight/snapshots",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            std::fs::write(&path, actual).unwrap();
+            eprintln!("blessed {path}");
+        }
+        assert_eq!(actual, snapshot(name));
+    }
+
+    /// A framed block without numbers: no gutter, no separator, frame and
+    /// rhythm intact.
+    #[test]
+    fn framed_block_without_numbers_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let actual = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!actual.contains("tfxgutter"), "no gutter:\n{actual}");
+        bless_or_compare("frame-no-numbers.tex", &actual);
+    }
+
+    /// A 77-line plain block: the full per-line emission a page split
+    /// renders, including the two `\vadjust` penalties.
+    #[test]
+    fn page_split_block_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut body = String::new();
+        for i in 1..=77 {
+            body.push_str(&format!("code line {i}\n"));
+        }
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\
+             \\begin{{code}}\n{body}\\end{{code}}\n\\end{{document}}\n"
+        );
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let actual = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert_eq!(
+            actual.matches("\\vadjust{\\penalty10000}").count(),
+            2,
+            "penalties on lines 1 and 76 only"
+        );
+        bless_or_compare("frame-page-split.tex", &actual);
+    }
+
     /// F10 — the emitted LaTeX compiles under the real engine with only
     /// `color.sty`, whether or not the author loads `xcolor`, and unknown
     /// languages degrade without failing. Skips (never fails) without Tectonic.
@@ -865,7 +1064,7 @@ mod tests {
             let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
             assert_eq!(!warnings.is_empty(), expect_warning, "{name}: {warnings:?}");
 
-            crate::compiler::compile(dir.path(), "main.tex", false, None)
+            crate::compiler::compile(dir.path(), "main.tex", false, None, &crate::highlight::LineMap::default())
                 .unwrap_or_else(|e| panic!("{name}: tectonic failed: {e}"));
             let pdf = dir.path().join("main.pdf");
             assert!(pdf.exists(), "{name}: no pdf written");
@@ -900,7 +1099,14 @@ mod tests {
         std::fs::write(dir.path().join("main.tex"), main).unwrap();
 
         run(dir.path(), "main.tex", Settings::default()).unwrap();
-        crate::compiler::compile(dir.path(), "main.tex", false, None).unwrap();
+        crate::compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let pages = crate::pdftext::extract_text_by_pages(&dir.path().join("main.pdf")).unwrap();
         assert!(
             pages.len() >= 2,
