@@ -537,4 +537,242 @@ mod tests {
         assert_eq!(breaks[1].section.as_deref(), Some("2"));
         assert_eq!(breaks[2].section.as_deref(), Some("3"));
     }
+
+    /// The path entry point must agree with the bytes one on the real
+    /// fixture: every destination form the file uses has to resolve to the
+    /// same page through either door.
+    #[test]
+    fn read_pdf_outline_from_path_matches_bytes_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities.pdf");
+        std::fs::write(&path, CAPABILITIES_PDF).unwrap();
+        let from_path = read_pdf_outline(&path).unwrap();
+        let from_bytes = read_pdf_outline_from_bytes(CAPABILITIES_PDF).unwrap();
+        assert_eq!(from_path, from_bytes);
+        let (entries, page_count) = from_path.expect("capabilities PDF must have an outline");
+        assert_eq!(page_count, 10, "fixture page count");
+        assert_eq!(entries.len(), 21, "fixture outline entry count");
+    }
+
+    /// Exact pages, titles and nesting from the capabilities PDF's own
+    /// bookmark tree: page resolution is the whole point of the outline
+    /// path, so a wrong page (or a flattened level) must fail loudly.
+    #[test]
+    fn capabilities_outline_resolves_exact_pages_and_nesting() {
+        let (entries, _) = read_pdf_outline_from_bytes(CAPABILITIES_PDF)
+            .unwrap()
+            .expect("capabilities PDF must have an outline");
+        assert_eq!(
+            entries[0],
+            PdfOutlineEntry {
+                title: "Introducción".into(),
+                page: 2,
+                level: 0,
+            }
+        );
+        assert_eq!(
+            entries[7],
+            PdfOutlineEntry {
+                title: "Estilos de Diagrama (style)".into(),
+                page: 5,
+                level: 1,
+            }
+        );
+        assert_eq!(
+            entries[20],
+            PdfOutlineEntry {
+                title: "Conclusión".into(),
+                page: 9,
+                level: 0,
+            }
+        );
+        assert!(
+            entries.iter().any(|e| e.level > 0),
+            "the outline must nest: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.page == 9),
+            "some entry must resolve past page 1: {entries:?}"
+        );
+    }
+
+    /// A two-page document exercising every destination form the reader
+    /// understands: an array dest, a direct page-reference dest, a child
+    /// item reached through `/First`, and two named destinations behind
+    /// `/A` actions — one stored as a dict holding `/D`, one as a direct
+    /// dest array.
+    fn doc_with_every_dest_form() -> lopdf::Document {
+        use lopdf::{dictionary, Document, Object};
+
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page1_id = doc.new_object_id();
+        let page2_id = doc.new_object_id();
+        let outlines_id = doc.new_object_id();
+        let item1_id = doc.new_object_id();
+        let child_id = doc.new_object_id();
+        let item2_id = doc.new_object_id();
+        let item3_id = doc.new_object_id();
+        let item4_id = doc.new_object_id();
+        let names_id = doc.new_object_id();
+        let dests_id = doc.new_object_id();
+        let dest_dict_id = doc.new_object_id();
+
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page1_id), Object::Reference(page2_id)],
+                "Count" => 2,
+            }),
+        );
+        let page = Object::Dictionary(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+        });
+        doc.objects.insert(page1_id, page.clone());
+        doc.objects.insert(page2_id, page);
+
+        let array_dest = |page: lopdf::ObjectId| {
+            Object::Array(vec![
+                Object::Reference(page),
+                Object::Name(b"XYZ".to_vec()),
+                Object::Null,
+                Object::Null,
+                Object::Null,
+            ])
+        };
+        let item = |title: &str, parent: lopdf::ObjectId, extra: Vec<(&str, Object)>| {
+            let mut dict = dictionary! {
+                "Title" => Object::string_literal(title),
+                "Parent" => parent,
+            };
+            for (key, value) in extra {
+                dict.set(key, value);
+            }
+            Object::Dictionary(dict)
+        };
+
+        doc.objects.insert(
+            item1_id,
+            item(
+                "Array Form",
+                outlines_id,
+                vec![
+                    ("Dest", array_dest(page1_id)),
+                    ("First", Object::Reference(child_id)),
+                    ("Next", Object::Reference(item2_id)),
+                ],
+            ),
+        );
+        doc.objects.insert(
+            child_id,
+            item(
+                "Child Of Array",
+                item1_id,
+                vec![("Dest", array_dest(page2_id))],
+            ),
+        );
+        doc.objects.insert(
+            item2_id,
+            item(
+                "Direct Form",
+                outlines_id,
+                vec![
+                    ("Dest", Object::Reference(page2_id)),
+                    ("Next", Object::Reference(item3_id)),
+                ],
+            ),
+        );
+        let action = |name: &str| {
+            Object::Dictionary(dictionary! {
+                "S" => "GoTo",
+                "D" => Object::string_literal(name),
+            })
+        };
+        doc.objects.insert(
+            item3_id,
+            item(
+                "Named Dict Form",
+                outlines_id,
+                vec![
+                    ("A", action("named-dict")),
+                    ("Next", Object::Reference(item4_id)),
+                ],
+            ),
+        );
+        doc.objects.insert(
+            item4_id,
+            item(
+                "Named Array Form",
+                outlines_id,
+                vec![("A", action("named-array"))],
+            ),
+        );
+        doc.objects.insert(
+            outlines_id,
+            Object::Dictionary(dictionary! {
+                "First" => Object::Reference(item1_id),
+                "Last" => Object::Reference(item4_id),
+                "Count" => 5,
+            }),
+        );
+
+        doc.objects.insert(
+            dest_dict_id,
+            Object::Dictionary(dictionary! {
+                "D" => array_dest(page2_id),
+            }),
+        );
+        doc.objects.insert(
+            dests_id,
+            Object::Dictionary(dictionary! {
+                "Names" => vec![
+                    Object::string_literal("named-dict"),
+                    Object::Reference(dest_dict_id),
+                    Object::string_literal("named-array"),
+                    array_dest(page1_id),
+                ],
+            }),
+        );
+        doc.objects.insert(
+            names_id,
+            Object::Dictionary(dictionary! {
+                "Dests" => Object::Reference(dests_id),
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+            "Outlines" => Object::Reference(outlines_id),
+            "Names" => Object::Reference(names_id),
+        });
+        doc.trailer.set("Root", catalog_id);
+
+        doc
+    }
+
+    #[test]
+    fn every_dest_form_resolves_to_its_own_page() {
+        let doc = doc_with_every_dest_form();
+        let (entries, page_count) = read_pdf_outline_from_doc(&doc)
+            .unwrap()
+            .expect("synthetic outline must resolve");
+        assert_eq!(page_count, 2);
+        let compact: Vec<(&str, usize, usize)> = entries
+            .iter()
+            .map(|e| (e.title.as_str(), e.page, e.level))
+            .collect();
+        assert_eq!(
+            compact,
+            vec![
+                ("Array Form", 1, 0),
+                ("Child Of Array", 2, 1),
+                ("Direct Form", 2, 0),
+                ("Named Dict Form", 2, 0),
+                ("Named Array Form", 1, 0),
+            ],
+            "every destination form must land on its own page"
+        );
+    }
 }

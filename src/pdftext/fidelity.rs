@@ -320,6 +320,76 @@ mod tests {
         assert_eq!(missing[0].word, "Nonexistent");
     }
 
+    /// The substring fallback: a source word inside a longer PDF token still
+    /// counts as present even though it is not a token of its own.
+    #[test]
+    fn fidelity_substring_fallback_covers_a_word_inside_a_longer_token() {
+        let mut source = BTreeMap::new();
+        source.insert("flow".into(), 1);
+        let missing = fidelity_missing_words(&source, "the workflow automation");
+        assert!(missing.is_empty(), "{missing:?}");
+    }
+
+    /// The singular message names the word without a count; the plural one
+    /// carries the occurrence count.
+    #[test]
+    fn fidelity_findings_singular_and_plural_messages_differ() {
+        let one = fidelity_findings(&[MissingWord {
+            word: "wug".into(),
+            count: 1,
+        }]);
+        assert_eq!(one.len(), 1);
+        assert!(
+            !one[0].message.contains("occurrences"),
+            "singular must not carry a count: {}",
+            one[0].message
+        );
+        let many = fidelity_findings(&[MissingWord {
+            word: "wug".into(),
+            count: 3,
+        }]);
+        assert_eq!(many.len(), 1);
+        assert!(
+            many[0].message.contains("3 occurrences"),
+            "plural must carry the count: {}",
+            many[0].message
+        );
+    }
+
+    /// Repeats accumulate: three sightings of a word count as three, not
+    /// one (and not zero).
+    #[test]
+    fn significant_words_count_repeated_occurrences() {
+        let files = vec![TokenizedFile {
+            path: PathBuf::from("main.tex"),
+            tokens: vec![
+                Token::BeginDocument,
+                Token::Text("hello hello hello".into()),
+                Token::EndDocument,
+            ],
+        }];
+        let words = significant_words(&files);
+        assert_eq!(words.get("hello"), Some(&3), "{words:?}");
+    }
+
+    /// The project entry point flags a source word the PDF never renders.
+    #[test]
+    fn check_fidelity_flags_a_word_absent_from_the_pdf() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\nNonexistent wug.\n\\end{document}\n",
+        )
+        .unwrap();
+        let pdf = dir.path().join("doc.pdf");
+        std::fs::write(&pdf, LIGATURES_PDF).unwrap();
+        let findings = check_fidelity(dir.path(), "main.tex", &pdf).unwrap();
+        assert!(
+            findings.iter().any(|f| f.message.contains("Nonexistent")),
+            "absent word must warn: {findings:?}"
+        );
+    }
+
     #[test]
     fn package_options_and_hypersetup_keys_are_excluded_from_significant_words() {
         let source = "\\usepackage[hyphens]{url}\n\\hypersetup{pdfcreationdate={\\today}, colorlinks=true}\n\\setlength{\\parindent}{0pt}\n\\begin{document}\nHello world.\n\\end{document}\n";

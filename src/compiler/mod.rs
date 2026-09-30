@@ -659,12 +659,17 @@ mod tests {
     #[test]
     fn find_tectonic_returns_path() {
         ensure_rustls();
-        let result = find_tectonic();
-        // This test just verifies the function doesn't panic;
-        // tectonic may or may not be installed.
-        if let Ok(path) = result {
-            assert!(!path.as_os_str().is_empty());
+        // Hermetic: never trigger the network auto-install from the suite.
+        // A mid-run toolchain download races the integration tests that
+        // probe `locate_tectonic()` (skip vs run) and leaves parallel
+        // `tectonic` builds fighting over a cold bundle cache — the flaky
+        // baseline that fails cloud mutation runs with `Bad \patterns`.
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
         }
+        let path = find_tectonic().expect("located tectonic must resolve");
+        assert!(!path.as_os_str().is_empty());
     }
 
     #[test]

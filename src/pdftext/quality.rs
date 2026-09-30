@@ -456,4 +456,48 @@ mod tests {
         assert!(!is_valid_pdf_date("D:20260807"));
         assert!(!is_valid_pdf_date(""));
     }
+
+    /// The timezone suffix is all-or-nothing: one non-digit anywhere in
+    /// `±HH'mm'` rejects the date, and so does any wrong-length suffix.
+    #[test]
+    fn pdf_date_rejects_malformed_timezone_suffixes() {
+        for bad in [
+            "D:20260807144421+0X'00'",
+            "D:20260807144421+X5'30'",
+            "D:20260807144421+05'3X'",
+            "D:20260807144421+05X30'",
+            "D:20260807144421+0530",
+            "D:20260807144421+05'30",
+            "D:20260807144421+05'30''",
+            "D:20260807144421 ",
+        ] {
+            assert!(!is_valid_pdf_date(bad), "{bad} must be rejected");
+        }
+        assert!(!is_valid_pdf_date("D:2026080714442X"));
+        assert!(is_valid_pdf_date("D:20260807144421z"), "lowercase z suffix");
+    }
+
+    /// The path entry point surfaces the same findings as the pieces: human
+    /// dates warn, and a referenced-but-not-embedded font warns.
+    #[test]
+    fn check_quality_on_malformed_fixture_reports_dates_and_fonts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("malformed.pdf");
+        std::fs::write(&path, MALFORMED_DATE_PDF).unwrap();
+        let findings = check_quality(&path).unwrap();
+        assert!(
+            findings.iter().any(|f| f.message.contains("CreationDate")),
+            "CreationDate warning missing: {findings:?}"
+        );
+        assert!(
+            findings.iter().any(|f| f.message.contains("ModDate")),
+            "ModDate warning missing: {findings:?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("Helvetica") && f.message.contains("not embedded")),
+            "Helvetica embedding warning missing: {findings:?}"
+        );
+    }
 }
