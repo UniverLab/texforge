@@ -20,7 +20,7 @@
 //! | code | meaning |
 //! |---|---|
 //! | `0` | up to date / update installed / prompt declined / cargo refusal |
-//! | `1` | `--check` only: a newer stable release **is available** |
+//! | `1` | `--check`: a newer stable release **is available**; in plain `update`, a failure **after** a successful check (download, checksum, binary missing from archive) |
 //! | `2` | the release **check could not be completed** (network, DNS, TLS, HTTP ≥ 400, unparsable response); the cause is the single line printed on stderr. Applies to `--check` *and* plain `update`. |
 //!
 //! Failures *after* a successful check (download, checksum, permissions)

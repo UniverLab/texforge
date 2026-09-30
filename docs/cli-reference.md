@@ -112,7 +112,7 @@ Exit codes of `texforge update [--check]`:
 | Code | Meaning |
 |---|---|
 | `0` | Up to date (or update installed / declined / cargo-managed refusal) |
-| `1` | `--check` only: an update **is available** |
+| `1` | `--check`: an update **is available**; in plain `update`, a failure after a successful check (download, checksum, permissions) |
 | `2` | The release check **could not be completed** (network, DNS, TLS, HTTP ≥ 400, unparsable response); the cause is the single line printed on stderr. Applies to `--check` and plain `update` alike. |
 
 The version arrow line prints versions without the `v` prefix: `texforge 0.0.1 → 0.9.0`.
