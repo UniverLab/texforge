@@ -69,7 +69,33 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         return Ok(errors);
     }
 
-    // Collect all .tex files reachable from entry
+    let tex_files = collect_tex_files_and_report_circular(root, entry, &mut errors);
+    let bib_keys = match bib_file {
+        Some(bib) => parse_bib_keys(&root.join(bib)),
+        None => HashSet::new(),
+    };
+    let all_labels = collect_labels(&tex_files)?;
+    let file_contents = run_file_checks(
+        root,
+        &tex_files,
+        bib_file,
+        &bib_keys,
+        &all_labels,
+        &mut errors,
+    )?;
+    report_unused_bib(&bib_keys, &file_contents, bib_file, &mut errors);
+    run_spell_and_engine(root, &file_contents, &mut errors);
+
+    Ok(errors)
+}
+
+/// Collect `.tex` files reachable from the entry point, reporting circular
+/// `\input` references as errors. Returns the reachable files in order.
+fn collect_tex_files_and_report_circular(
+    root: &Path,
+    entry: &str,
+    errors: &mut Vec<LintFinding>,
+) -> Vec<std::path::PathBuf> {
     let collected = texutil::collect_tex_files(root, entry);
     for (entry, path) in &collected.circular {
         errors.push(LintFinding {
@@ -80,17 +106,13 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
             suggestion: Some("Remove the circular reference".into()),
         });
     }
-    let tex_files = collected.files;
+    collected.files
+}
 
-    // Parse .bib keys if bibliography exists
-    let bib_keys = match bib_file {
-        Some(bib) => parse_bib_keys(&root.join(bib)),
-        None => HashSet::new(),
-    };
-
-    // Collect all labels defined across files
+/// Collect every `\label` defined across files, skipping verbatim bodies.
+fn collect_labels(tex_files: &[std::path::PathBuf]) -> Result<HashSet<String>> {
     let mut all_labels = HashSet::new();
-    for file in &tex_files {
+    for file in tex_files {
         let content = std::fs::read_to_string(file)?;
         let verbatim_lines = texparse::verbatim_body_lines(&content);
         for (index, line) in content.lines().enumerate() {
@@ -103,10 +125,21 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
             }
         }
     }
+    Ok(all_labels)
+}
 
-    // Run checks on each file
+/// Run per-file reference, environment, diagram and glyph checks.
+/// Returns the `(relative path, content)` pairs for later phases.
+fn run_file_checks(
+    root: &Path,
+    tex_files: &[std::path::PathBuf],
+    bib_file: Option<&str>,
+    bib_keys: &HashSet<String>,
+    all_labels: &HashSet<String>,
+    errors: &mut Vec<LintFinding>,
+) -> Result<Vec<(String, String)>> {
     let mut file_contents: Vec<(String, String)> = Vec::new();
-    for file in &tex_files {
+    for file in tex_files {
         let rel = file
             .strip_prefix(root)
             .unwrap_or(file)
@@ -120,46 +153,63 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         let verbatim_lines = texparse::verbatim_body_lines(&content);
 
         check_references(
-            root,
-            &rel,
+            &RefCheckCtx {
+                root,
+                rel: &rel,
+                bib_file,
+                bib_keys,
+                all_labels,
+                verbatim_lines: &verbatim_lines,
+            },
             &content,
-            bib_file,
-            &bib_keys,
-            &all_labels,
-            &verbatim_lines,
-            &mut errors,
+            errors,
         );
-        check_environments(&rel, &content, &verbatim_lines, &mut errors);
-        check_diagram_blocks(&rel, &content, "mermaid", &verbatim_lines, &mut errors);
-        check_diagram_blocks(&rel, &content, "graphviz", &verbatim_lines, &mut errors);
-        check_diagram_blocks(&rel, &content, "d2", &verbatim_lines, &mut errors);
+        check_environments(&rel, &content, &verbatim_lines, errors);
+        check_diagram_blocks(&rel, &content, "mermaid", &verbatim_lines, errors);
+        check_diagram_blocks(&rel, &content, "graphviz", &verbatim_lines, errors);
+        check_diagram_blocks(&rel, &content, "d2", &verbatim_lines, errors);
         errors.extend(glyphs::lint_file(&rel, &content));
         file_contents.push((rel, content));
     }
+    Ok(file_contents)
+}
 
-    // TF12: report .bib keys that are never cited. `\nocite{*}` cites every key.
+/// Report `.bib` keys that are never cited. `\nocite{*}` cites every key.
+fn report_unused_bib(
+    bib_keys: &HashSet<String>,
+    file_contents: &[(String, String)],
+    bib_file: Option<&str>,
+    errors: &mut Vec<LintFinding>,
+) {
     let mut cited_keys = HashSet::new();
     let mut nocite_star = false;
-    collect_cited_keys(&file_contents, &mut cited_keys, &mut nocite_star);
-    if !nocite_star {
-        let mut unused: Vec<&str> = bib_keys
-            .difference(&cited_keys)
-            .map(String::as_str)
-            .collect();
-        if !unused.is_empty() {
-            unused.sort();
-            errors.push(LintFinding {
-                severity: Severity::Warning,
-                file: bib_file.unwrap_or("").to_string(),
-                line: 0,
-                message: format!("Unused .bib entries (never cited): {}", unused.join(", ")),
-                suggestion: Some(
-                    "Cite them with \\cite or remove them from the bibliography".into(),
-                ),
-            });
-        }
+    collect_cited_keys(file_contents, &mut cited_keys, &mut nocite_star);
+    if nocite_star {
+        return;
     }
+    let mut unused: Vec<&str> = bib_keys
+        .difference(&cited_keys)
+        .map(String::as_str)
+        .collect();
+    if unused.is_empty() {
+        return;
+    }
+    unused.sort();
+    errors.push(LintFinding {
+        severity: Severity::Warning,
+        file: bib_file.unwrap_or("").to_string(),
+        line: 0,
+        message: format!("Unused .bib entries (never cited): {}", unused.join(", ")),
+        suggestion: Some("Cite them with \\cite or remove them from the bibliography".into()),
+    });
+}
 
+/// Run spell-checking (fail-open) and the engine-compatibility rules.
+fn run_spell_and_engine(
+    root: &Path,
+    file_contents: &[(String, String)],
+    errors: &mut Vec<LintFinding>,
+) {
     // Spell-checking: attempt to load user-level default language and run spell
     // checks over the tokenized file contents. Fail-open: if spell-check cannot
     // obtain a dictionary, it prints a clear message and yields no findings.
@@ -183,7 +233,7 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
     };
 
     if default_lang.is_some() || !is_test_harness {
-        match spell::lint_files(&file_contents, root, default_lang.as_deref()) {
+        match spell::lint_files(file_contents, root, default_lang.as_deref()) {
             Ok(mut fs) => errors.append(&mut fs),
             Err(e) => eprintln!("Spell-check skipped: {}", e),
         }
@@ -191,36 +241,36 @@ pub fn lint(root: &Path, entry: &str, bib_file: Option<&str>) -> Result<Vec<Lint
         eprintln!("Spell-check skipped: test harness detected and no default language configured");
     }
 
-    errors.extend(engine::lint_files(&file_contents));
+    errors.extend(engine::lint_files(file_contents));
+}
 
-    Ok(errors)
+/// Document-wide state every line-based reference check needs: where the
+/// document lives, which file is being checked, and the cross-file sets
+/// (`\cite` keys, `\label`s) and verbatim lines collected once up front.
+struct RefCheckCtx<'a> {
+    root: &'a Path,
+    rel: &'a str,
+    bib_file: Option<&'a str>,
+    bib_keys: &'a HashSet<String>,
+    all_labels: &'a HashSet<String>,
+    verbatim_lines: &'a HashSet<usize>,
 }
 
 /// Check \input, \includegraphics, \cite, \ref references.
-#[allow(clippy::too_many_arguments)]
-fn check_references(
-    root: &Path,
-    rel: &str,
-    content: &str,
-    bib_file: Option<&str>,
-    bib_keys: &HashSet<String>,
-    all_labels: &HashSet<String>,
-    verbatim_lines: &HashSet<usize>,
-    errors: &mut Vec<LintFinding>,
-) {
+fn check_references(ctx: &RefCheckCtx<'_>, content: &str, errors: &mut Vec<LintFinding>) {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
-        if verbatim_lines.contains(&line_num) {
+        if ctx.verbatim_lines.contains(&line_num) {
             continue; // code, not markup
         }
         let line = texutil::strip_comment(line);
 
-        check_input_references(root, rel, line_num, &line, errors);
-        check_includegraphics_references(root, rel, line_num, &line, errors);
-        check_cite_references(rel, line_num, &line, bib_file, bib_keys, errors);
-        check_ref_references(rel, line_num, &line, all_labels, errors);
-        check_lstinputlisting_references(root, rel, line_num, &line, errors);
-        check_inputminted_references(root, rel, line_num, &line, errors);
+        check_input_references(ctx.root, ctx.rel, line_num, &line, errors);
+        check_includegraphics_references(ctx.root, ctx.rel, line_num, &line, errors);
+        check_cite_references(ctx.rel, line_num, &line, ctx.bib_file, ctx.bib_keys, errors);
+        check_ref_references(ctx.rel, line_num, &line, ctx.all_labels, errors);
+        check_lstinputlisting_references(ctx.root, ctx.rel, line_num, &line, errors);
+        check_inputminted_references(ctx.root, ctx.rel, line_num, &line, errors);
     }
 }
 
@@ -313,27 +363,37 @@ fn collect_cited_keys(
                 continue; // a `\cite` in code cites nothing
             }
             let line = texutil::strip_comment(line);
-            for arg in texutil::extract_commands(&line, "cite") {
-                for key in arg.split(',') {
-                    let key = key.trim();
-                    if !key.is_empty() {
-                        cited_keys.insert(key.to_string());
-                    }
-                }
-            }
-            for arg in texutil::extract_commands(&line, "nocite") {
-                if arg == "*" {
-                    *nocite_star = true;
-                } else {
-                    for key in arg.split(',') {
-                        let key = key.trim();
-                        if !key.is_empty() {
-                            cited_keys.insert(key.to_string());
-                        }
-                    }
-                }
-            }
+            collect_cited_keys_in_line(&line, cited_keys, nocite_star);
         }
+    }
+}
+
+/// Collect cited keys from a single comment-stripped line.
+fn collect_cited_keys_in_line(
+    line: &str,
+    cited_keys: &mut HashSet<String>,
+    nocite_star: &mut bool,
+) {
+    for arg in texutil::extract_commands(line, "cite") {
+        insert_csv_keys(arg, cited_keys);
+    }
+    for arg in texutil::extract_commands(line, "nocite") {
+        if arg == "*" {
+            *nocite_star = true;
+            continue;
+        }
+        insert_csv_keys(arg, cited_keys);
+    }
+}
+
+/// Insert every comma-separated key in `arg` into `set`.
+fn insert_csv_keys(arg: &str, set: &mut HashSet<String>) {
+    for key in arg.split(',') {
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        set.insert(key.to_string());
     }
 }
 

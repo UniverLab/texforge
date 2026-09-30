@@ -11,13 +11,19 @@ homepage = "https://univerlab.org/texforge"
 keywords = ["latex", "pdf", "compiler", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
+# `layout-rs` is used through its own crate name `layout`
+# (`use layout::backends::svg::SVGWriter` etc. in src/diagrams/mod.rs), a
+# path cargo-machete cannot see, so the dependency is not actually unused.
+[package.metadata.cargo-machete]
+ignored = ["layout-rs"]
+
 [[bin]]
 name = "texforge"
 path = "src/main.rs"
 
 [dependencies]
 # Interactive prompts
-inquire = "0.7"
+inquire = "0.9"
 
 # CLI argument parsing
 clap = { version = "4.6", features = ["derive"] }
@@ -60,15 +66,15 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 
 # File watching for --watch mode
-notify = { version = "7", features = ["macos_fsevent"] }
+notify = { version = "8", features = ["macos_fsevent"] }
 
 # Mermaid diagram rendering
 mermaid-rs-renderer = { version = "0.2", default-features = false }
-resvg = "0.46"
+resvg = "0.48"
 
 # SVG -> PDF embedding, so diagrams stay vector in the built document instead
 # of being rasterized. Pulls in its own usvg/resvg (^0.45, incompatible with
-# our 0.46 above) — pass SVG as a string, never a usvg::Tree, across this
+# our 0.48 above) — pass SVG as a string, never a usvg::Tree, across this
 # boundary; see svg_to_pdf in src/diagrams/mod.rs.
 svg2pdf = "0.13.0"
 

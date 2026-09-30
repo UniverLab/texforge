@@ -120,15 +120,7 @@ pub fn lint_files(files: &[(String, String)]) -> Vec<LintFinding> {
                 Token::BeginDocument => break,
                 Token::Command { name, args } => {
                     let line = line_of(source, spanned.start);
-                    for (rule_idx, rule) in ENGINE_RULES.iter().enumerate() {
-                        for (trigger_idx, trigger) in rule.triggers.iter().enumerate() {
-                            if fired[rule_idx][trigger_idx].is_none()
-                                && trigger_matches(trigger, name, args)
-                            {
-                                fired[rule_idx][trigger_idx] = Some((rel.clone(), line));
-                            }
-                        }
-                    }
+                    record_trigger_hits(rel, line, name, args, &mut fired);
                 }
                 _ => {}
             }
@@ -149,6 +141,46 @@ pub fn lint_files(files: &[(String, String)]) -> Vec<LintFinding> {
         }
     }
     findings
+}
+
+/// Record every rule trigger satisfied by one `\command` token.
+fn record_trigger_hits(
+    rel: &str,
+    line: usize,
+    name: &str,
+    args: &[String],
+    fired: &mut [Vec<Option<(String, usize)>>],
+) {
+    for (rule_idx, rule) in ENGINE_RULES.iter().enumerate() {
+        for (trigger_idx, trigger) in rule.triggers.iter().enumerate() {
+            fire_trigger_if_unset(
+                &mut fired[rule_idx][trigger_idx],
+                trigger,
+                name,
+                args,
+                rel,
+                line,
+            );
+        }
+    }
+}
+
+/// Record a single trigger hit unless it already fired for this project.
+fn fire_trigger_if_unset(
+    fired: &mut Option<(String, usize)>,
+    trigger: &TriggerKind,
+    name: &str,
+    args: &[String],
+    rel: &str,
+    line: usize,
+) {
+    if fired.is_some() {
+        return;
+    }
+    if !trigger_matches(trigger, name, args) {
+        return;
+    }
+    *fired = Some((rel.to_string(), line));
 }
 
 /// Whether one `\command` token satisfies a trigger.

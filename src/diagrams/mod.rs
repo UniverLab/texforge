@@ -16,7 +16,7 @@ use crate::texutil;
 
 mod fonts;
 pub mod style;
-use fonts::shared_fontdb;
+use fonts::{shared_fontdb, shared_svg2pdf_fontdb};
 use style::DiagramStyle;
 
 /// Copy all .tex files to `build_dir`, rendering embedded diagrams in the copies.
@@ -375,12 +375,12 @@ const RASTER_SCALE: f32 = 3.0;
 /// selectable text) rather than rasterizing it.
 ///
 /// Takes the SVG as a string rather than a pre-parsed `usvg::Tree`: `svg2pdf`
-/// depends on `usvg ^0.45` while the rest of texforge is on `usvg 0.46`, and
+/// depends on `usvg ^0.45` while the rest of texforge is on `usvg 0.48`, and
 /// those are distinct incompatible types. Parsing here, with svg2pdf's own
 /// bundled usvg, avoids needing to bridge the two.
 fn svg_to_pdf(svg: &str) -> Result<Vec<u8>> {
     let options = svg2pdf::usvg::Options {
-        fontdb: shared_fontdb(),
+        fontdb: shared_svg2pdf_fontdb(),
         shape_rendering: svg2pdf::usvg::ShapeRendering::GeometricPrecision,
         text_rendering: svg2pdf::usvg::TextRendering::OptimizeLegibility,
         ..Default::default()

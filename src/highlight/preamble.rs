@@ -97,36 +97,59 @@ pub(crate) fn color_pkg_visible_load(files: &[(String, String)]) -> bool {
 
 fn line_loads_color(line: &str) -> bool {
     let line = texutil::strip_comment(line);
-    let mut rest = line.as_str();
-    for cmd in ["\\usepackage", "\\RequirePackage"] {
-        while let Some(pos) = rest.find(cmd) {
-            let mut after = &rest[pos + cmd.len()..];
-            // Optional argument list: \usepackage[dvipsnames]{xcolor}
-            if let Some(stripped) = after.strip_prefix('[') {
-                match stripped.find(']') {
-                    Some(end) => after = &stripped[end + 1..],
-                    None => break,
-                }
-            }
-            after = after.trim_start();
-            if let Some(args) = after.strip_prefix('{') {
-                if let Some(end) = args.find('}') {
-                    let loaded = args[..end]
-                        .split(',')
-                        .map(str::trim)
-                        .any(|name| name == "color" || name == "xcolor");
-                    if loaded {
-                        return true;
-                    }
-                    rest = &args[end + 1..];
-                    continue;
-                }
-            }
-            rest = after;
+    ["\\usepackage", "\\RequirePackage"]
+        .iter()
+        .any(|cmd| scan_cmd_for_color(&line, cmd))
+}
+
+/// Scan one package-loading command for a visible `color`/`xcolor` load.
+fn scan_cmd_for_color(line: &str, cmd: &str) -> bool {
+    let mut rest = line;
+    while let Some(pos) = rest.find(cmd) {
+        let after_cmd = &rest[pos + cmd.len()..];
+        let Some(without_opts) = strip_optional_package_options(after_cmd) else {
+            break;
+        };
+        let after_opts = without_opts.trim_start();
+        let Some((loads_color, next)) = parse_braced_package_list(after_opts) else {
+            rest = after_opts;
+            continue;
+        };
+        if loads_color {
+            return true;
         }
-        rest = line.as_str();
+        rest = next;
     }
     false
+}
+
+/// Strip a `[...]` option list after `\usepackage`/`\RequirePackage`.
+///
+/// Returns the text after the options, or the input unchanged when there is
+/// no option list. Returns `None` when `[` is never closed.
+fn strip_optional_package_options(after: &str) -> Option<&str> {
+    let Some(stripped) = after.strip_prefix('[') else {
+        return Some(after);
+    };
+    let end = stripped.find(']')?;
+    Some(&stripped[end + 1..])
+}
+
+/// Parse a `{pkg,...}` list (caller must have trimmed leading whitespace).
+/// Returns whether it loads `color`/`xcolor` plus the text after `}`.
+/// Returns `None` when there is no braced list to parse.
+fn parse_braced_package_list(after: &str) -> Option<(bool, &str)> {
+    let args = after.strip_prefix('{')?;
+    let end = args.find('}')?;
+    let loads_color = package_list_loads_color(&args[..end]);
+    Some((loads_color, &args[end + 1..]))
+}
+
+/// Does a comma-separated package list load `color` or `xcolor`?
+fn package_list_loads_color(list: &str) -> bool {
+    list.split(',')
+        .map(str::trim)
+        .any(|name| name == "color" || name == "xcolor")
 }
 
 /// Insert the injected block into the entry file, right before
@@ -155,15 +178,6 @@ pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<()> {
 /// sources, comments stripped, before anything is written: our own injected
 /// text is full of `\tfx` and must never be scanned (the T3 trap).
 pub(crate) fn check_collisions(files: &[(String, String)]) -> Result<()> {
-    const DEFINITIONS: &[&str] = &[
-        "\\newenvironment{code}",
-        "\\renewenvironment{code}",
-        "\\NewDocumentEnvironment{code}",
-        "\\DeclareDocumentEnvironment{code}",
-        "\\def\\code",
-        "\\let\\code",
-    ];
-
     for (file, content) in files {
         // Text inside a verbatim body is source the pass will escape, not a
         // macro the document defines: a `code` (or `lstlisting`) block that
@@ -177,46 +191,69 @@ pub(crate) fn check_collisions(files: &[(String, String)]) -> Result<()> {
                 continue;
             }
             let line_text = texutil::strip_comment(raw_line);
-
-            for definition in DEFINITIONS {
-                // Scan every occurrence, not just the first: a lookalike
-                // (`\def\codefoo`) must not shield a real definition later
-                // on the same line.
-                let mut search = line_text.as_str();
-                while let Some(pos) = search.find(definition) {
-                    let end = pos + definition.len();
-                    let next = search[end..].chars().next();
-                    // `\def\codefoo` does not define `code`.
-                    let lookalike = (definition.starts_with("\\def")
-                        || definition.starts_with("\\let"))
-                        && next.is_some_and(|c| c.is_ascii_alphabetic());
-                    if !lookalike {
-                        anyhow::bail!(
-                            "the 'code' environment is already defined in {file}:{line} — \
-                             texforge rewrites \\begin{{code}} blocks itself and requires it to \
-                             be free; rename your definition"
-                        );
-                    }
-                    search = &search[end..];
-                }
-            }
-
-            let mut search = line_text.as_str();
-            while let Some(pos) = search.find("\\tfx") {
-                let after = &search[pos + "\\tfx".len()..];
-                if after
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic())
-                {
-                    anyhow::bail!(
-                        "\\tfx-prefixed command found in {file}:{line} — the \\tfx prefix is \
-                         reserved for texforge code highlighting; rename it"
-                    );
-                }
-                search = after;
-            }
+            check_code_definition(&line_text, file, line)?;
+            check_tfx_prefix(&line_text, file, line)?;
         }
+    }
+    Ok(())
+}
+
+/// Fail when a comment-stripped line defines the `code` environment.
+fn check_code_definition(line_text: &str, file: &str, line: usize) -> Result<()> {
+    const DEFINITIONS: &[&str] = &[
+        "\\newenvironment{code}",
+        "\\renewenvironment{code}",
+        "\\NewDocumentEnvironment{code}",
+        "\\DeclareDocumentEnvironment{code}",
+        "\\def\\code",
+        "\\let\\code",
+    ];
+
+    for definition in DEFINITIONS {
+        // Scan every occurrence, not just the first: a lookalike
+        // (`\def\codefoo`) must not shield a real definition later
+        // on the same line.
+        let mut search = line_text;
+        while let Some(pos) = search.find(definition) {
+            let end = pos + definition.len();
+            let next = search[end..].chars().next();
+            if is_lookalike_definition(definition, next) {
+                search = &search[end..];
+                continue;
+            }
+            anyhow::bail!(
+                "the 'code' environment is already defined in {file}:{line} — \
+                 texforge rewrites \\begin{{code}} blocks itself and requires it to \
+                 be free; rename your definition"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `\def\codefoo` does not define `code`: only `\def`/`\let` take a bare
+/// control word, and only an immediately following letter makes it longer.
+fn is_lookalike_definition(definition: &str, next: Option<char>) -> bool {
+    (definition.starts_with("\\def") || definition.starts_with("\\let"))
+        && next.is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+/// Fail when a comment-stripped line uses the reserved `\tfx` prefix.
+fn check_tfx_prefix(line_text: &str, file: &str, line: usize) -> Result<()> {
+    let mut search = line_text;
+    while let Some(pos) = search.find("\\tfx") {
+        let after = &search[pos + "\\tfx".len()..];
+        if after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            anyhow::bail!(
+                "\\tfx-prefixed command found in {file}:{line} — the \\tfx prefix is \
+                 reserved for texforge code highlighting; rename it"
+            );
+        }
+        search = after;
     }
     Ok(())
 }

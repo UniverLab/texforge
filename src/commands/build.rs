@@ -169,11 +169,9 @@ pub fn watch(
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(event) => {
-                let relevant = event.paths.iter().any(|p| {
-                    !p.starts_with(&build_dir)
-                        && p.extension().and_then(|e| e.to_str()) == Some("tex")
-                });
-                if relevant && last_build.elapsed() > cooldown {
+                if is_relevant_watch_event(&event.paths, &build_dir)
+                    && last_build.elapsed() > cooldown
+                {
                     pending = true;
                     last_event = std::time::Instant::now();
                 }
@@ -198,6 +196,15 @@ pub fn watch(
     }
 
     Ok(())
+}
+
+/// Whether a debounced watch event should trigger a rebuild: at least one
+/// changed path is a `.tex` source outside the temporary build directory
+/// (auxiliary, PDF and preview outputs must never retrigger the loop).
+fn is_relevant_watch_event(paths: &[PathBuf], build_dir: &Path) -> bool {
+    paths
+        .iter()
+        .any(|p| !p.starts_with(build_dir) && p.extension().and_then(|e| e.to_str()) == Some("tex"))
 }
 
 fn print_watch_header(title: &str, delay_secs: u64, preview: Option<&Path>) {
@@ -415,6 +422,33 @@ mod tests {
             None
         );
         assert_eq!(resolve_epoch(None, None), None);
+    }
+
+    #[test]
+    fn watch_event_for_tex_source_outside_build_dir_triggers_rebuild() {
+        let build_dir = Path::new("/tmp/texforge-build-xyz");
+        assert!(is_relevant_watch_event(
+            &[PathBuf::from("/proj/main.tex")],
+            build_dir
+        ));
+    }
+
+    #[test]
+    fn watch_event_for_aux_output_or_build_dir_path_is_ignored() {
+        let build_dir = PathBuf::from("/tmp/texforge-build-xyz");
+        assert!(!is_relevant_watch_event(
+            &[PathBuf::from("/proj/main.aux")],
+            &build_dir
+        ));
+        assert!(!is_relevant_watch_event(
+            &[PathBuf::from("/proj/main.pdf")],
+            &build_dir
+        ));
+        assert!(!is_relevant_watch_event(
+            &[build_dir.join("main.tex")],
+            &build_dir
+        ));
+        assert!(!is_relevant_watch_event(&[], &build_dir));
     }
 
     fn project_with_diagrams_style(style: Option<&str>) -> Project {

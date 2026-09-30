@@ -201,24 +201,9 @@ fn try_format_bib(source: &str) -> Option<String> {
             if i >= n {
                 return None; // unterminated entry
             }
-            let c = chars[i];
-            if in_quote {
-                if c == '"' {
-                    in_quote = false;
-                }
-            } else {
-                match c {
-                    '"' => in_quote = true,
-                    '{' => brace_depth += 1,
-                    '}' => {
-                        if open == '{' && brace_depth == 0 {
-                            break;
-                        }
-                        brace_depth -= 1;
-                    }
-                    ')' if open == '(' && brace_depth == 0 => break,
-                    _ => {}
-                }
+            let action = step_bib_scan(chars[i], open, &mut brace_depth, &mut in_quote);
+            if matches!(action, BibScanAction::CloseEntry) {
+                break;
             }
             i += 1;
         }
@@ -239,6 +224,50 @@ fn try_format_bib(source: &str) -> Option<String> {
     let mut out = blocks.join("\n\n");
     out.push('\n');
     Some(out)
+}
+
+/// What a single BibTeX entry-body character does to the scan.
+enum BibScanAction {
+    /// Keep consuming characters inside the current entry.
+    Consume,
+    /// The entry's closing delimiter was reached (do not consume it).
+    CloseEntry,
+}
+
+/// Advance the entry-body scan by one character, tracking brace depth and
+/// quote state. Returns [`BibScanAction::CloseEntry`] when `c` closes the
+/// entry opened with `open`; otherwise updates the state in place.
+fn step_bib_scan(c: char, open: char, brace_depth: &mut i32, in_quote: &mut bool) -> BibScanAction {
+    if *in_quote {
+        if c == '"' {
+            *in_quote = false;
+        }
+        return BibScanAction::Consume;
+    }
+    match c {
+        '"' => {
+            *in_quote = true;
+            BibScanAction::Consume
+        }
+        '{' => {
+            *brace_depth += 1;
+            BibScanAction::Consume
+        }
+        '}' => {
+            if open == '{' && *brace_depth == 0 {
+                return BibScanAction::CloseEntry;
+            }
+            *brace_depth -= 1;
+            BibScanAction::Consume
+        }
+        ')' => {
+            if open == '(' && *brace_depth == 0 {
+                return BibScanAction::CloseEntry;
+            }
+            BibScanAction::Consume
+        }
+        _ => BibScanAction::Consume,
+    }
 }
 
 fn parse_bib_body(kind: &str, body: &str) -> Option<BibEntry> {
