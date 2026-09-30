@@ -952,10 +952,10 @@ mod tests {
         .unwrap();
         let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
         let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
-        // Source line 5 holds `b = 2` (plain block: escaped `b~=~2`).
+        // Source line 5 holds `b = 2` (plain block: escaped `b\tfxsp{}=\tfxsp{}2`).
         let build_line = rewritten
             .lines()
-            .position(|line| line.contains("b~=~2"))
+            .position(|line| line.contains("b\\tfxsp{}=\\tfxsp{}2"))
             .expect("the second code line must be in the build copy")
             + 1;
         assert_eq!(map.get("main.tex", build_line), Some(("main.tex", 5)));

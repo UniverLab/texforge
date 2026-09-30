@@ -6,3 +6,6 @@ template = "general"
 [build]
 entry = "main.tex"
 bibliography = "bib/references.bib"
+
+[highlight]
+theme = "one-light"

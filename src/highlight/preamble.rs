@@ -62,6 +62,12 @@ pub(crate) fn injected_block(
     // size, so page breaking and line widths stay exactly as without it.
     out.push_str(r"\newcommand{\tfxsmash}[1]{\setbox0=\hbox{#1}\ht0=0pt\dp0=0pt\box0}");
     out.push('\n');
+    // Non-breaking space for code lines: identical glue to `~`, but a bare
+    // `~` is active under `babel` shorthands (spanish) and misfires before
+    // `}` (a `\textcolor` boundary) or `-` (as in `n - 1`), so spaces are
+    // emitted as `\tfxsp{}` and never as a `~` token.
+    out.push_str(r"\newcommand{\tfxsp}{\nobreakspace{}}");
+    out.push('\n');
     out.push_str(&format!(
         "\\definecolor{{tfxtint}}{{rgb}}{{{}}}\n",
         theme.tint().to_rgb_list()
@@ -299,6 +305,7 @@ mod tests {
         assert!(!block.contains("tfxgutter"), "no gutter without numbering");
         assert!(block.contains(r"\usepackage{color}"));
         assert!(block.contains("\\newcommand{\\tfxcodestyle}"));
+        assert!(block.contains("\\newcommand{\\tfxsp}{\\nobreakspace{}}"));
         assert!(block.starts_with(BEGIN_MARKER));
         assert!(block.contains(END_MARKER));
     }

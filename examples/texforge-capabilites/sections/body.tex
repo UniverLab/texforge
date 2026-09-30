@@ -1,1 +1,67 @@
-% Contenido del documento — contenido principal en main.tex
+% -------------------------------------------------------
+\section{Listados de Código}\label{sec:codigo}
+
+Texforge resalta el código fuente en Rust durante la compilación: cada
+bloque \texttt{code} se reescribe sobre la copia de compilación y solo
+necesita \texttt{color.sty}, sin depender de \texttt{listings} ni de
+\texttt{minted}. El lenguaje se indica con \texttt{lang} y la numeración de
+líneas con \texttt{numbers}. El tema tipográfico ---\texttt{one-light} en
+este caso--- se elige una sola vez para todo el documento en
+\texttt{project.toml}; ningún bloque lo cambia por su cuenta.
+
+\subsection{Python}
+
+Con \texttt{numbers=true} se añade una guía de líneas dentro del marco:
+
+\begin{code}[lang=python, numbers=true]
+import numpy as np
+
+def integrar_gauss(n_puntos=1000):
+    """Aproxima la integral de Gauss por cuadratura."""
+    x = np.linspace(-10, 10, n_puntos)
+    dx = x[1] - x[0]
+    y = np.exp(-x**2)
+    return np.sum(y) * dx
+
+if __name__ == "__main__":
+    print(f"Integral = {integrar_gauss():.6f}")
+\end{code}
+
+\subsection{Rust}
+
+El mismo mecanismo resalta Rust, aquí sin numeración:
+
+\begin{code}[lang=rust]
+fn fibonacci(n: u64) -> u64 {
+    match n {
+        0 => 0,
+        1 => 1,
+        _ => fibonacci(n - 1) + fibonacci(n - 2),
+    }
+}
+
+fn main() {
+    println!("fib(10) = {}", fibonacci(10));
+}
+\end{code}
+
+\subsection{Shell}
+
+Estos caracteres son especiales en LaTeX y se imprimen tal cual, porque
+cada carácter se escapa antes de llegar al motor:
+
+\begin{code}[lang=bash]
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo '$ % & # _ ^ ~ { } \'
+\end{code}
+
+\subsection{TOML}
+
+La configuración del propio proyecto se muestra con el mismo entorno:
+
+\begin{code}[lang=toml]
+[highlight]
+theme = "one-light"
+\end{code}

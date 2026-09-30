@@ -111,12 +111,16 @@ the first two and the last two lines are glued together.
 - Every source line becomes its own paragraph, so TeX may break the page
   between any two lines — a 60-line block flows across pages with no extra
   markup.
-- Lines never wrap: spaces become non-breaking (`~`) and tabs expand to 4,
+- Lines never wrap: spaces become non-breaking (`\tfxsp{}`, a
+  `\nobreakspace` — never a bare `~`, which misfires under spanish `babel`
+  before `}` or `-`) and tabs expand to 4,
   so indentation survives. A line wider than ~90 columns warns
   (`code line is {n} chars wide …`) — split the line; TeX still reports its
   own overfull boxes as well.
-- Special characters (`\ { } $ & # _ % ~ ^ < >`) are escaped at the
-  character level, so code can never be misread as LaTeX. `|` prints as-is.
+- Special characters (`\ { } $ & # _ % ~ ^ < > "`) are escaped at the
+  character level, so code can never be misread as LaTeX (`"` uses
+  `\char34{}`, which stays safe under `babel` shorthands such as spanish).
+  `|` prints as-is.
 - The overfull-line and unknown-language warnings name the line numbers of
   the build copy **as the listing pass received it** — before the blocks
   are rewritten and before the preamble is injected. Without a diagram

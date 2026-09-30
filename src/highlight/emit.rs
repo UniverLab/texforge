@@ -3,9 +3,9 @@
 //! The output is plain LaTeX kernel + `color.sty` only (route 3): every source
 //! character is escaped so the author's text can never be interpreted, every
 //! source line becomes its own paragraph so TeX may break the page between any
-//! two lines, and spaces become non-breaking so lines never wrap — which is
-//! what makes the Rust-side overfull check (rather than TeX's log) the
-//! authoritative warning.
+//! two lines, and spaces become `\tfxsp{}` (non-breaking) so lines never
+//! wrap — which is what makes the Rust-side overfull check (rather than TeX's
+//! log) the authoritative warning.
 
 use std::collections::BTreeSet;
 
@@ -39,6 +39,12 @@ pub(crate) struct EmitOpts<'a> {
 /// prints as itself).
 ///
 /// `|` deliberately passes through: it prints fine in `cmtt`.
+///
+/// Spaces become `\tfxsp{}` (a `\nobreakspace`, see `preamble::injected_block`)
+/// rather than a bare `~`: `~` is active under `babel` shorthands (notably
+/// spanish) and misfires when followed by `}` (a `\textcolor` boundary, very
+/// common) or `-` (as in `n - 1`). `\tfxsp{}` is identical glue without ever
+/// emitting a `~` token.
 pub(crate) fn escape_char(c: char) -> Option<&'static str> {
     match c {
         '\\' => Some("\\textbackslash{}"),
@@ -51,10 +57,14 @@ pub(crate) fn escape_char(c: char) -> Option<&'static str> {
         '%' => Some("\\%"),
         '~' => Some("\\textasciitilde{}"),
         '^' => Some("\\textasciicircum{}"),
+        // `"` is active under `babel` shorthands (e.g. spanish): a literal
+        // `"` would be misread as `\language@active@arg"`. `\char34{}` prints
+        // the glyph without ever emitting a `"` character.
+        '"' => Some("\\char34{}"),
         '<' => Some("\\(<\\)"),
         '>' => Some("\\(>\\)"),
-        ' ' => Some("~"),
-        '\t' => Some("~~~~"),
+        ' ' => Some("\\tfxsp{}"),
+        '\t' => Some("\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}"),
         '\r' => Some(""),
         _ => None,
     }
@@ -73,7 +83,7 @@ pub(crate) fn escape_into(out: &mut String, text: &str) {
 /// Display width of one source line: characters after tab expansion, plus the
 /// gutter the line is prefixed with when numbering is on.
 fn display_width(line: &str, numbers: bool, gutter_width: usize) -> usize {
-    // Tabs expand to 4 (emission turns each into four `~`, so the width must
+    // Tabs expand to 4 (emission turns each into four `\tfxsp{}`, so the width must
     // agree with what TeX lays out).
     let chars: usize = line.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
     if numbers {
@@ -363,14 +373,18 @@ mod tests {
         assert_eq!(escape_char('%'), Some("\\%"));
         assert_eq!(escape_char('~'), Some("\\textasciitilde{}"));
         assert_eq!(escape_char('^'), Some("\\textasciicircum{}"));
+        assert_eq!(escape_char('"'), Some("\\char34{}"));
         assert_eq!(escape_char('<'), Some("\\(<\\)"));
         assert_eq!(escape_char('>'), Some("\\(>\\)"));
-        assert_eq!(escape_char(' '), Some("~"));
-        assert_eq!(escape_char('\t'), Some("~~~~"));
+        assert_eq!(escape_char(' '), Some("\\tfxsp{}"));
+        assert_eq!(
+            escape_char('\t'),
+            Some("\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}")
+        );
         assert_eq!(escape_char('\r'), Some(""));
         // Pass-through: everything else, including `|` and non-ASCII.
         for c in [
-            'a', '|', '=', '"', '\'', '`', '/', '-', ':', ';', ',', '!', '?', 'é', 'λ',
+            'a', '|', '=', '\'', '`', '/', '-', ':', ';', ',', '!', '?', 'é', 'λ',
         ] {
             assert_eq!(escape_char(c), None, "{c:?} must pass through");
         }
@@ -392,12 +406,45 @@ mod tests {
         assert!(out.ends_with("\\par\n}"), "out: {out}");
         assert!(
             out.contains(
-                "~~~~a~=~b~\\#~\\$~\\%~\\textasciicircum{}~\\&~\\_~\\{~\\}~\\textasciitilde{}~\\(<\\)\\(>\\)"
+                "\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}a\\tfxsp{}=\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}\\$\\tfxsp{}\\%\\tfxsp{}\\textasciicircum{}\\tfxsp{}\\&\\tfxsp{}\\_\\tfxsp{}\\{\\tfxsp{}\\}\\tfxsp{}\\textasciitilde{}\\tfxsp{}\\(<\\)\\(>\\)"
             ),
             "the escaped payload must survive byte-for-byte: {out}"
         );
         assert!(out.contains("\\textcolor{tfxtint}"), "out: {out}");
         assert!(out.contains("\\textcolor{tfxframe}"), "out: {out}");
+    }
+
+    /// Spaces must never reach the engine as a bare `~`: under spanish
+    /// `babel` a `~` followed by `}` (a `\textcolor` boundary, very common)
+    /// aborts with "extra }", and one followed by `-` (as in `n - 1`) with
+    /// "Bad character code (-1)". `\tfxsp{}` is the same glue without ever
+    /// emitting a `~` token.
+    #[test]
+    fn spaces_never_emit_a_bare_tilde() {
+        let (out, _, _, _) = render("a - b # c\n", None, &opts("main.tex", 3, false));
+        assert!(
+            out.contains("a\\tfxsp{}-\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}c"),
+            "spaces and hyphen must survive byte-for-byte: {out}"
+        );
+        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n}").unwrap()];
+        let stripped = payload.replace("\\textasciitilde{}", "");
+        assert!(!stripped.contains('~'), "no bare tilde may survive: {out}");
+        assert!(
+            !stripped.contains('"'),
+            "no raw double quote may survive: {out}"
+        );
+    }
+
+    #[test]
+    fn double_quote_never_reaches_the_engine_raw() {
+        // `"` is active under `babel` shorthands (spanish): it must be
+        // emitted as `\char34{}` so the output contains no raw `"` at all.
+        let (out, _, _, _) = render("a = \"hi\"\n", None, &opts("main.tex", 3, false));
+        assert!(
+            out.contains("a\\tfxsp{}=\\tfxsp{}\\char34{}hi\\char34{}"),
+            "out: {out}"
+        );
+        assert!(!out.contains('"'), "no raw double quote may survive: {out}");
     }
 
     #[test]
@@ -576,10 +623,10 @@ mod tests {
         ]];
         let (out, used, _, _) = render("def x = ", Some(&spans), &opts("main.tex", 1, false));
         assert!(
-            out.contains("\\textcolor{tfxcold73a49}{def~}"),
+            out.contains("\\textcolor{tfxcold73a49}{def\\tfxsp{}}"),
             "out: {out}"
         );
-        assert!(out.contains("}x~=~"), "out: {out}");
+        assert!(out.contains("}x\\tfxsp{}=\\tfxsp{}"), "out: {out}");
         assert_eq!(used.len(), 1);
         assert!(used.contains(&Rgb::new(0xd7, 0x3a, 0x49)));
     }
