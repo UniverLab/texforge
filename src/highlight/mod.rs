@@ -201,11 +201,8 @@ fn target_blocks(content: &str, cfg: Settings) -> Vec<Target> {
     let mut found: Vec<Target> = Vec::new();
     for &env in envs {
         let tag = format!("\\begin{{{env}}}");
-        let mut search = 0usize;
-        while let Some(rel) = content[search..].find(&tag) {
-            let start = search + rel;
-            search = start + tag.len();
-            if in_comment(content, start) || foreign.iter().any(|&(a, b)| start >= a && start < b) {
+        for (start, _) in content.match_indices(&tag) {
+            if in_comment(content, start) || foreign.iter().any(|&(a, b)| (a..b).contains(&start)) {
                 continue;
             }
             found.push((start, env));
@@ -217,8 +214,7 @@ fn target_blocks(content: &str, cfg: Settings) -> Vec<Target> {
 
 /// Whether the byte at `offset` sits behind an unescaped `%` on its line.
 fn in_comment(content: &str, offset: usize) -> bool {
-    let line_start = content[..offset].rfind('\n').map_or(0, |i| i + 1);
-    let prefix = &content[line_start..offset];
+    let prefix = content[..offset].rsplit('\n').next().unwrap_or_default();
     texutil::strip_comment(prefix).len() < prefix.len()
 }
 
@@ -345,8 +341,8 @@ fn rewrite_file(
         // The emission's first line continues the current output line, whose
         // origin the copied text above already recorded — append the rest.
         result.push_str(&rendered);
-        if block_origins.len() > 1 {
-            origins.extend_from_slice(&block_origins[1..]);
+        if let Some(rest) = block_origins.get(1..) {
+            origins.extend_from_slice(rest);
         }
         src_line = end_line;
 
@@ -587,6 +583,128 @@ mod tests {
             1,
             "the preamble is injected once"
         );
+    }
+
+    // ── The scanners this pass gates on, at unit level ─────────────
+
+    #[test]
+    fn target_blocks_finds_the_real_block_and_skips_the_commented_one() {
+        let content = "\\begin{code}x\\end{code}\n% \\begin{code}y\\end{code}\n";
+        let targets = target_blocks(content, Settings::default());
+        assert_eq!(targets.len(), 1, "only the uncommented block: {targets:?}");
+        assert_eq!(targets[0].0, 0, "the block starts at offset 0");
+    }
+
+    /// A `\begin{code}` that starts exactly where a foreign block ends is
+    /// the pass's own block: the foreign region covers everything up to —
+    /// never including — its first byte after `\end{verbatim}` — and a
+    /// block before the foreign region is unaffected by it.
+    #[test]
+    fn blocks_around_a_foreign_region_are_still_owned() {
+        let content =
+            "\\begin{code}a\\end{code}\\begin{verbatim}v\\end{verbatim}\\begin{code}b\\end{code}";
+        let targets = target_blocks(content, Settings::default());
+        assert_eq!(
+            targets.len(),
+            2,
+            "the code block before and the one right after \\end{{verbatim}}: {targets:?}"
+        );
+        assert_eq!(targets[0].0, 0, "the first block starts at offset 0");
+        let second_start = content.rfind("\\begin{code}").expect("second block");
+        assert_eq!(targets[1].0, second_start);
+    }
+
+    /// Two blocks with nothing between them are two blocks: the second
+    /// starts exactly where the first ended, and the quoted-block swallow
+    /// guard (`start < cursor`) must not eat it.
+    #[test]
+    fn adjacent_blocks_are_both_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\\begin{code}\na = 1\n\\end{code}\\begin{code}\nb = 2\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert_eq!(
+            out.matches("{\n\\tfxcodestyle").count(),
+            2,
+            "both adjacent blocks must be rewritten:\n{out}"
+        );
+    }
+
+    #[test]
+    fn in_comment_only_fires_behind_an_unescaped_percent_on_the_same_line() {
+        assert!(!in_comment("x", 1), "no % at all");
+        assert!(!in_comment("a\nb", 2), "b starts its own line");
+        assert!(in_comment("x% tail", 6), "behind an unescaped %");
+        assert!(!in_comment("x\\% y", 3), "an escaped % is not a comment");
+    }
+
+    /// The environment's own `numbers=` option wins over the project
+    /// default — `lstlisting` falls back to the default for an unrecognised
+    /// value, `code` never opts itself in.
+    #[test]
+    fn numbers_for_gives_the_block_option_the_final_say() {
+        let opts = |v: &str| HashMap::from([("numbers".to_string(), v.to_string())]);
+        let on = Settings {
+            numbers: true,
+            ..Settings::default()
+        };
+        let off = Settings {
+            numbers: false,
+            ..Settings::default()
+        };
+
+        assert!(numbers_for(CODE_ENV, &opts("left"), off));
+        assert!(!numbers_for(CODE_ENV, &opts("none"), on));
+        assert!(
+            !numbers_for(CODE_ENV, &opts("bogus"), on),
+            "an unknown value never opts a code block in"
+        );
+        assert!(
+            numbers_for(LST_ENV, &opts("bogus"), on),
+            "lstlisting falls back to the project default"
+        );
+        assert!(!numbers_for(LST_ENV, &opts("bogus"), off));
+        assert!(numbers_for(CODE_ENV, &HashMap::new(), on));
+    }
+
+    #[test]
+    fn lang_for_reads_the_environments_own_key_and_trims() {
+        let code = |v: &str| HashMap::from([("lang".to_string(), v.to_string())]);
+        let lst = |v: &str| HashMap::from([("language".to_string(), v.to_string())]);
+
+        assert_eq!(
+            lang_for(CODE_ENV, &code("[ISO Rust]")),
+            "[ISO Rust]",
+            "`code` keeps the author's spelling verbatim"
+        );
+        assert_eq!(
+            lang_for(LST_ENV, &lst("[ISO Rust]Rust")),
+            "Rust",
+            "`lstlisting` drops the [ISO …] prefix"
+        );
+        assert_eq!(lang_for(CODE_ENV, &code(" rust ")), "rust");
+    }
+
+    #[test]
+    fn unknown_language_warning_names_the_environment_it_came_from() {
+        let code = unknown_language_warning(CODE_ENV, "brainfuck", 12, "main.tex");
+        let lst = unknown_language_warning(LST_ENV, "brainfuck", 12, "main.tex");
+        assert!(
+            code.message.contains("unknown code language 'brainfuck'"),
+            "{}",
+            code.message
+        );
+        assert!(
+            lst.message
+                .contains("unknown language 'brainfuck' in lstlisting"),
+            "{}",
+            lst.message
+        );
+        assert_ne!(code.message, lst.message);
     }
 
     /// A `code` example quoted *inside* another verbatim environment is text

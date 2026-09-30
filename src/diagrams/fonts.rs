@@ -144,3 +144,22 @@ pub(super) fn shared_fontdb() -> Arc<resvg::usvg::fontdb::Database> {
 pub(super) fn shared_svg2pdf_fontdb() -> Arc<svg2pdf::usvg::fontdb::Database> {
     svg2pdf_loader::shared()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The loader is a cache, not a rebuild: system font directories are
+    /// scanned once and every diagram reuses the same populated database.
+    #[test]
+    fn shared_font_databases_are_cached_not_built_per_call() {
+        assert!(
+            Arc::ptr_eq(&shared_fontdb(), &shared_fontdb()),
+            "the SVG → PNG fontdb must be built once and reused"
+        );
+        assert!(
+            Arc::ptr_eq(&shared_svg2pdf_fontdb(), &shared_svg2pdf_fontdb()),
+            "the SVG → PDF fontdb must be built once and reused"
+        );
+    }
+}

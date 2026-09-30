@@ -122,7 +122,12 @@ fn line_loads_color(line: &str) -> bool {
 /// Scan one package-loading command for a visible `color`/`xcolor` load.
 fn scan_cmd_for_color(line: &str, cmd: &str) -> bool {
     let mut rest = line;
-    while let Some(pos) = rest.find(cmd) {
+    // Bounded: each pass either returns or resumes past the occurrence it
+    // just looked at, so `line.len()` passes cover every candidate.
+    for _ in 0..=line.len() {
+        let Some(pos) = rest.find(cmd) else {
+            break;
+        };
         let after_cmd = &rest[pos + cmd.len()..];
         let Some(without_opts) = strip_optional_package_options(after_cmd) else {
             break;
@@ -157,9 +162,8 @@ fn strip_optional_package_options(after: &str) -> Option<&str> {
 /// Returns `None` when there is no braced list to parse.
 fn parse_braced_package_list(after: &str) -> Option<(bool, &str)> {
     let args = after.strip_prefix('{')?;
-    let end = args.find('}')?;
-    let loads_color = package_list_loads_color(&args[..end]);
-    Some((loads_color, &args[end + 1..]))
+    let (list, next) = args.split_once('}')?;
+    Some((package_list_loads_color(list), next))
 }
 
 /// Does a comma-separated package list load `color` or `xcolor`?
@@ -265,7 +269,12 @@ fn is_lookalike_definition(definition: &str, next: Option<char>) -> bool {
 /// Fail when a comment-stripped line uses the reserved `\tfx` prefix.
 fn check_tfx_prefix(line_text: &str, file: &str, line: usize) -> Result<()> {
     let mut search = line_text;
-    while let Some(pos) = search.find("\\tfx") {
+    // Bounded: every pass resumes past the `\tfx` it just inspected, so
+    // `line_text.len()` passes cover every occurrence on the line.
+    for _ in 0..=line_text.len() {
+        let Some(pos) = search.find("\\tfx") else {
+            break;
+        };
         let after = &search[pos + "\\tfx".len()..];
         if after
             .chars()
@@ -379,6 +388,39 @@ mod tests {
             "\\documentclass{article}\n\\usepackage{xcolor}\n\\begin{document}\n\
              \\begin{code}[lang=latex]\n\\usepackage{xcolor}\n\\end{code}\n\\end{document}",
         )])));
+    }
+
+    /// Every `\tfx` occurrence on a line is checked, wherever it sits, and
+    /// only a real control word (`\tfx` + letter) is reserved.
+    #[test]
+    fn check_tfx_prefix_rejects_a_reserved_command_wherever_it_sits() {
+        assert!(
+            check_tfx_prefix("\\tfxuser", "main.tex", 1).is_err(),
+            "at the very start of the line"
+        );
+        assert!(
+            check_tfx_prefix("x = \\tfxother", "main.tex", 1).is_err(),
+            "mid-line"
+        );
+        assert!(
+            check_tfx_prefix("\\let\\tfx\\relax", "main.tex", 1).is_ok(),
+            "`\\tfx` followed by a backslash is a control word boundary, not a use"
+        );
+        assert!(
+            check_tfx_prefix("\\tfx is not a command", "main.tex", 1).is_ok(),
+            "a space ends the control word"
+        );
+        assert!(check_tfx_prefix("no reserved prefix", "main.tex", 1).is_ok());
+    }
+
+    /// The scan resumes past each occurrence it inspected: a line carrying
+    /// several package loads is not satisfied by the first one.
+    #[test]
+    fn color_detection_walks_every_package_load_on_the_line() {
+        assert!(line_loads_color("\\usepackage{url} \\usepackage{color}"));
+        assert!(!line_loads_color(
+            "\\usepackage{url} \\usepackage{graphicx}"
+        ));
     }
 
     #[test]

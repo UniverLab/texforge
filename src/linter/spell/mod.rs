@@ -8,7 +8,7 @@ mod language;
 mod text;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -313,6 +313,46 @@ Hello world. This is some text. \label{sec:intro} More text.
                 .any(|f| f.message.contains("xilofonoinventado")),
             "a genuine misspelling must still be flagged: {:?}",
             findings
+        );
+    }
+
+    /// The reported line is the source line of the first occurrence: the
+    /// byte offset of the word inside the extracted spell text must be
+    /// measured from the start of that text, or findings drift to the
+    /// wrong line of the document.
+    #[test]
+    fn unknown_word_is_reported_on_its_own_source_line() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().unwrap();
+        let dicts_dir = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts_dir).unwrap();
+        fs::write(
+            dicts_dir.join("english.txt"),
+            "hello\nworld\nmore\nhere\nand\nwords\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        // Four prose runs on three different lines: the unknown word sits
+        // in the middle run, so neither the first nor the last chunk's line
+        // can masquerade as its own.
+        let src = "\\begin{document}\nhello world\n\\emph{zzzznotaword}\n\\textbf{more here}\nand more words\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        let project_root = TempDir::new().unwrap();
+        let findings = lint_files(&files, project_root.path(), Some("english")).unwrap();
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].message, "Unknown word: 'zzzznotaword'");
+        assert_eq!(
+            findings[0].line, 3,
+            "the unknown word sits on source line 3"
         );
     }
 

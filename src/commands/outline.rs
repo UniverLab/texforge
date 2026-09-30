@@ -374,6 +374,7 @@ mod tests {
             "\\begin{document}\n\\section{Intro}\ntext\n\\end{document}",
         )
         .unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = execute(true);
@@ -389,6 +390,7 @@ mod tests {
             "[document]\ntitle = \"T\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"missing.tex\"\n",
         )
         .unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = execute(false);

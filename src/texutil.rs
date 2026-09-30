@@ -281,6 +281,16 @@ mod tests {
         assert!(message.contains("lang"), "message: {message}");
     }
 
+    /// An unclosed `[` with balanced braces is not an option list at all:
+    /// the parser hands the text back untouched instead of reporting a
+    /// phantom unterminated `{`.
+    #[test]
+    fn parse_opts_unclosed_bracket_is_not_an_option_list() {
+        let (map, rest) = parse_opts("[lang=python", "code", &["lang"]).unwrap();
+        assert!(map.is_empty());
+        assert_eq!(rest, "[lang=python");
+    }
+
     #[test]
     fn find_end_tag_locates_the_matching_end() {
         let end = find_end_tag("body\n\\end{code}", "\\end{code}", "code").unwrap();

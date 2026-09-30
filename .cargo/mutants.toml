@@ -1,0 +1,31 @@
+# cargo-mutants configuration for texforge.
+#
+# `exclude_re` entries are matched against the full mutant name
+# (`file:line:col: description`). Each one names a real I/O adapter — a
+# network fetch, the interactive terminal, a process spawn, or the
+# self-replacing production entry point — that unit tests cannot invoke
+# hermetically. The injectable cores these adapters wrap (`run_update_with`,
+# `fetch_latest_stable_with`, `is_relevant_watch_event`, …) are covered by
+# tests instead, so the behaviour behind each seam is still mutation-tested.
+exclude_re = [
+  # src/commands/update/mod.rs — GitHub release-JSON fetch over HTTPS (network).
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: .*RealFetcher>::get',
+  # src/commands/update/mod.rs — release-archive download over HTTPS (network).
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: .*RealDownloader>::download',
+  # src/commands/update/mod.rs — reqwest client construction; its timeouts and User-Agent only exist on the wire.
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: replace http_client ->',
+  # src/commands/update/mod.rs — `texforge update` wiring: real GitHub fetch, current_exe and the interactive prompt.
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: replace run_update -> Result<i32>',
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: .* in run_update$',
+  # src/commands/update/mod.rs — passive notice entry point; the fetch behind it is the network.
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: replace fetch_latest_stable_silent ->',
+  # src/commands/update/mod.rs — self-replaces the running binary through the real downloader.
+  '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: .*install_after_confirm',
+  # src/commands/build.rs — `texforge build --watch`: terminal redraw loop driven by OS file events.
+  '^src/commands/build\.rs:[0-9]+:[0-9]+: replace watch ->',
+  '^src/commands/build\.rs:[0-9]+:[0-9]+: .* in watch$',
+  # src/commands/build.rs — `texforge build`: spawns the TeX toolchain and writes the PDF from the process CWD.
+  '^src/commands/build\.rs:[0-9]+:[0-9]+: replace execute ->',
+  # src/commands/init.rs — passive release notice: network fetch, terminal prompt, then process exit.
+  '^src/commands/init\.rs:[0-9]+:[0-9]+: .*check_for_updates',
+]

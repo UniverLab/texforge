@@ -169,9 +169,11 @@ pub fn watch(
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(event) => {
-                if is_relevant_watch_event(&event.paths, &build_dir)
-                    && last_build.elapsed() > cooldown
-                {
+                if should_rebuild(
+                    is_relevant_watch_event(&event.paths, &build_dir),
+                    last_build.elapsed(),
+                    cooldown,
+                ) {
                     pending = true;
                     last_event = std::time::Instant::now();
                 }
@@ -196,6 +198,14 @@ pub fn watch(
     }
 
     Ok(())
+}
+
+/// Whether the watch loop rebuilds now: the event touched a source and the
+/// post-build cooldown has passed. Split from the loop so the two halves —
+/// *which* paths matter and *when* a rebuild may fire — are unit-testable;
+/// the loop itself only wires OS file events to the terminal.
+fn should_rebuild(relevant: bool, elapsed: Duration, cooldown: Duration) -> bool {
+    relevant && elapsed > cooldown
 }
 
 /// Whether a debounced watch event should trigger a rebuild: at least one
@@ -450,6 +460,18 @@ mod tests {
             &build_dir
         ));
         assert!(!is_relevant_watch_event(&[], &build_dir));
+    }
+
+    #[test]
+    fn rebuild_fires_only_for_a_source_after_the_cooldown() {
+        let cooldown = Duration::from_secs(2);
+        assert!(should_rebuild(true, Duration::from_secs(3), cooldown));
+        // The cooldown is strict: exactly at the boundary the previous
+        // build still owns the terminal.
+        assert!(!should_rebuild(true, Duration::from_secs(2), cooldown));
+        assert!(!should_rebuild(true, Duration::from_secs(1), cooldown));
+        assert!(!should_rebuild(false, Duration::from_secs(3), cooldown));
+        assert!(!should_rebuild(false, Duration::from_secs(0), cooldown));
     }
 
     fn project_with_diagrams_style(style: Option<&str>) -> Project {

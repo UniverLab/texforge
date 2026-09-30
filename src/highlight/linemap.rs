@@ -78,16 +78,18 @@ impl LineMap {
                 .and_then(|vec| vec.get(line - 1).copied())
                 .unwrap_or(line)
         };
-        let anchor_source = if anchor == 0 { 1 } else { old(anchor) };
         let mut shifted = Vec::with_capacity(old_len + injected_lines);
+        // One mapping, no region branches: lines above the anchor read
+        // their own slot, the injected block and the anchor line read the
+        // anchor's slot, and everything below reads the slot above the
+        // block. (`anchor` is 1-based — it comes from `inject_entry`'s
+        // line count — so the request below can never be line zero.)
         for final_line in 1..=old_len + injected_lines {
-            if final_line < anchor {
-                shifted.push(old(final_line));
-            } else if final_line < anchor + injected_lines {
-                shifted.push(anchor_source);
-            } else {
-                shifted.push(old(final_line - injected_lines));
-            }
+            let request = final_line
+                .saturating_sub(injected_lines)
+                .max(anchor)
+                .min(final_line);
+            shifted.push(old(request));
         }
         *self.file_mut(file) = shifted;
     }
@@ -146,6 +148,22 @@ mod tests {
         assert_eq!(map.get("other", 1), None);
     }
 
+    /// The `.tex`-likeness guard: Tectonic prints `\input` targets without
+    /// their extension, so an extensionless lookup retries with `.tex` — but
+    /// a name that already carries a TeX-like extension must never gain a
+    /// second one.
+    #[test]
+    fn tex_like_extension_names_tex_sources_case_insensitively() {
+        for name in [
+            "main.tex", "MAIN.TEX", "pkg.sty", "cls.cls", "defs.def", "x.cfg", "refs.bib",
+        ] {
+            assert!(has_tex_like_extension(name), "{name} is a TeX source");
+        }
+        for name in ["body", "image.png", "main.pdf", "main.texx", "tex"] {
+            assert!(!has_tex_like_extension(name), "{name} is not a TeX source");
+        }
+    }
+
     #[test]
     fn injection_shift_moves_lines_below_the_anchor() {
         let mut map = LineMap::default();
@@ -176,6 +194,26 @@ mod tests {
         assert_eq!(map.get("main.tex", 7), Some(("main.tex", 7)));
         // One entry only: the normalised spelling must not fork a second.
         assert!(!map.files.contains_key("./main.tex"));
+    }
+
+    /// The shifted map has exactly one entry per final line: the file's own
+    /// lines plus the injected preamble block — never more.
+    #[test]
+    fn injection_shift_sizes_the_map_to_the_file_plus_the_injected_lines() {
+        let mut map = LineMap::default();
+        map.file_mut("main.tex").extend([1, 2, 3, 6, 7]);
+        map.shift_for_injection("main.tex", 3, 2, 5);
+        assert_eq!(
+            map.files["main.tex"].len(),
+            5 + 2,
+            "one entry per final line"
+        );
+        assert_eq!(map.get("main.tex", 7), Some(("main.tex", 7)));
+        assert_eq!(
+            map.get("main.tex", 8),
+            None,
+            "nothing beyond the final line"
+        );
     }
 
     /// The entry file need not contain a code block: when the only block

@@ -508,4 +508,20 @@ mod tests {
         assert!(dir.exists());
         assert!(dir.join("spell-words").exists());
     }
+
+    /// The uninstall summary must name the exact binary path the user is
+    /// told to remove — the running executable, never a placeholder.
+    #[test]
+    fn binary_install_note_names_the_running_binary() {
+        let note = binary_install_note();
+        let exe = std::env::current_exe().unwrap();
+        assert!(
+            note.contains("The texforge binary was NOT removed."),
+            "note: {note}"
+        );
+        assert!(
+            note.contains(&exe.display().to_string()),
+            "the note must name {exe:?}: {note}"
+        );
+    }
 }

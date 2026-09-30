@@ -485,6 +485,31 @@ more text
         );
     }
 
+    /// An `\input` in the preamble is deferred: the child file is walked
+    /// after the entry — by then the document is open, so its words still
+    /// count instead of vanishing with the preamble.
+    #[test]
+    fn preamble_input_is_deferred_until_the_document_is_open() {
+        let files = files_from(&[
+            (
+                "main.tex",
+                "\\input{child}\n\\begin{document}\nbody words\n\\end{document}",
+            ),
+            ("child.tex", "childwords"),
+        ]);
+        let stats = count_by_file("Doc", &files);
+        let child = stats
+            .sections
+            .iter()
+            .find(|s| s.path == "child.tex")
+            .expect("both files are counted");
+        assert!(
+            child.words > 0,
+            "the deferred input still counts once the document is open: {stats:?}"
+        );
+        assert_eq!(stats.total_words, child.words + 2);
+    }
+
     #[test]
     fn input_arguments_resolve_against_absolute_paths_by_suffix() {
         let files = vec![

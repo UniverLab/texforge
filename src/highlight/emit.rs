@@ -587,6 +587,31 @@ mod tests {
         assert!(out.contains("\\kern4ptb\n\\par"), "out: {out}");
     }
 
+    /// An empty body still renders one (empty) source line — the block is a
+    /// real stanza, not a hole in the output.
+    #[test]
+    fn empty_body_still_renders_one_source_line() {
+        let (out, _, _, origins) = render("", None, &opts("main.tex", 1, false));
+        assert!(
+            out.contains("\\mbox{}"),
+            "an empty body must still emit its line: {out}"
+        );
+        assert!(
+            origins.len() > 4,
+            "the empty source line carries an origin: {origins:?}"
+        );
+    }
+
+    /// A direct caller that passes a trailing newline gets the same stanza as
+    /// one that does not: the lone trailing segment is not a source line.
+    #[test]
+    fn a_trailing_newline_does_not_add_a_source_line() {
+        let (with_newline, _, _, origins_nl) = render("a\n", None, &opts("main.tex", 1, false));
+        let (without, _, _, origins) = render("a", None, &opts("main.tex", 1, false));
+        assert_eq!(with_newline, without);
+        assert_eq!(origins_nl, origins);
+    }
+
     /// Numbering runs over *source* lines: a blank line still shows its
     /// number instead of vanishing from the sequence (1, 2, 4 → 1, 2, 3).
     #[test]

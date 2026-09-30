@@ -76,18 +76,16 @@ pub fn rejoin_hyphenated_linebreaks(text: &str) -> String {
     let chars: Vec<char> = without_soft.chars().collect();
     let mut out = String::with_capacity(without_soft.len());
     let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '-' && i > 0 && chars[i - 1].is_alphabetic() && i + 1 < chars.len() {
-            let mut j = i + 1;
-            while j < chars.len() && (chars[j] == '\n' || chars[j] == '\r') {
-                j += 1;
-            }
-            if j < chars.len() && chars[j].is_alphabetic() && j > i + 1 {
+    // Bounded: each pass emits or skips at least one character, so one
+    // iteration per input character covers the whole walk.
+    for _ in 0..=chars.len() {
+        let Some(&c) = chars.get(i) else {
+            break;
+        };
+        if c == '-' && i > 0 && chars[i - 1].is_alphabetic() {
+            if let Some(after) = word_after_hyphen_break(&chars, i) {
                 // Skip the hyphen and the line break(s); keep the next letter.
-                i += 1;
-                while i < chars.len() && (chars[i] == '\n' || chars[i] == '\r') {
-                    i += 1;
-                }
+                i = after;
                 continue;
             }
         }
@@ -95,6 +93,24 @@ pub fn rejoin_hyphenated_linebreaks(text: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// The index just past the line break(s) that follow the hyphen at
+/// `hyphen`, when a letter continues the word there — i.e. the hyphen
+/// separated a word across a line break rather than ending it.
+fn word_after_hyphen_break(chars: &[char], hyphen: usize) -> Option<usize> {
+    let start = hyphen + 1;
+    if !chars.get(start).is_some_and(|c| matches!(c, '\n' | '\r')) {
+        return None;
+    }
+    let mut j = start;
+    for _ in 0..=chars.len() {
+        if !chars.get(j).is_some_and(|c| matches!(c, '\n' | '\r')) {
+            break;
+        }
+        j += 1;
+    }
+    chars.get(j).is_some_and(|c| c.is_alphabetic()).then_some(j)
 }
 
 #[cfg(test)]
@@ -123,6 +139,31 @@ mod tests {
         );
         // Real hyphen in a compound must stay.
         assert_eq!(rejoin_hyphenated_linebreaks("local-first"), "local-first");
+    }
+
+    /// Boundary shapes: only `letter - newline letter` rejoins. A hyphen
+    /// with no break after it, a break with no hyphen, a break that runs off
+    /// the end of the text, and a leading hyphen all pass through byte for
+    /// byte.
+    #[test]
+    fn rejoin_only_touches_a_hyphen_that_actually_breaks_a_word() {
+        assert_eq!(rejoin_hyphenated_linebreaks("word-"), "word-");
+        assert_eq!(
+            rejoin_hyphenated_linebreaks("Deep Learn-\n"),
+            "Deep Learn-\n"
+        );
+        assert_eq!(rejoin_hyphenated_linebreaks("-\ning"), "-\ning");
+        assert_eq!(rejoin_hyphenated_linebreaks("ab\ncd"), "ab\ncd");
+        assert_eq!(
+            rejoin_hyphenated_linebreaks("line one\nline two"),
+            "line one\nline two"
+        );
+        // A break whose continuation is not a letter (or is absent) keeps
+        // the hyphen: the word ended there, it was not split.
+        assert_eq!(rejoin_hyphenated_linebreaks("Learn-\n2024"), "Learn-\n2024");
+        // One or more line breaks are still a break: the split word rejoins
+        // across a blank line too (the historical behaviour).
+        assert_eq!(rejoin_hyphenated_linebreaks("Learn-\n\nNext"), "LearnNext");
     }
 
     #[test]

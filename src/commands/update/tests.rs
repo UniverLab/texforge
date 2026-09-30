@@ -2,6 +2,8 @@ use super::*;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
+use crate::linter::spell::test_support::ENV_MUTEX;
+
 /// The compiled-in version, handed out as `&'static SemVer` so every test
 /// can build `UpdateDeps` without juggling borrows.
 fn current() -> &'static SemVer {
@@ -846,4 +848,141 @@ fn a_local_version_is_parsed_and_stable() {
     let version = get_local_version().unwrap();
     assert!(version.is_stable());
     assert_eq!(version.to_string(), env!("CARGO_PKG_VERSION"));
+}
+
+// ── Constants, platform and environment resolution ─────────────
+
+/// The throttle is exactly one day, spelled out: the due-check tests above
+/// compare against the constant itself, so this is the only place that
+/// pins its value.
+#[test]
+fn the_notice_interval_is_exactly_one_day() {
+    assert_eq!(CHECK_INTERVAL_SECS, 86_400);
+}
+
+/// The release asset triple for this platform, spelled out per `cfg` so the
+/// test never agrees with a mutated [`release_target`] by construction.
+#[test]
+fn release_target_names_the_published_asset_for_this_platform() {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    assert_eq!(release_target(), ("x86_64-unknown-linux-musl", "tar.gz"));
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    assert_eq!(release_target(), ("aarch64-unknown-linux-musl", "tar.gz"));
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    assert_eq!(release_target(), ("x86_64-apple-darwin", "tar.gz"));
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    assert_eq!(release_target(), ("aarch64-apple-darwin", "tar.gz"));
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    assert_eq!(release_target(), ("x86_64-pc-windows-msvc", "zip"));
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+    )))]
+    assert_eq!(release_target(), ("unknown", "tar.gz"));
+}
+
+/// On every platform the release workflow publishes for, `resolve_target`
+/// hands out the real triple — the `unknown` sentinel must never escape to
+/// the downloader (it would build a 404 asset URL).
+#[cfg(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64"),
+))]
+#[test]
+fn resolve_target_returns_the_published_triple_not_the_unknown_sentinel() {
+    let resolved = resolve_target().expect("a published platform must resolve");
+    assert_eq!(resolved, release_target());
+    assert_ne!(resolved.0, "unknown");
+}
+
+/// `cargo_bin_dir` reads the same environment precedence cargo itself uses.
+/// The variables are restored afterwards; only this test reads or writes
+/// them, so a parallel `cargo test` run cannot observe the swap.
+#[test]
+fn cargo_bin_dir_follows_the_environment_precedence() {
+    let _env = ENV_MUTEX.lock().unwrap();
+    fn with_var(name: &str, value: Option<&str>, f: impl FnOnce()) {
+        let saved = std::env::var(name).ok();
+        match value {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
+        f();
+        match saved {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let install_root = root.path().join("install-root");
+    let cargo_home = root.path().join("cargo-home");
+
+    with_var(
+        "CARGO_INSTALL_ROOT",
+        Some(install_root.to_str().unwrap()),
+        || {
+            with_var("CARGO_HOME", Some(cargo_home.to_str().unwrap()), || {
+                assert_eq!(cargo_bin_dir(), install_root.join("bin"));
+            });
+        },
+    );
+
+    // An empty variable is unset, not a valid root: fall through to the
+    // next candidate instead of resolving `<empty>/bin`.
+    with_var("CARGO_INSTALL_ROOT", Some(""), || {
+        with_var("CARGO_HOME", Some(cargo_home.to_str().unwrap()), || {
+            assert_eq!(cargo_bin_dir(), cargo_home.join("bin"));
+        });
+    });
+
+    with_var("CARGO_INSTALL_ROOT", None, || {
+        with_var("CARGO_HOME", None, || {
+            let dir = cargo_bin_dir();
+            assert!(!dir.as_os_str().is_empty(), "never an empty path");
+            assert!(
+                dir.ends_with(Path::new(".cargo").join("bin")),
+                "the home fallback ends in .cargo/bin: {dir:?}"
+            );
+        });
+    });
+}
+
+/// The notice throttle round trip: `record_check` stamps, `should_check`
+/// then reports "not due", and deleting the stamp makes it due again.
+/// Runs against the real data directory — nothing else touches this stamp.
+#[test]
+fn the_notice_is_stamped_by_record_check_and_due_again_without_a_stamp() {
+    let _env = ENV_MUTEX.lock().unwrap();
+    let dir = crate::utils::data_dir().expect("HOME is available in tests");
+    let stamp = dir.join(LAST_CHECK_FILE);
+    let saved = std::fs::read(&stamp).ok();
+    let _ = std::fs::remove_file(&stamp);
+
+    record_check();
+    assert!(stamp.exists(), "record_check must write the stamp file");
+    assert!(!should_check(), "just stamped: not due again today");
+
+    std::fs::remove_file(&stamp).unwrap();
+    assert!(should_check(), "no stamp: the notice is due");
+
+    match saved {
+        Some(bytes) => std::fs::write(&stamp, bytes).unwrap(),
+        None => {
+            let _ = std::fs::remove_file(&stamp);
+        }
+    }
+}
+
+/// `now_secs` is a real Unix timestamp, not a placeholder.
+#[test]
+fn now_secs_is_a_current_unix_timestamp() {
+    let now = now_secs().unwrap();
+    assert!(now > 1_600_000_000, "not a plausible timestamp: {now}");
 }

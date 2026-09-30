@@ -511,6 +511,35 @@ mod tests {
         assert!(render("kt", "fun main() {}").is_none());
     }
 
+    /// Each theme keeps its own slot in `THEMES`: the indices must stay
+    /// distinct or one theme's cache would answer for the other.
+    #[test]
+    fn each_theme_has_its_own_index_slot() {
+        assert_eq!(HighlightTheme::Github.index(), 0);
+        assert_eq!(HighlightTheme::OneLight.index(), 1);
+    }
+
+    /// The block's base colours come from the theme spec: without them the
+    /// rendered runs fall back to syntect's defaults, not texforge's palette.
+    #[test]
+    fn theme_settings_carry_the_theme_base_colours() {
+        let theme = theme_of(HighlightTheme::Github);
+        assert!(
+            theme.settings.foreground.is_some(),
+            "the theme must set its base foreground"
+        );
+        assert_eq!(
+            theme.settings.background,
+            Some(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }),
+            "the block background is white"
+        );
+    }
+
     #[test]
     fn plain_languages_are_explicitly_monochrome() {
         for lang in ["", "text", "txt", "plaintext", "  Txt "] {

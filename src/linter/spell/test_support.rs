@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use tempfile::TempDir;
 
-pub(super) static ENV_MUTEX: Mutex<()> = Mutex::new(());
+pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 // --- TE11: Hunspell backend via `spellbook`, hand-written fixture pair ---
 

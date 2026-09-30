@@ -179,6 +179,7 @@ entry = "main.tex"
     #[test]
     fn project_load_no_project_toml_errors() {
         let tmp = tempfile::tempdir().unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = Project::load();
@@ -195,6 +196,7 @@ entry = "main.tex"
             "[document]\ntitle = \"T\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
         )
         .unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = Project::load();
@@ -208,6 +210,7 @@ entry = "main.tex"
     fn project_load_invalid_toml_errors() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("project.toml"), "not valid {{{ toml").unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = Project::load();

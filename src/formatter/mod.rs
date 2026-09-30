@@ -656,6 +656,38 @@ mod tests {
         assert!(out.contains("@article"));
     }
 
+    /// The paren-delimited scan really ran: the entry is reformatted
+    /// (normalized, aligned) instead of falling back to the raw source.
+    #[test]
+    fn bib_paren_delimiters_are_reformatted_not_passed_through() {
+        let src = "@article(key, author={A. B.})";
+        assert_eq!(format_bib(src), "@article{key,\n  author = {A. B.},\n}\n");
+    }
+
+    /// A quoted value may contain the entry's closing brace: the scan must
+    /// track quote state, not close the entry on the `}` inside `"..."`.
+    #[test]
+    fn bib_quoted_value_may_contain_the_closing_brace() {
+        let src = r#"@misc{k, title = "A } B"}"#;
+        assert_eq!(format_bib(src), "@misc{k,\n  title = \"A } B\",\n}\n");
+    }
+
+    /// `)` inside a braced value is text, not the entry's terminator —
+    /// for a `{`-delimited entry it must never close the scan.
+    #[test]
+    fn bib_parentheses_in_a_braced_value_do_not_close_the_entry() {
+        let src = "@misc{k, note = (x)}";
+        assert_eq!(format_bib(src), "@misc{k,\n  note = (x),\n}\n");
+    }
+
+    /// The mirror image for a `(`-delimited entry: a `)` nested inside
+    /// braces is still text — only a depth-zero `)` ends the scan.
+    #[test]
+    fn bib_paren_entry_ignores_a_paren_nested_in_braces() {
+        let src = "@article(key, note = {(x)})";
+        assert_eq!(format_bib(src), "@article{key,\n  note = {(x)},\n}\n");
+    }
+
     #[test]
     fn bib_unterminated_returns_original() {
         let src = "@article{key, author={A. B.}";

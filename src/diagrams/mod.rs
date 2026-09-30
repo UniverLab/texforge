@@ -479,6 +479,21 @@ mod tests {
         );
     }
 
+    /// Text in a converted diagram must actually be typeset: the shared
+    /// `fontdb` is what lets `svg2pdf` find a face and embed it. Dropping it
+    /// from the options renders the same `<text>` node with no font at all
+    /// (a 1.5 kB PDF with no `/FontFile`), silently losing every label.
+    #[test]
+    fn svg_to_pdf_embeds_a_font_for_text_from_the_shared_fontdb() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50"><text x="10" y="30">Hello</text></svg>"#;
+        let pdf = svg_to_pdf(svg).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(
+            text.contains("FontFile"),
+            "expected an embedded font program for the <text> node"
+        );
+    }
+
     #[test]
     fn svg_to_pdf_fails_on_excessive_nesting_that_png_still_handles() {
         let svg = deeply_nested_svg();

@@ -232,7 +232,7 @@ fn run_spell_and_engine(
             .and_then(|cfg| cfg.defaults.language)
     };
 
-    if default_lang.is_some() || !is_test_harness {
+    if spell_check_enabled(default_lang.as_deref(), is_test_harness) {
         match spell::lint_files(file_contents, root, default_lang.as_deref()) {
             Ok(mut fs) => errors.append(&mut fs),
             Err(e) => eprintln!("Spell-check skipped: {}", e),
@@ -242,6 +242,14 @@ fn run_spell_and_engine(
     }
 
     errors.extend(engine::lint_files(file_contents));
+}
+
+/// Whether this run should attempt spell-checking at all: a configured
+/// default language always opts in (the tests that want spell-checking pass
+/// one explicitly); otherwise a test harness opts out, so the suite stays
+/// offline and deterministic.
+fn spell_check_enabled(default_lang: Option<&str>, is_test_harness: bool) -> bool {
+    default_lang.is_some() || !is_test_harness
 }
 
 /// Document-wide state every line-based reference check needs: where the
@@ -736,6 +744,41 @@ mod tests {
         fs::write(dir.path().join("refs.bib"), "@article{real2020,}").unwrap();
         let errors = lint(dir.path(), &entry, Some("refs.bib")).unwrap();
         assert!(!has_error(&errors, "real2020"));
+    }
+
+    /// The spell-check gate: an explicit default language always opts in;
+    /// without one, a test harness must stay out (offline, deterministic)
+    /// while a real run falls through to the configured-default path.
+    #[test]
+    fn spell_check_gate_opts_in_for_a_language_and_out_for_a_harness() {
+        assert!(spell_check_enabled(Some("english"), true));
+        assert!(spell_check_enabled(Some("english"), false));
+        assert!(spell_check_enabled(None, false));
+        assert!(!spell_check_enabled(None, true));
+    }
+
+    /// A `\cite` inside a verbatim region is sample text, not a citation:
+    /// the key must stay uncited, while a prose `\cite` after the block
+    /// still counts.
+    #[test]
+    fn cite_inside_verbatim_cites_nothing_but_a_prose_cite_still_counts() {
+        let content = "\\begin{verbatim}\n\\cite{ghost}\n\\end{verbatim}\n\\cite{real2020}\n";
+        let mut cited = std::collections::HashSet::new();
+        let mut nocite_star = false;
+        collect_cited_keys(
+            &[("main.tex".to_string(), content.to_string())],
+            &mut cited,
+            &mut nocite_star,
+        );
+        assert!(
+            !cited.contains("ghost"),
+            "a \\cite in code cites nothing: {cited:?}"
+        );
+        assert!(
+            cited.contains("real2020"),
+            "the prose cite after the block still counts: {cited:?}"
+        );
+        assert!(!nocite_star);
     }
 
     #[test]

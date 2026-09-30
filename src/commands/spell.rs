@@ -271,6 +271,7 @@ entry = "main.tex"
     /// the original working directory. `Project::load()` reads
     /// `std::env::current_dir()`, so scope commands need a real cwd change.
     fn with_cwd<T>(root: &Path, body: impl FnOnce() -> T) -> T {
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(root).unwrap();
         let result = body();

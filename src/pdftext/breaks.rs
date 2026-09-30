@@ -58,13 +58,15 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
     for i in 0..normalized_pages.len() {
         // `matches` is grouped by page in document order, so the entry at
         // `match_idx` — if it belongs to this page at all — is the first
-        // (not last) section matched on it.
+        // (not last) section matched on it; every later entry for this page
+        // is consumed in one bounded step.
         if match_idx < matches.len() && matches[match_idx].0 == i {
             let (_, num, title) = &matches[match_idx];
             current = Some((num.clone(), title.clone()));
-            while match_idx < matches.len() && matches[match_idx].0 == i {
-                match_idx += 1;
-            }
+            match_idx += matches[match_idx..]
+                .iter()
+                .take_while(|(page, _, _)| *page == i)
+                .count();
         }
         out.push(PdfPageBreak {
             page: i + 1,
@@ -85,20 +87,21 @@ pub fn page_breaks(page_texts: &[String], sections: &[(String, String)]) -> Vec<
 /// A character walk, not a regex: the prefix grammar is small and fixed.
 fn strip_numbering_prefix(line: &str) -> Option<&str> {
     let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-
-    if i >= chars.len() || !chars[i].is_ascii_digit() {
+    let mut i = digit_group_end(&chars, 0);
+    if i == 0 {
         return None;
     }
-    while i < chars.len() && chars[i].is_ascii_digit() {
-        i += 1;
-    }
-    while i < chars.len() && chars[i] == '.' {
+
+    // `('.' digit-group)*`, then one optional trailing dot. The walk is
+    // bounded by `chars`: every pass consumes at least one character, so
+    // one iteration per input character covers the worst case.
+    for _ in 0..=chars.len() {
+        if chars.get(i) != Some(&'.') {
+            break;
+        }
         if i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
             i += 1;
-            while i < chars.len() && chars[i].is_ascii_digit() {
-                i += 1;
-            }
+            i = digit_group_end(&chars, i);
         } else {
             // Trailing dot with nothing numeric after it: consume it and
             // stop — the next character must be whitespace.
@@ -106,11 +109,22 @@ fn strip_numbering_prefix(line: &str) -> Option<&str> {
             break;
         }
     }
-    if i >= chars.len() || !chars[i].is_whitespace() {
+
+    if !chars.get(i).is_some_and(|c| c.is_whitespace()) {
         return None;
     }
     let byte_offset: usize = chars[..i].iter().map(|c| c.len_utf8()).sum();
     Some(line[byte_offset..].trim_start())
+}
+
+/// Index just past the run of ASCII digits starting at `from` (bounded: it
+/// scans a slice with `take_while`, never an open-ended cursor walk).
+fn digit_group_end(chars: &[char], from: usize) -> usize {
+    let run = chars[from..]
+        .iter()
+        .take_while(|c| c.is_ascii_digit())
+        .count();
+    from + run
 }
 
 /// True when a trimmed page line is the heading line for `title`: either the
@@ -324,6 +338,47 @@ mod tests {
             "2.4. Estilos de Diagrama (style)",
             "Estilos de Diagrama (style)"
         ));
+    }
+
+    /// The prefix grammar, boundary by boundary: digits, dot-separated
+    /// groups, an optional trailing dot, then mandatory whitespace. Anything
+    /// else is not a numbering prefix.
+    #[test]
+    fn strip_numbering_prefix_grammar_boundaries() {
+        assert_eq!(
+            strip_numbering_prefix("2.4. Estilos de Diagrama (style)"),
+            Some("Estilos de Diagrama (style)")
+        );
+        assert_eq!(strip_numbering_prefix("2.4.1 Something"), Some("Something"));
+        assert_eq!(strip_numbering_prefix("2. Diagramas"), Some("Diagramas"));
+        assert_eq!(strip_numbering_prefix("2 x"), Some("x"));
+        assert_eq!(strip_numbering_prefix("Estilos"), None, "no digits");
+        assert_eq!(
+            strip_numbering_prefix("2x"),
+            None,
+            "no whitespace after the prefix"
+        );
+        assert_eq!(
+            strip_numbering_prefix("2."),
+            None,
+            "a trailing dot at the end of the line is not a prefix"
+        );
+        assert_eq!(
+            strip_numbering_prefix("2.4 x"),
+            Some("x"),
+            "the final digit group is consumed"
+        );
+        assert_eq!(
+            strip_numbering_prefix("2.. 4"),
+            None,
+            "a doubled dot is not a numbering prefix"
+        );
+        assert_eq!(
+            strip_numbering_prefix("2.4"),
+            None,
+            "digits running to the end of the line are not a prefix"
+        );
+        assert_eq!(strip_numbering_prefix(""), None);
     }
 
     #[test]

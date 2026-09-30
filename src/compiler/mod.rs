@@ -873,6 +873,21 @@ mod tests {
         assert!(format_warnings(&[], true).is_empty());
     }
 
+    /// A warning with no known line (`line: 0`, e.g. an engine-wide notice)
+    /// shows no line list in the summary — `0` is not a source line.
+    #[test]
+    fn format_warnings_summary_hides_the_zero_line_sentinel() {
+        let warnings = vec![CompileWarning {
+            file: "main.tex".into(),
+            line: 0,
+            severity: Severity::Warning,
+            kind: "engine warning",
+            message: "something engine-wide happened".into(),
+        }];
+        let out = format_warnings(&warnings, false);
+        assert_eq!(out, "WARNINGS (1)\n  main.tex: 1 engine warning\n");
+    }
+
     #[test]
     fn parse_warnings_tectonic_prefixed_overfull() {
         let raw =

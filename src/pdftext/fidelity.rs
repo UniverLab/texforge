@@ -247,6 +247,40 @@ mod tests {
         assert!(!words.contains_key("IgnorePreamble"));
     }
 
+    /// The one-way document switch, exercised on every arm: a section title
+    /// counts only inside the document, and `\end{document}` really closes
+    /// it — prose after it belongs to no one.
+    #[test]
+    fn significant_words_obey_the_begin_and_end_document_switch() {
+        let section = |title: &str| Token::Section {
+            level: 1,
+            title: title.to_string(),
+            raw_title: title.to_string(),
+        };
+        let files = vec![TokenizedFile {
+            path: PathBuf::from("main.tex"),
+            tokens: vec![
+                section("Preface Matter"),
+                Token::BeginDocument,
+                section("Chapter One"),
+                Token::Text("in body".into()),
+                Token::EndDocument,
+                Token::Text("Epilogue Text".into()),
+            ],
+        }];
+        let words = significant_words(&files);
+        assert!(words.contains_key("Chapter"), "{words:?}");
+        assert!(words.contains_key("body"), "{words:?}");
+        assert!(
+            !words.contains_key("Preface"),
+            "a preamble title is outside the document: {words:?}"
+        );
+        assert!(
+            !words.contains_key("Epilogue"),
+            "\\end{{document}} closes the document: {words:?}"
+        );
+    }
+
     #[test]
     fn tabular_column_spec_is_excluded_from_significant_words() {
         let source = "\\begin{document}\n\\begin{tabular}{@{}>{\\bfseries}p{3cm}>{\\raggedright\\arraybackslash}p{5.5cm}@{}}\nName & Alice \\\\\n\\end{tabular}\n\\end{document}\n";

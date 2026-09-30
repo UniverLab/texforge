@@ -302,7 +302,7 @@ impl Cli {
                 // as a failure. Exit explicitly instead; a check error never
                 // becomes a bare anyhow failure.
                 let code = commands::update::run_update(check, yes)?;
-                if check || code != 0 {
+                if let Some(code) = update_exit_code(check, code) {
                     std::process::exit(code);
                 }
                 Ok(())
@@ -320,6 +320,18 @@ impl Cli {
                 (None, Some(_)) => anyhow::bail!("Cannot set value without a key"),
             },
         }
+    }
+}
+
+/// The exit decision for `texforge update`: `--check` always exits — `0`
+/// means up to date, `1` means an update is available, `2` the check itself
+/// failed — while a plain `update` exits only when its code is non-zero
+/// (failures after a successful check), so `0` falls through to `Ok(())`.
+fn update_exit_code(check: bool, code: i32) -> Option<i32> {
+    if check || code != 0 {
+        Some(code)
+    } else {
+        None
     }
 }
 
@@ -399,5 +411,33 @@ mod tests {
             }
             _ => panic!("`texforge update --yes` must parse into Commands::Update"),
         }
+    }
+
+    /// `Cli::execute` must really dispatch: an invalid project name fails
+    /// inside `texforge new` long before anything touches the disk.
+    #[test]
+    fn execute_dispatches_to_the_command_and_surfaces_its_error() {
+        let cli = Cli::try_parse_from(["texforge", "new", "bad name"]).unwrap();
+        let error = cli.execute().unwrap_err();
+        assert!(
+            error.to_string().contains("cannot contain spaces"),
+            "expected the `new` validation error, got: {error}"
+        );
+    }
+
+    /// The `texforge update` exit contract: `--check` always exits with its
+    /// status code; a plain update exits only for a non-zero code.
+    #[test]
+    fn update_exit_code_follows_the_documented_contract() {
+        assert_eq!(update_exit_code(true, 0), Some(0), "--check up to date");
+        assert_eq!(
+            update_exit_code(true, 1),
+            Some(1),
+            "--check update available"
+        );
+        assert_eq!(update_exit_code(true, 2), Some(2), "--check failed");
+        assert_eq!(update_exit_code(false, 0), None, "plain update, done");
+        assert_eq!(update_exit_code(false, 1), Some(1), "install phase failed");
+        assert_eq!(update_exit_code(false, 2), Some(2), "check failed");
     }
 }
