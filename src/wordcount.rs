@@ -105,59 +105,122 @@ struct RawCounts {
     file_words: Vec<usize>,
 }
 
-/// Single-pass counting over all token streams, in `\input` traversal order.
+/// Counters shared across the recursive `\input` walk.
+struct CountState {
+    tracker: SectionTracker,
+    preamble_words: usize,
+    sections: Vec<Section>,
+    file_words: Vec<usize>,
+    in_document: bool,
+    current: Option<Section>,
+}
+
+/// Single-pass counting over all token streams, in `\input` traversal order:
+/// an `\input` seen inside the document is walked where it appears, so the
+/// sections it carries take their position in the numbering.
 fn count_files(files: &[TokenizedFile]) -> RawCounts {
-    let mut tracker = SectionTracker::new(6);
-    let mut preamble_words = 0usize;
-    let mut sections: Vec<Section> = Vec::new();
-    let mut file_words = vec![0usize; files.len()];
+    let mut state = CountState {
+        tracker: SectionTracker::new(6),
+        preamble_words: 0,
+        sections: Vec::new(),
+        file_words: vec![0usize; files.len()],
+        in_document: false,
+        current: None,
+    };
+    let mut visited = vec![false; files.len()];
 
-    let mut in_document = false;
-    let mut current: Option<Section> = None;
-
-    for (file_idx, file) in files.iter().enumerate() {
-        for token in &file.tokens {
-            match token {
-                Token::BeginDocument => in_document = true,
-                Token::Section { level, title, .. } => {
-                    if !in_document {
-                        continue;
-                    }
-                    if let Some(finished) = current.take() {
-                        sections.push(finished);
-                    }
-                    let number = tracker.enter(*level);
-                    let title_words = count_title_words(title);
-                    file_words[file_idx] += title_words;
-                    current = Some((*level, number, title.clone(), title_words));
-                }
-                Token::Text(text) => {
-                    if !in_document {
-                        continue;
-                    }
-                    let words = count_words(text);
-                    if words == 0 {
-                        continue;
-                    }
-                    file_words[file_idx] += words;
-                    match &mut current {
-                        Some((_, _, _, words_here)) => *words_here += words,
-                        None => preamble_words += words,
-                    }
-                }
-                _ => {}
-            }
+    // The entry is first. An in-document `\input` is consumed in place by
+    // `walk`; a file the entry never reaches that way (a preamble `\input`,
+    // deferred by the one-way `in_document` switch) is counted afterwards.
+    for idx in 0..files.len() {
+        if !visited[idx] {
+            walk(idx, files, &mut state, &mut visited);
         }
     }
-    if let Some(finished) = current {
-        sections.push(finished);
+    if let Some(finished) = state.current.take() {
+        state.sections.push(finished);
     }
 
     RawCounts {
-        preamble_words,
-        sections,
-        file_words,
+        preamble_words: state.preamble_words,
+        sections: state.sections,
+        file_words: state.file_words,
     }
+}
+
+/// Walk one file's tokens, recursing into an in-document `\input` in place.
+fn walk(idx: usize, files: &[TokenizedFile], state: &mut CountState, visited: &mut [bool]) {
+    visited[idx] = true;
+    for token in &files[idx].tokens {
+        match token {
+            Token::BeginDocument => state.in_document = true,
+            Token::Section { level, title, .. } => {
+                if !state.in_document {
+                    continue;
+                }
+                if let Some(finished) = state.current.take() {
+                    state.sections.push(finished);
+                }
+                let number = state.tracker.enter(*level);
+                let title_words = count_title_words(title);
+                state.file_words[idx] += title_words;
+                state.current = Some((*level, number, title.clone(), title_words));
+            }
+            Token::Text(text) => {
+                if !state.in_document {
+                    continue;
+                }
+                let words = count_words(text);
+                if words == 0 {
+                    continue;
+                }
+                state.file_words[idx] += words;
+                match &mut state.current {
+                    Some((_, _, _, words_here)) => *words_here += words,
+                    None => state.preamble_words += words,
+                }
+            }
+            Token::Command { name, args } if name == "input" && state.in_document => {
+                if let Some(child) = unvisited_input(files, args, visited) {
+                    walk(child, files, state, visited);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The still-unvisited file an `\input{arg}` names, if the argument resolves.
+fn unvisited_input(files: &[TokenizedFile], args: &[String], visited: &[bool]) -> Option<usize> {
+    let child = resolve_input(files, args.last()?)?;
+    (!visited[child]).then_some(child)
+}
+
+/// Index in `files` of the file an `\input{arg}` names, if it is collected.
+fn resolve_input(files: &[TokenizedFile], arg: &str) -> Option<usize> {
+    let candidate = tex_candidate(arg);
+    files
+        .iter()
+        .position(|file| path_matches(&file.path, &candidate))
+}
+
+/// `\input{X}` names `X.tex` when `X` carries no extension (matching
+/// [`crate::texutil::resolve_tex_path`]); the tokenizer keeps the argument as
+/// the author wrote it.
+fn tex_candidate(arg: &str) -> String {
+    if Path::new(arg).extension().is_some() {
+        arg.to_string()
+    } else {
+        format!("{arg}.tex")
+    }
+}
+
+/// True when `path` names `candidate`: equal as written (test fixtures use
+/// bare names) or ending in `/<candidate>` (production paths are absolute
+/// while the `\input` argument is project-relative).
+fn path_matches(path: &Path, candidate: &str) -> bool {
+    let path = path.to_string_lossy().replace('\\', "/");
+    path == candidate || path.ends_with(&format!("/{candidate}"))
 }
 
 /// Count words per section for a document.
@@ -392,6 +455,51 @@ more text
         assert_eq!(stats.preamble_words, 2);
         assert_eq!(paths_and_words(&stats), vec![("1".to_string(), 2)]);
         assert_eq!(stats.total_words, 4);
+    }
+
+    /// An `\input` inside the document must not push its sections past the
+    /// entry's own: they take their position in the numbering, like `outline`.
+    #[test]
+    fn input_sections_take_their_position_in_the_numbering() {
+        let files = files_from(&[
+            (
+                "main.tex",
+                "\\begin{document}\n\\section{Intro}\nintro body\n\\input{ch1}\n\\section{After}\nafter body\n\\end{document}",
+            ),
+            (
+                "ch1.tex",
+                "\\section{One}\none body\n\\subsection{Sub}\nsub body",
+            ),
+        ]);
+        let stats = count_document("Doc", &files);
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["1", "2", "2.1", "3"]);
+        assert_eq!(
+            paths_and_words(&stats),
+            vec![
+                ("1".to_string(), 3),
+                ("2".to_string(), 3),
+                ("2.1".to_string(), 3),
+                ("3".to_string(), 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn input_arguments_resolve_against_absolute_paths_by_suffix() {
+        let files = vec![
+            TokenizedFile {
+                path: PathBuf::from("/tmp/proj/main.tex"),
+                tokens: tokenize(""),
+            },
+            TokenizedFile {
+                path: PathBuf::from("/tmp/proj/sections/body.tex"),
+                tokens: tokenize(""),
+            },
+        ];
+        assert_eq!(resolve_input(&files, "sections/body"), Some(1));
+        assert_eq!(resolve_input(&files, "sections/body.tex"), Some(1));
+        assert_eq!(resolve_input(&files, "missing"), None);
     }
 
     #[test]
