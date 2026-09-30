@@ -204,7 +204,7 @@ texforge init
 | `texforge preview` | Rasterize PDF to PNG pages |
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, project |
 | `texforge update` | Update to the latest release (always asks first; default answer is NO) |
-| `texforge update --check` | Check for a newer release: exit 1 if available, 0 if up to date |
+| `texforge update --check` | Check for a newer release: exit 1 if available, 0 if up to date, 2 if the check could not be completed |
 | `texforge update --yes` | Install the update without asking |
 | `texforge config` | Interactive wizard to set user details (name, email, institution, language) |
 | `texforge config list` | Show all configured values |

@@ -114,8 +114,14 @@ enum Commands {
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
     /// Update texforge to the latest stable release (always asks first)
+    ///
+    /// Exit codes: 0 = up to date (or update installed / declined /
+    /// cargo-managed refusal), 1 = an update is available (--check mode),
+    /// 2 = the update check could not be completed (network, DNS, TLS,
+    /// HTTP ≥ 400, or an unparsable response; the cause is printed on
+    /// stderr).
     Update {
-        /// Only check: exit 1 when an update is available, 0 when up to date
+        /// Only report whether an update is available (exit 0 = up to date, 1 = update available, 2 = check failed)
         #[arg(long)]
         check: bool,
         /// Install the update without asking (the prompt defaults to NO)
@@ -289,10 +295,12 @@ impl Cli {
             }
             Commands::Doctor => commands::doctor::execute(),
             Commands::Update { check, yes } => {
-                // `update` reports status through exit codes — `--check` is 1
-                // for "update available" and 0 for "up to date" — so a non-zero
-                // code is a result, not an error to be wrapped in anyhow and
-                // printed as a failure. Exit explicitly instead.
+                // `update` reports status through exit codes — 0 up to date,
+                // 1 update available (`--check`), 2 the check itself could not
+                // be completed (cause already on stderr) — so a non-zero code
+                // is a result, not an error to be wrapped in anyhow and printed
+                // as a failure. Exit explicitly instead; a check error never
+                // becomes a bare anyhow failure.
                 let code = commands::update::run_update(check, yes)?;
                 if check || code != 0 {
                     std::process::exit(code);

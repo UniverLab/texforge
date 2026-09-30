@@ -317,8 +317,10 @@ fn drafts_never_win() {
 
 // ── Errors ──────────────────────────────────────────────────
 
+/// A failed lookup must exit 2 — never an `Err` (anyhow would exit 1 and a
+/// script would read the outage as "an update is available").
 #[test]
-fn release_lookup_errors_surface_loudly() {
+fn check_and_update_exit_2_when_the_release_lookup_fails() {
     let downloader = FakeDownloader::new(Vec::new());
     let deps = UpdateDeps {
         current: current(),
@@ -329,11 +331,65 @@ fn release_lookup_errors_surface_loudly() {
         downloader: &downloader,
         confirm: &|| true,
     };
-    let error = run_update_with(true, false, &deps).unwrap_err();
-    assert!(error.to_string().contains("network is down"));
-    let error = run_update_with(false, true, &deps).unwrap_err();
-    assert!(error.to_string().contains("network is down"));
-    assert!(!downloader.called());
+    assert_eq!(run_update_with(true, false, &deps).unwrap(), 2);
+    assert_eq!(run_update_with(false, true, &deps).unwrap(), 2);
+    assert!(!downloader.called(), "a failed check downloads nothing");
+}
+
+/// Run the injected-fetcher path end to end the way `run_update` wires it:
+/// fetch → one-line error string → hermetic core. Returns the exit code.
+/// No network: `FakeFetcher` stands in for the transport.
+fn exit_when_release_lookup_fails(check: bool, body: Result<String, String>) -> i32 {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let fetcher = FakeFetcher { body };
+    let releases = fetch_releases_with(&fetcher).map_err(|error| format!("{error:#}"));
+    assert!(releases.is_err(), "test premise: the lookup must fail");
+    let downloader = FakeDownloader::new(Vec::new());
+    let deps = UpdateDeps {
+        current: current(),
+        releases,
+        exe: &exe,
+        cargo_bin: &cargo_bin,
+        target: Ok(("x86_64-unknown-linux-musl", "tar.gz")),
+        downloader: &downloader,
+        confirm: &|| panic!("a failed check must not prompt"),
+    };
+    let code = run_update_with(check, false, &deps).unwrap();
+    assert!(!downloader.called(), "a failed check downloads nothing");
+    assert_eq!(
+        std::fs::read(&exe).unwrap(),
+        b"old",
+        "state must stay untouched"
+    );
+    code
+}
+
+#[test]
+fn check_exits_2_when_the_release_lookup_fails() {
+    assert_eq!(
+        exit_when_release_lookup_fails(true, Err("dns failure: no such host".to_string())),
+        2
+    );
+}
+
+#[test]
+fn check_exits_2_on_an_unparsable_response() {
+    assert_eq!(
+        exit_when_release_lookup_fails(true, Ok("not json".to_string())),
+        2
+    );
+}
+
+#[test]
+fn plain_update_exits_2_when_the_release_lookup_fails() {
+    assert_eq!(
+        exit_when_release_lookup_fails(
+            false,
+            Err("GitHub releases request failed: HTTP 403: Too Many Requests".to_string())
+        ),
+        2
+    );
 }
 
 #[test]
@@ -351,6 +407,54 @@ fn unsupported_target_fails_before_downloading() {
     let error = run_update_with(false, true, &deps).unwrap_err();
     assert!(error.to_string().contains("x86_64-windows"));
     assert!(!downloader.called());
+}
+
+// ── User-facing wording ─────────────────────────────────────
+
+#[test]
+fn arrow_line_drops_the_v_prefix() {
+    let current = SemVer::parse("v0.0.1").unwrap();
+    let latest = SemVer::parse("v0.9.0").unwrap();
+    assert_eq!(arrow_line(&current, &latest), "texforge 0.0.1 → 0.9.0");
+}
+
+#[test]
+fn up_to_date_line_prints_bare_version() {
+    let current = SemVer::parse("v0.9.0").unwrap();
+    assert_eq!(up_to_date_line(&current), "texforge 0.9.0 is up to date");
+}
+
+#[test]
+fn cargo_refusal_is_the_exact_sentence() {
+    assert_eq!(
+        cargo_refusal_line(),
+        "installed with cargo — run: cargo install --force texforge"
+    );
+}
+
+/// What lands on stderr on a failed check: exactly one line that names the
+/// cause — a multi-line error display would break any script parsing it.
+#[test]
+fn check_failure_cause_is_a_single_stderr_line() {
+    let chains = [
+        (
+            anyhow!("dns error: no such host").context("failed to fetch GitHub releases"),
+            "dns error: no such host",
+        ),
+        (
+            anyhow!("GitHub releases request failed: HTTP 403"),
+            "GitHub releases request failed: HTTP 403",
+        ),
+        (
+            anyhow!("expected value at line 1 column 1").context("failed to parse releases JSON"),
+            "expected value at line 1 column 1",
+        ),
+    ];
+    for (error, leaf) in chains {
+        let line = format!("update check failed: {error:#}");
+        assert!(!line.contains('\n'), "one line only: {line:?}");
+        assert!(line.contains(leaf), "names the cause: {line}");
+    }
 }
 
 // ── Consent and the cargo guard ─────────────────────────────

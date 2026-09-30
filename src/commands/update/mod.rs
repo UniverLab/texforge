@@ -10,8 +10,21 @@
 //!
 //! The passive notice `texforge init` shows lives here too, so there is one
 //! owner of the release check. That path never downloads by itself and stays
-//! quiet when the network is unavailable; only the explicit command fails
-//! loudly, because silence there would read as "you are up to date".
+//! quiet when the network is unavailable; the explicit command exits **2**
+//! with a single-line cause on stderr — for `--check` and plain `update`
+//! alike — because exit 1 must keep meaning "an update is available", and
+//! silence there would read as "you are up to date".
+//!
+//! Exit codes of `texforge update [--check]`:
+//!
+//! | code | meaning |
+//! |---|---|
+//! | `0` | up to date / update installed / prompt declined / cargo refusal |
+//! | `1` | `--check` only: a newer stable release **is available** |
+//! | `2` | the release **check could not be completed** (network, DNS, TLS, HTTP ≥ 400, unparsable response); the cause is the single line printed on stderr. Applies to `--check` *and* plain `update`. |
+//!
+//! Failures *after* a successful check (download, checksum, permissions)
+//! remain ordinary `Err`s and therefore exit 1 with the normal error print.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -139,24 +152,59 @@ pub struct UpdateDeps<'a> {
     pub confirm: &'a dyn Fn() -> bool,
 }
 
+// ── User-facing lines ────────────────────────────────────────────
+//
+// Every line the core prints goes through a helper so the wording is
+// locked by tests: versions print bare (`SemVer` Display drops the tag's
+// `v`), and the cargo refusal sentence stays byte-stable across the lab.
+
+/// `texforge 0.9.0 is up to date` — versions print bare (`SemVer` Display
+/// drops the tag's `v`), never `v0.9.0`.
+fn up_to_date_line(current: &SemVer) -> String {
+    format!("texforge {current} is up to date")
+}
+
+/// The update-available arrow: `texforge 0.0.1 → 0.9.0`.
+fn arrow_line(current: &SemVer, latest: &SemVer) -> String {
+    format!("texforge {current} → {latest}")
+}
+
+/// The cargo refusal sentence, byte-stable across the lab.
+fn cargo_refusal_line() -> String {
+    format!("installed with cargo — run: {CARGO_INSTALL_HINT}")
+}
+
 // ── Public update entry points ───────────────────────────────────
 
 /// Check for and, after consent, install the latest stable release.
 ///
-/// The returned integer is the process exit code: `0` means no update was
-/// installed (already current, a declined prompt, or a cargo-managed
-/// binary), and `1` is reserved for an available update in `--check` mode or
-/// an archive without the texforge binary. Network and API errors surface as
-/// `Err` — the explicit command fails loudly, unlike the silent notice path.
+/// The returned integer is the process exit code: `0` = up to date (or
+/// update installed / declined / cargo-managed refusal), `1` = an update is
+/// available in `--check` mode, `2` = the release check could not be
+/// completed (network, DNS, TLS, HTTP ≥ 400, unparsable response) — in that
+/// case the one-line cause goes to stderr. A check failure never becomes an
+/// `Err`; only install-phase failures (download, checksum, permissions) do,
+/// and those exit 1 through the normal error print.
 pub fn run_update(check: bool, yes: bool) -> Result<i32> {
     let current = get_local_version()?;
-    let releases = fetch_releases_with(&RealFetcher)?;
+    // A failed lookup is not an `Err`: it is the "check could not complete"
+    // outcome, carried as a one-line error chain through `UpdateDeps` so
+    // `--check` and plain update both exit 2 with the cause on stderr
+    // instead of anyhow's exit 1. `{:#}` flattens the anyhow chain onto
+    // one line — `to_string()` would drop every context layer but the
+    // first and hide the actual cause (dns error, HTTP 403, …).
+    let releases = fetch_releases_with(&RealFetcher).map_err(|error| format!("{error:#}"));
+    let latest = releases
+        .as_ref()
+        .ok()
+        .and_then(|releases| select_latest_stable(releases, &current));
 
-    match select_latest_stable(&releases, &current) {
+    match latest {
         // An actual install needs the executable and target facts. Resolve
-        // them only now, so `--check` never touches a local path and keeps
-        // working on platforms without release assets.
+        // them only now, so a failed check never touches a local path and
+        // `--check` keeps working on platforms without release assets.
         Some(latest) if !check => {
+            let releases = releases.expect("a newer release implies a successful lookup");
             let exe =
                 std::env::current_exe().context("failed to locate the texforge executable")?;
             let cargo_bin = cargo_bin_dir();
@@ -177,16 +225,16 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
             };
             run_update_with(false, yes, &deps)
         }
-        // No newer release, or a read-only `--check`: hand the network
-        // result to the same hermetic core, which owns all user-visible
-        // output, the cargo guard, and consent. The executable facts below
-        // are placeholders: neither path reaches them (`--check` returns
-        // before the cargo guard; "up to date" returns before the prompt),
-        // so they must never name a real location.
+        // Up to date, a failed check, or a read-only `--check`: the
+        // hermetic core owns every user-visible line and the exit-code
+        // contract. The executable facts below are placeholders: neither
+        // path reaches them (`--check` returns before the cargo guard;
+        // "up to date" and a failed check return before the prompt), so
+        // they must never name a real location.
         _ => {
             let deps = UpdateDeps {
                 current: &current,
-                releases: Ok(releases),
+                releases,
                 exe: Path::new(""),
                 cargo_bin: Path::new(""),
                 target: Ok(release_target()),
@@ -200,7 +248,11 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
 
 /// Hermetic update flow used by unit tests and embedders. It has no
 /// network or filesystem setup step; callers provide those facts through
-/// [`UpdateDeps`].
+/// [`UpdateDeps`]. Exit codes follow the contract of [`run_update`]: `Ok(2)`
+/// with one stderr line when `deps.releases` is an `Err` (the check could
+/// not be completed), `Ok(1)` for an available update under `--check`,
+/// `Ok(0)` otherwise; local install-phase failures surface as `Err` (exit 1
+/// via the normal error print).
 pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<i32> {
     run_update_core(check, yes, deps)
 }
@@ -209,17 +261,23 @@ pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<
 /// cargo guard, and consent live here so `--check`, the explicit command,
 /// and the unit tests all exercise the same flow.
 fn run_update_core(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<i32> {
-    let releases = deps
-        .releases
-        .as_ref()
-        .map_err(|error| anyhow!("release lookup failed: {error}"))?;
+    let releases = match deps.releases.as_ref() {
+        Ok(releases) => releases,
+        Err(cause) => {
+            // Contract: the check could not complete — one stderr line,
+            // exit 2. Applies to `--check` and a plain update alike, and
+            // nothing below (cargo guard, target, prompt, download) runs.
+            eprintln!("update check failed: {cause}");
+            return Ok(2);
+        }
+    };
     let current = deps.current;
 
     let Some(latest) = select_latest_stable(releases, current) else {
-        println!("texforge {current} is up to date");
+        println!("{}", up_to_date_line(current));
         return Ok(0);
     };
-    println!("texforge {current} → {latest}");
+    println!("{}", arrow_line(current, &latest));
 
     // `--check` ends here: exit 1 = update available, 0 = already current.
     // Nothing below this line — cargo guard, target, prompt, download — may
@@ -230,7 +288,7 @@ fn run_update_core(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<i32>
 
     if is_cargo_installed(deps.exe, deps.cargo_bin) {
         // cargo owns that file: a refusal with guidance, not a failure.
-        println!("installed with cargo — run: {CARGO_INSTALL_HINT}");
+        println!("{}", cargo_refusal_line());
         return Ok(0);
     }
 

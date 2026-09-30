@@ -52,7 +52,7 @@ The explicit command is the primary path:
 
 ```bash
 texforge update            # shows the newer version and asks (default answer: NO)
-texforge update --check    # exit 1 if an update is available, 0 if up to date
+texforge update --check    # exit 1 if an update is available, 0 if up to date, 2 if the check could not be completed
 texforge update --yes      # install without asking
 ```
 
@@ -61,8 +61,9 @@ SHA256 checksum when the release ships one, and replaces the binary that is
 running (typically `~/.local/bin/texforge` for installer installs) atomically
 and in place. It never updates silently: you are always asked first, and
 declining leaves everything untouched. If the network or the GitHub API is
-unavailable, the command reports the error and exits non-zero — a failed
-check never reads as "you are up to date".
+unavailable, the command exits `2` with the cause on stderr — a failed check
+never reads as "you are up to date" and never reads as an update being
+available.
 
 `texforge init` still shows a passive notice (at most once a day) when a
 newer release exists; that notice never downloads unless you answer yes.
