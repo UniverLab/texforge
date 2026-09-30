@@ -23,9 +23,10 @@ pub const DEFAULT_EPOCH: u64 = 1700000000;
 ///
 /// On a successful build, warnings emitted by the engine are parsed and
 /// printed to the console — summarized per file, or every occurrence with
-/// `verbose` — without changing the success exit code. The returned warnings
-/// are attributed through `line_map`, so warnings inside rewritten listing
-/// blocks point at the author's source file and line, not the build copy.
+/// `verbose` — without changing the success exit code. Both the returned
+/// warnings and the errors of a failed run are attributed through
+/// `line_map`, so locations inside rewritten listing blocks point at the
+/// author's source file and line, not the build copy.
 pub fn compile(
     root: &Path,
     entry: &str,
@@ -46,10 +47,7 @@ pub fn compile(
     let mut warnings = parse_warnings(&raw);
     if !line_map.is_empty() {
         for warning in &mut warnings {
-            if let Some((file, line)) = line_map.get(&warning.file, warning.line) {
-                warning.file = file.to_string();
-                warning.line = line;
-            }
+            remap_location(&mut warning.file, &mut warning.line, line_map);
         }
     }
 
@@ -58,7 +56,12 @@ pub fn compile(
         return Ok(warnings);
     }
 
-    let errors = parse_errors(&raw);
+    let mut errors = parse_errors(&raw);
+    if !line_map.is_empty() {
+        for error in &mut errors {
+            remap_location(&mut error.file, &mut error.line, line_map);
+        }
+    }
     if errors.is_empty() {
         anyhow::bail!("Compilation failed:\n{}", raw.trim());
     }
@@ -71,6 +74,17 @@ pub fn compile(
         ));
     }
     anyhow::bail!("{}", msg.trim());
+}
+
+/// Rewrite one parsed `file:line` location through the build-copy line
+/// map. Locations the map does not know (files the pass never touched,
+/// lines past the map) stay exactly as the engine reported them, so an
+/// empty map is a no-op.
+fn remap_location(file: &mut String, line: &mut usize, line_map: &LineMap) {
+    if let Some((mapped_file, mapped_line)) = line_map.get(file, *line) {
+        *file = mapped_file.to_string();
+        *line = mapped_line;
+    }
 }
 
 /// Build the Tectonic invocation. Reproducible builds set `SOURCE_DATE_EPOCH`;
@@ -964,5 +978,57 @@ mod tests {
             overfull.iter().any(|w| w.line == 5),
             "the long line is source line 5: {overfull:?}"
         );
+    }
+
+    /// [`remap_location`] moves mapped locations and leaves everything
+    /// else — untouched files, out-of-range lines — exactly as reported.
+    #[test]
+    fn remap_location_moves_known_files_and_leaves_the_rest() {
+        let mut map = LineMap::default();
+        map.file_mut("main.tex").extend([1, 2, 9]);
+
+        let mut file = "main.tex".to_string();
+        let mut line = 3;
+        remap_location(&mut file, &mut line, &map);
+        assert_eq!((file.as_str(), line), ("main.tex", 9));
+
+        let mut file = "other.tex".to_string();
+        let mut line = 3;
+        remap_location(&mut file, &mut line, &map);
+        assert_eq!((file.as_str(), line), ("other.tex", 3));
+
+        let mut file = String::new();
+        let mut line = 0;
+        remap_location(&mut file, &mut line, &LineMap::default());
+        assert_eq!((file.as_str(), line), ("", 0));
+    }
+
+    /// An engine error after a rewritten block is reported at the source
+    /// line, not the build copy's shifted line (the rewrite and the
+    /// injected preamble both move it). Skips without Tectonic.
+    #[test]
+    fn error_after_a_block_is_reported_as_the_source_line() {
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{article}\n\\begin{document}\n\
+                    \\begin{code}\nshort\n\\end{code}\nProse.\n\\undefinedcommand\n\\end{document}\n";
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+        // Source line 7 holds the undefined command.
+        let map = crate::highlight::process(
+            dir.path(),
+            "main.tex",
+            crate::highlight::Settings::default(),
+        )
+        .unwrap();
+        let err = compile(dir.path(), "main.tex", false, None, &map).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ERROR [main.tex:7]"),
+            "the error must point at source line 7: {msg}"
+        );
+        assert!(!msg.contains("ERROR [main.tex:21]"), "{msg}");
     }
 }

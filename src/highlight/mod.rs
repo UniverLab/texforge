@@ -160,8 +160,8 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
     if rewritten_any {
         let color_loaded = preamble::color_pkg_visible_load(&sources);
         let block = preamble::injected_block(&colors, has_gutter, color_loaded, cfg.theme);
-        let anchor = preamble::inject_entry(&build_dir.join(entry), &block)?;
-        line_map.shift_for_injection(entry, anchor, block.lines().count());
+        let (anchor, entry_lines) = preamble::inject_entry(&build_dir.join(entry), &block)?;
+        line_map.shift_for_injection(entry, anchor, block.lines().count(), entry_lines);
     }
     Ok((warnings, line_map))
 }
@@ -766,8 +766,8 @@ mod tests {
         );
 
         let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
-        assert!(out.contains("\\hbox to 2em{1\\hss}"));
-        assert!(out.contains("\\hbox to 2em{3\\hss}"));
+        assert!(out.contains("\\hbox to 2em{\\hss 1}"));
+        assert!(out.contains("\\hbox to 2em{\\hss 3}"));
         assert!(out.contains("\\definecolor{tfxgutter}"));
     }
 
@@ -962,6 +962,47 @@ mod tests {
         // The blank separator right after it — the line Tectonic reports for
         // the paragraph — maps to the code line above, not below.
         assert_eq!(map.get("main.tex", build_line + 1), Some(("main.tex", 5)));
+    }
+
+    /// The injection target need not own a block: when the only block lives
+    /// in an `\input`, the entry's own lines still shift with the injected
+    /// preamble and must stay mapped. Regression: the shift used to size the
+    /// entry's map from an empty (unrecorded) origins vector, so every entry
+    /// line below the anchor fell out of range and its warning kept the
+    /// build-copy number.
+    #[test]
+    fn entry_without_its_own_block_stays_mapped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\\input{body}\nProse.\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("body.tex"),
+            "\\begin{code}[lang=python]\nx = 1\n\\end{code}\n",
+        )
+        .unwrap();
+
+        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(rewritten.contains("texforge code listings"), "{rewritten}");
+
+        // `Prose.` is source line 4; injection moved it down the build copy.
+        let build_line = rewritten
+            .lines()
+            .position(|line| line == "Prose.")
+            .expect("Prose. must survive into the build copy")
+            + 1;
+        assert!(
+            build_line > 4,
+            "the injected preamble must have shifted it: {build_line}"
+        );
+        assert_eq!(
+            map.get("main.tex", build_line),
+            Some(("main.tex", 4)),
+            "an entry line below the anchor must map back to its source line"
+        );
     }
 
     /// Bless-or-compare helper for the frame snapshots below.

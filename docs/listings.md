@@ -122,12 +122,15 @@ the first two and the last two lines are glued together.
   are rewritten and before the preamble is injected. Without a diagram
   block in front of them those are exactly your source file's line
   numbers; the diagram pass (and, later, the rewrite and injection here)
-  move the finished build copy. Engine (Tectonic) warnings inside
-  rewritten blocks are remapped back through the build-copy line map, so
-  `texforge build` reports them as your source file and line (files
-  reached via `\input` may be reported with or without `.tex`; the map
-  normalises both). (An unknown *option* warns without a line: the option
-  parser is shared with the diagram blocks.)
+  move the finished build copy. Engine (Tectonic) warnings and errors in
+  a file the pass rewrote — or in the entry, where the preamble is
+  injected even when its own blocks live in an `\input` — are remapped
+  back through the build-copy line map, so `texforge build` points them
+  at those same pass-input coordinates (same caveat: with a diagram block
+  in front they are build-copy lines, not source lines; files reached via
+  `\input` may be reported with or without `.tex`, and the map normalises
+  both). (An unknown *option* warns without a line: the option parser is
+  shared with the diagram blocks.)
 - Only a real block counts: a `\begin{code}` behind a `%`, or quoted
   inside `verbatim`/`lstlisting`, is text — the pass ignores it and the
   document stays byte-identical.

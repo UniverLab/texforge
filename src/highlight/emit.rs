@@ -84,11 +84,13 @@ fn display_width(line: &str, numbers: bool, gutter_width: usize) -> usize {
     }
 }
 
-/// The `\noindent` paragraph for one numbered line: just the number box.
-/// The 0.3pt separator rule and the 0.8em gap are emitted separately by
-/// [`render_block`] so the rule sits between gutter and code.
+/// The number box for one numbered line, right-aligned inside its
+/// `{width}em` gutter: the stretchable `\hss` comes *first*, so the digit
+/// hugs the 0.3pt separator rule instead of the frame's left edge (the
+/// separator rule and the 0.8em gap are emitted separately by
+/// [`render_block`]).
 fn gutter(number: usize, width: usize) -> String {
-    format!("\\textcolor{{tfxgutter}}{{\\hbox to {width}em{{{number}\\hss}}}}")
+    format!("\\textcolor{{tfxgutter}}{{\\hbox to {width}em{{\\hss {number}}}}}")
 }
 
 /// Width of the gutter: at least two columns, wider only when the block has
@@ -456,9 +458,11 @@ mod tests {
     fn gutter_separator_rule_inside_the_frame() {
         let (out, _, _, _) = render("a", None, &opts("main.tex", 1, true));
         assert!(out.contains("\\kern4pt"), "out: {out}");
+        // The `\hss` precedes the digit: the number is right-aligned in its
+        // gutter box, hugging the separator rule (FR3).
         assert!(
-            out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{1\\hss}}"),
-            "out: {out}"
+            out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 1}}"),
+            "right-aligned gutter: {out}"
         );
         assert!(
             out.contains("\\textcolor{tfxframe}{\\rule[-6.4pt]{0.3pt}"),
@@ -541,9 +545,9 @@ mod tests {
     #[test]
     fn numbered_blank_lines_keep_their_number() {
         let (out, _, _, _) = render("a\n\nb", None, &opts("main.tex", 1, true));
-        assert!(out.contains("\\hbox to 2em{1\\hss}"), "out: {out}");
-        assert!(out.contains("\\hbox to 2em{2\\hss}"), "out: {out}");
-        assert!(out.contains("\\hbox to 2em{3\\hss}"), "out: {out}");
+        assert!(out.contains("\\hbox to 2em{\\hss 1}"), "out: {out}");
+        assert!(out.contains("\\hbox to 2em{\\hss 2}"), "out: {out}");
+        assert!(out.contains("\\hbox to 2em{\\hss 3}"), "out: {out}");
         assert!(
             !out.contains("\\mbox{}"),
             "the gutter box is the line: {out}"
@@ -601,8 +605,8 @@ mod tests {
     #[test]
     fn numbered_blocks_prefix_every_line_with_the_gutter() {
         let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, true));
-        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{1\\hss}}"));
-        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{2\\hss}}"));
+        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 1}}"));
+        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 2}}"));
         assert!(out.contains("\\hspace{0.8em}"));
     }
 

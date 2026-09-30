@@ -165,9 +165,13 @@ fn package_list_loads_color(list: &str) -> bool {
 
 /// Insert the injected block into the entry file, right before
 /// `\begin{document}`. Fails with a clear message (never a panic) when the
-/// anchor is missing — such a document does not compile anyway. Returns the
-/// 1-based line the anchor sits on, so the caller can shift its line map.
-pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<usize> {
+/// anchor is missing — such a document does not compile anyway. Returns
+/// `(anchor_line, line_count)`: the 1-based line the anchor sits on, and the
+/// number of lines the file had *before* injection. The caller needs both to
+/// shift its line map — `line_count` so an entry file that had no code block
+/// of its own (hence no recorded origins) still gets a full-length map, not
+/// one truncated to the injected lines.
+pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<(usize, usize)> {
     let content =
         std::fs::read_to_string(entry).with_context(|| format!("entry '{}'", entry.display()))?;
     let anchor = "\\begin{document}";
@@ -178,12 +182,13 @@ pub(crate) fn inject_entry(entry: &Path, block: &str) -> Result<usize> {
         );
     };
     let anchor_line = 1 + content[..pos].matches('\n').count();
+    let line_count = content.lines().count();
     let mut out = String::with_capacity(content.len() + block.len());
     out.push_str(&content[..pos]);
     out.push_str(block);
     out.push_str(&content[pos..]);
     std::fs::write(entry, out).with_context(|| format!("entry '{}'", entry.display()))?;
-    Ok(anchor_line)
+    Ok((anchor_line, line_count))
 }
 
 /// Refuse to rewrite a document that already owns the `code` environment or
@@ -458,7 +463,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let entry = dir.path().join("main.tex");
         std::fs::write(&entry, "\\documentclass{article}\n\\begin{document}\nHi.\n").unwrap();
-        inject_entry(&entry, "% injected\n").unwrap();
+        // Anchor on line 2; the pre-injection file has three lines.
+        let (anchor, lines) = inject_entry(&entry, "% injected\n").unwrap();
+        assert_eq!((anchor, lines), (2, 3));
         let written = std::fs::read_to_string(&entry).unwrap();
         assert_eq!(
             written,
