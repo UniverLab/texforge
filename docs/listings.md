@@ -117,10 +117,12 @@ the first two and the last two lines are glued together.
   so indentation survives. A line wider than ~90 columns warns
   (`code line is {n} chars wide …`) — split the line; TeX still reports its
   own overfull boxes as well.
-- Special characters (`\ { } $ & # _ % ~ ^ < > " ' \``) are escaped at the
+- Special characters (`` \ { } $ & # _ % ~ ^ < > " ' ` ``) are escaped at the
   character level, so code can never be misread as LaTeX (`"` uses
   `\char34{}`, which stays safe under `babel` shorthands such as spanish;
   `%` uses `\char37{}` so spanish `babel` cannot drop the preceding space;
+  `<`/`>` use `\char60{}`/`\char62{}` so they print one exact monospace
+  cell instead of a wider math glyph;
   `'`/`` ` `` use `\textquotesingle{}`/`\textasciigrave{}` so the listing
   keeps straight, copy-pasteable quotes).
   `|` prints as-is.

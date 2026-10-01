@@ -1216,10 +1216,11 @@ mod tests {
                 // spanish `babel` redefines `\%` to eat the preceding interword
                 // glue and insert a thin space, which used to knock every glyph
                 // after a `$ %` off the monospace grid; the emitter prints `%`
-                // as `\char37{}` instead.
+                // as `\char37{}` instead. The second line compiles `<`/`>`
+                // (`\char60{}`/`\char62{}`) under the same spanish shorthands.
                 "spanish-percent",
                 "\\usepackage[spanish]{babel}\n",
-                "\\begin{code}[lang=bash]\necho '$ % & # _ ^ ~ { } \\'\n\\end{code}\n",
+                "\\begin{code}[lang=bash]\necho '$ % & # _ ^ ~ { } \\'\ncat < in.txt > out 2>&1\n\\end{code}\n",
                 false,
                 "echo",
             ),

@@ -72,8 +72,16 @@ pub(crate) fn escape_char(c: char) -> Option<&'static str> {
         // `"` would be misread as `\language@active@arg"`. `\char34{}` prints
         // the glyph without ever emitting a `"` character.
         '"' => Some("\\char34{}"),
-        '<' => Some("\\(<\\)"),
-        '>' => Some("\\(>\\)"),
+        // `<`/`>` are active under `babel` shorthands (spanish quoting:
+        // `<<`/`>>` guillemets plus the `system` single-character
+        // shorthands), so raw angle brackets must never be emitted.
+        // `\char60{}`/`\char62{}` print the font's own glyphs without ever
+        // reading an active token — and, unlike the previous `\(<\)`/`\(>\)`
+        // math wrap, occupy exactly one monospace cell: a math `>` measures
+        // 8.48 pt against the 5.73 pt cell, which shifted every glyph after
+        // a `->` or `=>` off the column grid.
+        '<' => Some("\\char60{}"),
+        '>' => Some("\\char62{}"),
         ' ' => Some("\\tfxsp{}"),
         '\t' => Some("\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}"),
         '\r' => Some(""),
@@ -387,8 +395,8 @@ mod tests {
         assert_eq!(escape_char('~'), Some("\\textasciitilde{}"));
         assert_eq!(escape_char('^'), Some("\\textasciicircum{}"));
         assert_eq!(escape_char('"'), Some("\\char34{}"));
-        assert_eq!(escape_char('<'), Some("\\(<\\)"));
-        assert_eq!(escape_char('>'), Some("\\(>\\)"));
+        assert_eq!(escape_char('<'), Some("\\char60{}"));
+        assert_eq!(escape_char('>'), Some("\\char62{}"));
         assert_eq!(escape_char(' '), Some("\\tfxsp{}"));
         assert_eq!(
             escape_char('\t'),
@@ -417,7 +425,7 @@ mod tests {
         assert!(out.ends_with("\\par\n}"), "out: {out}");
         assert!(
             out.contains(
-                "\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}a\\tfxsp{}=\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}\\$\\tfxsp{}\\char37{}\\tfxsp{}\\textasciicircum{}\\tfxsp{}\\&\\tfxsp{}\\_\\tfxsp{}\\{\\tfxsp{}\\}\\tfxsp{}\\textasciitilde{}\\tfxsp{}\\(<\\)\\(>\\)"
+                "\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}a\\tfxsp{}=\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}\\$\\tfxsp{}\\char37{}\\tfxsp{}\\textasciicircum{}\\tfxsp{}\\&\\tfxsp{}\\_\\tfxsp{}\\{\\tfxsp{}\\}\\tfxsp{}\\textasciitilde{}\\tfxsp{}\\char60{}\\char62{}"
             ),
             "the escaped payload must survive byte-for-byte: {out}"
         );
@@ -481,6 +489,24 @@ mod tests {
         assert!(!out.contains('\''), "no raw apostrophe may survive: {out}");
         // Backtick check must exclude the wrapper's own backslashes:
         assert!(!out.contains("`"), "no raw backtick may survive: {out}");
+    }
+
+    /// Req 2: `<`/`>` print as one exact monospace cell — the old math wrap
+    /// `\(<\)`/`\(>\)` typeset a 8.48 pt math glyph against the 5.73 pt
+    /// cell, shifting everything after `->`/`=>` off the column grid — and
+    /// they never reach `babel`'s active spanish quoting shorthands.
+    #[test]
+    fn angle_brackets_print_one_exact_cell_without_math() {
+        let (out, _, _, _) = render("a -> b < c\n", None, &opts("main.tex", 1, false));
+        assert!(
+            out.contains("a\\tfxsp{}-\\char62{}\\tfxsp{}b\\tfxsp{}\\char60{}\\tfxsp{}c"),
+            "out: {out}"
+        );
+        assert!(!out.contains("\\("), "no math wrap may survive: {out}");
+        assert!(
+            !out.contains('<') && !out.contains('>'),
+            "no raw angle bracket may survive: {out}"
+        );
     }
 
     #[test]
