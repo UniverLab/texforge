@@ -516,7 +516,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::super::lint_files;
-    use super::super::test_support::{hunspell_fixture_paths, ENV_MUTEX};
+    use super::super::test_support::hunspell_fixture_paths;
+    use crate::test_sync::ENV_LOCK;
 
     #[test]
     fn installed_dictionaries_in_empty_dir_returns_empty() {
@@ -592,7 +593,9 @@ mod tests {
 
     #[test]
     fn ensure_dictionary_bails_in_test_harness_environment() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Simulate being run under a test harness like nextest by setting a
         // recognized environment variable. ensure_dictionary must not attempt
         // network activity in this case and should return an Err.
@@ -767,7 +770,9 @@ mod tests {
     /// one language, `ensure_dictionary` must choose the Hunspell pair.
     #[test]
     fn ensure_dictionary_prefers_hunspell_pair_when_both_present() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -798,7 +803,9 @@ mod tests {
     /// missing-dictionary path and its skip message), never a panic.
     #[test]
     fn lint_files_treats_dic_without_aff_as_no_dictionary_available() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -835,7 +842,9 @@ mod tests {
     /// path a user already tried before this feature existed (decision 2).
     #[test]
     fn global_whitelist_path_is_home_texforge_spell_words() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let orig_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home.path());
@@ -864,7 +873,9 @@ mod tests {
     /// (requirement 6).
     #[test]
     fn a_global_only_word_is_accepted_in_a_project_with_no_whitelist_file() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -908,7 +919,9 @@ mod tests {
     /// is best-effort, same as the project-local files.
     #[test]
     fn missing_global_whitelist_yields_no_error_and_no_findings_change() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -950,7 +963,9 @@ mod tests {
     /// are both accepted together (decision 3).
     #[test]
     fn project_and_global_whitelists_union_rather_than_override() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -1018,7 +1033,7 @@ mod tests {
     }
 
     /// Save the harness-detection vars, clear them, run `f`, then restore.
-    /// Callers must hold [`ENV_MUTEX`]: the environment is process-global.
+    /// Callers must hold [`ENV_LOCK`]: the environment is process-global.
     fn with_harness_env_cleared(f: impl FnOnce()) {
         const VARS: &[&str] = &[
             "RUST_TEST_THREADS",
@@ -1042,7 +1057,9 @@ mod tests {
 
     #[test]
     fn is_test_harness_detects_each_signal_alone() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for var in [
             "RUST_TEST_THREADS",
             "NEXTEST_CURRENT_RUN_ID",
@@ -1058,7 +1075,9 @@ mod tests {
 
     #[test]
     fn is_test_harness_is_false_with_no_signal() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         with_harness_env_cleared(|| {
             assert!(!is_test_harness());
         });
@@ -1122,7 +1141,9 @@ mod tests {
 
     #[test]
     fn installed_dictionaries_lists_the_managed_dir() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts).unwrap();

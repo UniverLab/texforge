@@ -1,17 +1,14 @@
 //! Test-only helpers shared by the spell-check test modules.
 //!
 //! Every test that mutates `HOME` or the dictionary environment must hold
-//! [`ENV_MUTEX`]: the environment is process-global while `cargo test`
-//! runs threads in parallel, and two overlapping tests would swap `HOME`
-//! out from under each other.
+//! [`crate::test_sync::ENV_LOCK`]: the environment is process-global while
+//! `cargo test` runs threads in parallel, and two overlapping tests would
+//! swap `HOME` out from under each other.
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use tempfile::TempDir;
-
-pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 // --- TE11: Hunspell backend via `spellbook`, hand-written fixture pair ---
 
@@ -32,7 +29,9 @@ pub(super) fn run_with_home<F, R>(spanish_words: &str, english_words: &str, f: F
 where
     F: FnOnce() -> R,
 {
-    let _lock = ENV_MUTEX.lock().unwrap();
+    let _lock = crate::test_sync::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TempDir::new().unwrap();
     let dicts_dir = home.path().join(".texforge").join("dicts");
     fs::create_dir_all(&dicts_dir).unwrap();

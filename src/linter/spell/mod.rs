@@ -140,14 +140,17 @@ pub fn lint_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
-    use super::test_support::{hunspell_fixture_paths, ENV_MUTEX};
-    use std::fs;
+    use super::test_support::hunspell_fixture_paths;
+    use crate::test_sync::ENV_LOCK;
 
     #[test]
     fn tokenizer_integration_does_not_flag_commands_or_labels() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -189,7 +192,9 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// checking Spanish prose against English words.
     #[test]
     fn spanish_document_with_only_english_dictionary_emits_no_unknown_word_warnings() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -233,7 +238,9 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// proven by a Spanish word passing and an English-only word failing.
     #[test]
     fn spanish_document_checks_against_spanish_dictionary_not_english() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -274,7 +281,9 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// genuine misspelling (requirement 10).
     #[test]
     fn spanish_document_checks_against_installed_hunspell_pair() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -322,7 +331,9 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// wrong line of the document.
     #[test]
     fn unknown_word_is_reported_on_its_own_source_line() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -361,7 +372,9 @@ Hello world. This is some text. \label{sec:intro} More text.
     /// `--global` since global became the default (requirement 9).
     #[test]
     fn unknown_word_suggestion_names_spell_add_and_local_flag() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(

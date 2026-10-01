@@ -161,8 +161,8 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    use super::super::test_support::ENV_MUTEX;
     use super::super::{lint_files, Severity};
+    use crate::test_sync::ENV_LOCK;
 
     // --- TE6: language resolution must not silently default to English ---
 
@@ -309,7 +309,9 @@ mod tests {
     /// findings) so the disagreement warning is the only finding produced.
     #[test]
     fn disagreement_warning_names_both_languages_and_points_at_declaration() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -357,7 +359,9 @@ mod tests {
 
     #[test]
     fn no_disagreement_warning_when_declared_matches_configured_default() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
 
@@ -386,7 +390,9 @@ mod tests {
 
     #[test]
     fn no_disagreement_warning_without_babel_declaration() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -423,7 +429,9 @@ mod tests {
     /// produce exactly one warning, not one per file.
     #[test]
     fn multi_file_project_with_matching_declarations_produces_one_warning() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         fs::create_dir_all(home.path().join(".texforge").join("dicts")).unwrap();
         fs::write(
@@ -473,7 +481,9 @@ mod tests {
     /// English keeps the plain wordlist, so the hint names the `.txt`.
     #[test]
     fn expected_dictionary_hint_names_the_dic_for_hunspell_and_the_txt_for_wordlists() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let orig_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home.path());

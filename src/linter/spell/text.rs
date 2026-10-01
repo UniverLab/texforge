@@ -106,7 +106,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::super::lint_files;
-    use super::super::test_support::ENV_MUTEX;
+    use crate::test_sync::ENV_LOCK;
 
     // --- TE12: ligature-workaround empty groups must not split words ---
 
@@ -115,7 +115,9 @@ mod tests {
     /// workaround.
     #[test]
     fn ligature_workaround_empty_groups_are_checked_as_joined_words() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -152,7 +154,9 @@ mod tests {
     /// since a fragment is not something the author can search for.
     #[test]
     fn misspelled_word_with_empty_group_is_reported_as_joined_word() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();
@@ -197,7 +201,9 @@ mod tests {
     /// mid-word case.
     #[test]
     fn empty_group_at_start_end_and_doubled_behave_sanely() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = TempDir::new().unwrap();
         let dicts_dir = home.path().join(".texforge").join("dicts");
         fs::create_dir_all(&dicts_dir).unwrap();

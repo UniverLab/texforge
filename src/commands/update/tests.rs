@@ -2,7 +2,7 @@ use super::*;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use crate::linter::spell::test_support::ENV_MUTEX;
+use crate::test_sync::ENV_LOCK;
 
 /// The compiled-in version, handed out as `&'static SemVer` so every test
 /// can build `UpdateDeps` without juggling borrows.
@@ -906,7 +906,9 @@ fn resolve_target_returns_the_published_triple_not_the_unknown_sentinel() {
 /// them, so a parallel `cargo test` run cannot observe the swap.
 #[test]
 fn cargo_bin_dir_follows_the_environment_precedence() {
-    let _env = ENV_MUTEX.lock().unwrap();
+    let _env = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     fn with_var(name: &str, value: Option<&str>, f: impl FnOnce()) {
         let saved = std::env::var(name).ok();
         match value {
@@ -959,7 +961,9 @@ fn cargo_bin_dir_follows_the_environment_precedence() {
 /// Runs against the real data directory — nothing else touches this stamp.
 #[test]
 fn the_notice_is_stamped_by_record_check_and_due_again_without_a_stamp() {
-    let _env = ENV_MUTEX.lock().unwrap();
+    let _env = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = crate::utils::data_dir().expect("HOME is available in tests");
     let stamp = dir.join(LAST_CHECK_FILE);
     let saved = std::fs::read(&stamp).ok();
