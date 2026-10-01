@@ -173,8 +173,9 @@ they have no `style=` option, so one there warns like any other unknown
 **Printing.** The dark styles lay down a good deal more ink and are meant for
 screen and for colour printers; the `-mono` styles are the black-and-white
 choice, where weight and slant carry the structure instead of hue. Every
-token in every style meets WCAG AA contrast (4.5:1) against its own
-background.
+token in the `dark`, `light-mono` and `dark-mono` styles meets WCAG AA
+contrast (4.5:1) against its own background; `light` is the long-standing
+palette and is byte-identical by design, so its contrast is unchanged.
 
 ## The frame
 

@@ -144,9 +144,9 @@ impl From<SyntectFont> for FontStyle {
     /// syntect allows any combination of the three flags; the listings only
     /// ever set one, and bold wins over italic when both arrive.
     fn from(style: SyntectFont) -> Self {
-        if style == SyntectFont::BOLD {
+        if style.contains(SyntectFont::BOLD) {
             Self::Bold
-        } else if style == SyntectFont::ITALIC {
+        } else if style.contains(SyntectFont::ITALIC) {
             Self::Italic
         } else {
             Self::Normal
@@ -731,6 +731,17 @@ mod tests {
         };
         assert_eq!(flag("keyword"), Some(SyntectFont::BOLD));
         assert_eq!(flag("comment"), Some(SyntectFont::ITALIC));
+    }
+
+    /// `FontStyle::from` follows its documented precedence: bold wins when
+    /// syntect reports both flags, underline alone carries no emphasis.
+    #[test]
+    fn font_style_from_prefers_bold_over_italic() {
+        assert_eq!(
+            FontStyle::from(SyntectFont::BOLD | SyntectFont::ITALIC),
+            FontStyle::Bold
+        );
+        assert_eq!(FontStyle::from(SyntectFont::UNDERLINE), FontStyle::Normal);
     }
 
     /// WCAG AA (4.5:1) for every token against its own frame. The two `light`
