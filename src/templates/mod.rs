@@ -251,7 +251,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn set_download_override<F>(f: F)
+pub(crate) fn set_download_override<F>(f: F)
 where
     F: Fn(&str) -> std::result::Result<HashMap<String, Vec<u8>>, anyhow::Error> + 'static,
 {
@@ -259,7 +259,7 @@ where
 }
 
 #[cfg(test)]
-fn clear_download_override() {
+pub(crate) fn clear_download_override() {
     TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = None);
 }
 
