@@ -198,6 +198,14 @@ mod tests {
     }
 
     #[test]
+    fn normalize_babel_option_maps_every_english_spelling() {
+        assert_eq!(normalize_babel_option("english"), Some("english"));
+        assert_eq!(normalize_babel_option("en"), Some("english"));
+        assert_eq!(normalize_babel_option("USenglish"), Some("english"));
+        assert_eq!(normalize_babel_option("UKenglish"), Some("english"));
+    }
+
+    #[test]
     fn resolve_language_infers_spanish_from_babel_preamble() {
         let src = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
         let files = vec![("main.tex".to_string(), src.to_string())];

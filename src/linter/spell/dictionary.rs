@@ -87,6 +87,34 @@ pub(super) enum DictionaryLocation {
     Hunspell { dic: PathBuf, aff: PathBuf },
 }
 
+/// Whether both halves of a Hunspell `.dic`/`.aff` pair are on disk and
+/// usable. Both files must exist: a lone `.dic` (or lone `.aff`) is not a
+/// dictionary and falls through to the wordlist / download paths below.
+fn hunspell_pair_present(
+    dic_path: Option<&PathBuf>,
+    aff_path: Option<&PathBuf>,
+) -> Option<(PathBuf, PathBuf)> {
+    let (dic, aff) = (dic_path?, aff_path?);
+    if dic.exists() && aff.exists() {
+        Some((dic.clone(), aff.clone()))
+    } else {
+        None
+    }
+}
+
+/// Whether this process runs under a test harness (or CI). During tests —
+/// and when running under harnesses such as nextest — avoid any network
+/// activity: callers fail open with a clear message so the suite stays
+/// offline-friendly and deterministic. Detected at runtime because
+/// `cfg!(test)` is not reliable for code compiled into non-test binaries
+/// that run under test harnesses.
+fn is_test_harness() -> bool {
+    std::env::var("RUST_TEST_THREADS").is_ok()
+        || std::env::var("NEXTEST_CURRENT_RUN_ID").is_ok()
+        || std::env::var("NEXTEST_RUN_ID").is_ok()
+        || std::env::var("CI").is_ok()
+}
+
 /// Ensure a dictionary for `lang` is present, downloading and caching it on
 /// first use. Returns its on-disk location on success.
 pub(super) fn ensure_dictionary(lang: &str) -> Result<DictionaryLocation> {
@@ -95,15 +123,9 @@ pub(super) fn ensure_dictionary(lang: &str) -> Result<DictionaryLocation> {
     let txt_path = dictionary_path_for(lang);
 
     // The Hunspell pair wins when both backends are already present on disk
-    // for this language — it is the better checker. Both files must exist:
-    // a lone `.dic` (or lone `.aff`) is not usable and falls through below.
-    if let (Some(dic), Some(aff)) = (dic_path.as_ref(), aff_path.as_ref()) {
-        if dic.exists() && aff.exists() {
-            return Ok(DictionaryLocation::Hunspell {
-                dic: dic.clone(),
-                aff: aff.clone(),
-            });
-        }
+    // for this language — it is the better checker.
+    if let Some((dic, aff)) = hunspell_pair_present(dic_path.as_ref(), aff_path.as_ref()) {
+        return Ok(DictionaryLocation::Hunspell { dic, aff });
     }
 
     if let Some(txt) = txt_path.as_ref() {
@@ -127,13 +149,9 @@ pub(super) fn ensure_dictionary(lang: &str) -> Result<DictionaryLocation> {
     // avoid any network activity — fail open with a clear message so the
     // test suite remains offline-friendly and deterministic. Detect at
     // runtime because cfg!(test) is not reliable for code compiled into
-    // non-test binaries that run under test harnesses.
-    let is_test_harness = std::env::var("RUST_TEST_THREADS").is_ok()
-        || std::env::var("NEXTEST_CURRENT_RUN_ID").is_ok()
-        || std::env::var("NEXTEST_RUN_ID").is_ok()
-        || std::env::var("CI").is_ok();
-
-    if is_test_harness {
+    // non-test binaries that run under test harnesses (see
+    // [`is_test_harness`]).
+    if is_test_harness() {
         anyhow::bail!(
             "Dictionary for '{}' not present and network disabled during tests",
             lang
@@ -966,5 +984,159 @@ mod tests {
             "words from both the project and global lists must be accepted together: {:?}",
             findings
         );
+    }
+
+    #[test]
+    fn hunspell_pair_present_needs_both_files() {
+        let tmp = TempDir::new().unwrap();
+        let dic = tmp.path().join("spanish.dic");
+        let aff = tmp.path().join("spanish.aff");
+        assert!(hunspell_pair_present(Some(&dic), Some(&aff)).is_none());
+        fs::write(&dic, "1\nsol\n").unwrap();
+        assert!(
+            hunspell_pair_present(Some(&dic), Some(&aff)).is_none(),
+            "a lone .dic is not a usable pair"
+        );
+        fs::write(&aff, "SET UTF-8\n").unwrap();
+        let (d, a) = hunspell_pair_present(Some(&dic), Some(&aff)).expect("both present");
+        assert_eq!(d, dic);
+        assert_eq!(a, aff);
+        fs::remove_file(&dic).unwrap();
+        assert!(
+            hunspell_pair_present(Some(&dic), Some(&aff)).is_none(),
+            "a lone .aff is not a usable pair"
+        );
+    }
+
+    #[test]
+    fn hunspell_pair_present_rejects_missing_paths() {
+        let tmp = TempDir::new().unwrap();
+        let dic = tmp.path().join("spanish.dic");
+        assert!(hunspell_pair_present(None, None).is_none());
+        assert!(hunspell_pair_present(Some(&dic), None).is_none());
+        assert!(hunspell_pair_present(None, Some(&dic)).is_none());
+    }
+
+    /// Save the harness-detection vars, clear them, run `f`, then restore.
+    /// Callers must hold [`ENV_MUTEX`]: the environment is process-global.
+    fn with_harness_env_cleared(f: impl FnOnce()) {
+        const VARS: &[&str] = &[
+            "RUST_TEST_THREADS",
+            "NEXTEST_CURRENT_RUN_ID",
+            "NEXTEST_RUN_ID",
+            "CI",
+        ];
+        let saved: Vec<(&str, Option<String>)> =
+            VARS.iter().map(|v| (*v, std::env::var(v).ok())).collect();
+        for v in VARS {
+            std::env::remove_var(v);
+        }
+        f();
+        for (v, val) in saved {
+            match val {
+                Some(s) => std::env::set_var(v, s),
+                None => std::env::remove_var(v),
+            }
+        }
+    }
+
+    #[test]
+    fn is_test_harness_detects_each_signal_alone() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        for var in [
+            "RUST_TEST_THREADS",
+            "NEXTEST_CURRENT_RUN_ID",
+            "NEXTEST_RUN_ID",
+            "CI",
+        ] {
+            with_harness_env_cleared(|| {
+                std::env::set_var(var, "1");
+                assert!(is_test_harness(), "{var} alone must signal a harness");
+            });
+        }
+    }
+
+    #[test]
+    fn is_test_harness_is_false_with_no_signal() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        with_harness_env_cleared(|| {
+            assert!(!is_test_harness());
+        });
+    }
+
+    /// A tool that exists and exits 0 must report success: the success guard
+    /// is what separates "downloaded" from "ran but failed".
+    #[cfg(unix)]
+    #[test]
+    fn run_tool_reports_success_when_the_tool_succeeds() {
+        match run_tool("true", &[], "true") {
+            ToolOutcome::Success(_) => {}
+            ToolOutcome::NotFound => panic!("'true' exists; must not report NotFound"),
+            ToolOutcome::Failed(f) => {
+                panic!("'true' exits 0; must not report failure: {}", f.detail)
+            }
+        }
+    }
+
+    /// A path that exists but cannot be executed fails with a spawn error
+    /// other than `NotFound` — it must be reported as a failure, never as a
+    /// missing tool.
+    #[cfg(unix)]
+    #[test]
+    fn run_tool_reports_failure_not_absence_for_unrunnable_binaries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("not-executable");
+        fs::write(&target, "not a binary\n").unwrap();
+        let mut perms = fs::metadata(&target).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&target, perms).unwrap();
+        match run_tool(target.to_str().unwrap(), &[], "fixture") {
+            ToolOutcome::Failed(_) => {}
+            ToolOutcome::Success(_) => panic!("a non-executable must not succeed"),
+            ToolOutcome::NotFound => {
+                panic!("the file exists; a permission error must not report NotFound")
+            }
+        }
+    }
+
+    /// Curl missing but wget present-and-failing must report wget's own
+    /// failure: the `(NotFound, Failed)` arm is what keeps a real transfer
+    /// error from collapsing into "no download tool".
+    #[cfg(unix)]
+    #[test]
+    fn download_with_tools_reports_wget_failure_when_curl_is_missing() {
+        let bogus_curl = "definitely-not-a-real-binary-abc123";
+        let err = download_with_tools("https://example.invalid/dict.txt", bogus_curl, "false")
+            .expect_err("expected failure when wget exits non-zero");
+        match &err {
+            DownloadFailure::ToolError(f) => assert_eq!(f.tool, "wget"),
+            DownloadFailure::NoToolFound => {
+                panic!("wget exists and ran; must not report NoToolFound")
+            }
+        }
+        let msg = err.describe("spanish", "https://example.invalid/dict.txt");
+        assert!(msg.contains("wget"), "message should name wget: {}", msg);
+    }
+
+    #[test]
+    fn installed_dictionaries_lists_the_managed_dir() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().unwrap();
+        let dicts = home.path().join(".texforge").join("dicts");
+        fs::create_dir_all(&dicts).unwrap();
+        fs::write(dicts.join("english.txt"), "hello\n").unwrap();
+
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        let listed = installed_dictionaries();
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].lang(), "english");
     }
 }

@@ -28,4 +28,6 @@ exclude_re = [
   '^src/commands/build\.rs:[0-9]+:[0-9]+: replace execute ->',
   # src/commands/init.rs — passive release notice: network fetch, terminal prompt, then process exit.
   '^src/commands/init\.rs:[0-9]+:[0-9]+: .*check_for_updates',
+  # src/compiler/mod.rs — `compile`: spawns the Tectonic process; hermetic tests cannot invoke it.
+  '^src/compiler/mod\.rs:[0-9]+:[0-9]+: replace compile -> Result',
 ]

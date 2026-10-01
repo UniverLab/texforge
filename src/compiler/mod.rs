@@ -45,11 +45,7 @@ pub fn compile(
     let raw = format!("{}{}", stdout, stderr);
 
     let mut warnings = parse_warnings(&raw);
-    if !line_map.is_empty() {
-        for warning in &mut warnings {
-            remap_location(&mut warning.file, &mut warning.line, line_map);
-        }
-    }
+    remap_warnings(&mut warnings, line_map);
 
     if output.status.success() {
         print_warnings(&warnings, verbose);
@@ -57,11 +53,7 @@ pub fn compile(
     }
 
     let mut errors = parse_errors(&raw);
-    if !line_map.is_empty() {
-        for error in &mut errors {
-            remap_location(&mut error.file, &mut error.line, line_map);
-        }
-    }
+    remap_errors(&mut errors, line_map);
     if errors.is_empty() {
         anyhow::bail!("Compilation failed:\n{}", raw.trim());
     }
@@ -84,6 +76,27 @@ fn remap_location(file: &mut String, line: &mut usize, line_map: &LineMap) {
     if let Some((mapped_file, mapped_line)) = line_map.get(file, *line) {
         *file = mapped_file.to_string();
         *line = mapped_line;
+    }
+}
+
+/// Remap parsed warning locations through the build-copy line map.
+/// Skipped for an empty map — a no-op either way, so untouched documents
+/// pay nothing.
+fn remap_warnings(warnings: &mut [CompileWarning], line_map: &LineMap) {
+    if !line_map.is_empty() {
+        for warning in warnings {
+            remap_location(&mut warning.file, &mut warning.line, line_map);
+        }
+    }
+}
+
+/// Remap parsed error locations through the build-copy line map; see
+/// [`remap_warnings`].
+fn remap_errors(errors: &mut [CompileError], line_map: &LineMap) {
+    if !line_map.is_empty() {
+        for error in errors {
+            remap_location(&mut error.file, &mut error.line, line_map);
+        }
     }
 }
 
@@ -1021,6 +1034,70 @@ mod tests {
         let mut line = 0;
         remap_location(&mut file, &mut line, &LineMap::default());
         assert_eq!((file.as_str(), line), ("", 0));
+    }
+
+    #[test]
+    fn remap_warnings_moves_mapped_files_and_skips_empty_maps() {
+        let mut map = LineMap::default();
+        map.file_mut("main.tex").extend([1, 2, 9]);
+        let mut warnings = vec![
+            CompileWarning {
+                file: "main.tex".into(),
+                line: 3,
+                severity: Severity::Warning,
+                kind: "overfull hbox",
+                message: "Overfull".into(),
+            },
+            CompileWarning {
+                file: "other.tex".into(),
+                line: 3,
+                severity: Severity::Warning,
+                kind: "overfull hbox",
+                message: "Overfull".into(),
+            },
+        ];
+        remap_warnings(&mut warnings, &map);
+        assert_eq!(warnings[0].line, 9);
+        assert_eq!(warnings[1].line, 3);
+
+        let mut warnings = vec![CompileWarning {
+            file: "main.tex".into(),
+            line: 3,
+            severity: Severity::Warning,
+            kind: "overfull hbox",
+            message: "Overfull".into(),
+        }];
+        remap_warnings(&mut warnings, &LineMap::default());
+        assert_eq!(warnings[0].line, 3);
+    }
+
+    #[test]
+    fn remap_errors_moves_mapped_files_and_skips_empty_maps() {
+        let mut map = LineMap::default();
+        map.file_mut("main.tex").extend([1, 2, 9]);
+        let mut errors = vec![
+            CompileError {
+                file: "main.tex".into(),
+                line: 3,
+                message: "boom".into(),
+            },
+            CompileError {
+                file: "other.tex".into(),
+                line: 3,
+                message: "boom".into(),
+            },
+        ];
+        remap_errors(&mut errors, &map);
+        assert_eq!(errors[0].line, 9);
+        assert_eq!(errors[1].line, 3);
+
+        let mut errors = vec![CompileError {
+            file: "main.tex".into(),
+            line: 3,
+            message: "boom".into(),
+        }];
+        remap_errors(&mut errors, &LineMap::default());
+        assert_eq!(errors[0].line, 3);
     }
 
     /// An engine error after a rewritten block is reported at the source

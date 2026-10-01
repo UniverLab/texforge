@@ -1283,4 +1283,57 @@ mod tests {
             "the block must continue past its first page: {pages:?}"
         );
     }
+
+    /// `push_text` advances the source line once per newline and records the
+    /// new line as the origin of the output line it just closed.
+    #[test]
+    fn push_text_advances_one_line_per_newline() {
+        let mut result = String::new();
+        let mut origins = Vec::new();
+        let mut src_line = 5usize;
+        push_text(&mut result, &mut origins, "a\nb\nc", &mut src_line);
+        assert_eq!(result, "a\nb\nc");
+        assert_eq!(src_line, 7);
+        assert_eq!(origins, vec![6, 7]);
+    }
+
+    /// Without a newline nothing advances: the origin list stays empty.
+    #[test]
+    fn push_text_without_newline_leaves_the_line_alone() {
+        let mut result = String::new();
+        let mut origins = Vec::new();
+        let mut src_line = 5usize;
+        push_text(&mut result, &mut origins, "abc", &mut src_line);
+        assert_eq!(result, "abc");
+        assert_eq!(src_line, 5);
+        assert!(origins.is_empty());
+    }
+
+    /// The `\end{code}` line owns the closing stanza: a block ending on
+    /// source line 5 maps its trailing `\medskip` there, not line 1.
+    /// (The block emission opens with its own `\par\medskip`, so the
+    /// trailing one — the last `\medskip` in the file — is asserted.)
+    #[test]
+    fn end_line_of_a_block_points_at_the_end_tag_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}\na = 1\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        let lines: Vec<&str> = rewritten.lines().collect();
+        let medskip = lines
+            .iter()
+            .rposition(|line| line.contains("\\medskip"))
+            .expect("rewritten block must emit \\medskip")
+            + 1;
+        assert_eq!(
+            map.get("main.tex", medskip),
+            Some(("main.tex", 5)),
+            "the line after the block ends on source line 5"
+        );
+    }
 }

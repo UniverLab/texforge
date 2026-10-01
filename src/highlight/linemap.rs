@@ -133,6 +133,7 @@ mod tests {
     fn mapped_lines_round_trip() {
         let mut map = LineMap::default();
         map.file_mut("main.tex").extend([1, 2, 5, 5, 6]);
+        assert!(!map.is_empty());
         assert_eq!(map.get("main.tex", 3), Some(("main.tex", 5)));
         assert_eq!(map.get("main.tex", 6), None);
         assert_eq!(map.get("main.tex", 0), None);

@@ -301,6 +301,17 @@ fn resolve_accent_from_args(
     compose_accent(accent_char, base).map(|composed| (composed, AccentBaseSource::FromArgs))
 }
 
+/// Base character written by a dotless command: `\i` stands for `i` and
+/// `\j` for `j`, so an accent needs no base argument at all. Every other
+/// command (and a bare `\i` that carries arguments) has no dotless base.
+fn dotless_base(ij_name: &str) -> Option<char> {
+    match ij_name {
+        "i" => Some('i'),
+        "j" => Some('j'),
+        _ => None,
+    }
+}
+
 fn resolve_dotless_ij(
     accent_char: char,
     tokens: &[SpannedToken],
@@ -314,9 +325,10 @@ fn resolve_dotless_ij(
     else {
         return None;
     };
-    if !(ij_name == "i" || ij_name == "j") || !ij_args.is_empty() {
+    if !ij_args.is_empty() {
         return None;
     }
+    let base = dotless_base(ij_name)?;
     let closing_token = tokens.get(inner_idx + 1)?;
     let Token::Text(closing) = &closing_token.token else {
         return None;
@@ -324,7 +336,6 @@ fn resolve_dotless_ij(
     if !closing.starts_with('}') {
         return None;
     }
-    let base = if ij_name == "i" { 'i' } else { 'j' };
     let composed = compose_accent(accent_char, base)?;
     let chars_to_skip = usize::from(closing.len() > 1);
     Some((
@@ -641,5 +652,392 @@ mod tests {
         assert_eq!(compose_accent('H', 'u'), Some('ű'));
         assert_eq!(compose_accent('r', 'a'), Some('å'));
         assert_eq!(compose_accent('k', 'e'), Some('ę'));
+        assert_eq!(compose_accent('?', 'e'), None);
+        assert_eq!(compose_accent('\'', 'x'), None);
+    }
+
+    #[test]
+    fn transparent_commands_skip_only_hyphen_and_slash() {
+        assert!(is_transparent_command("-"));
+        assert!(is_transparent_command("/"));
+        assert!(!is_transparent_command("x"));
+        assert!(!is_transparent_command("'"));
+    }
+
+    #[test]
+    fn letter_form_accents_are_the_six_letter_commands() {
+        for name in ["c", "v", "u", "H", "r", "k"] {
+            assert!(is_letter_form_accent(name), "{name} is letter-form");
+        }
+        for name in ["'", "`", "^", "\"", "~", "=", ".", "-", "x"] {
+            assert!(!is_letter_form_accent(name), "{name} is not letter-form");
+        }
+    }
+
+    #[test]
+    fn accent_to_char_maps_every_accent_command() {
+        for (name, expected) in [
+            ("'", '\''),
+            ("`", '`'),
+            ("^", '^'),
+            ("\"", '"'),
+            ("~", '~'),
+            ("=", '='),
+            (".", '.'),
+            ("c", 'c'),
+            ("v", 'v'),
+            ("u", 'u'),
+            ("H", 'H'),
+            ("r", 'r'),
+            ("k", 'k'),
+        ] {
+            assert_eq!(accent_to_char(name), Some(expected), "{name}");
+        }
+        assert_eq!(accent_to_char("x"), None);
+    }
+
+    #[test]
+    fn acute_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'á'),
+            ('e', 'é'),
+            ('i', 'í'),
+            ('o', 'ó'),
+            ('u', 'ú'),
+            ('y', 'ý'),
+            ('A', 'Á'),
+            ('E', 'É'),
+            ('I', 'Í'),
+            ('O', 'Ó'),
+            ('U', 'Ú'),
+            ('Y', 'Ý'),
+        ] {
+            assert_eq!(acute_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(acute_composed('x'), None);
+    }
+
+    #[test]
+    fn grave_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'à'),
+            ('e', 'è'),
+            ('i', 'ì'),
+            ('o', 'ò'),
+            ('u', 'ù'),
+            ('A', 'À'),
+            ('E', 'È'),
+            ('I', 'Ì'),
+            ('O', 'Ò'),
+            ('U', 'Ù'),
+        ] {
+            assert_eq!(grave_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(grave_composed('x'), None);
+    }
+
+    #[test]
+    fn circumflex_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'â'),
+            ('e', 'ê'),
+            ('i', 'î'),
+            ('o', 'ô'),
+            ('u', 'û'),
+            ('A', 'Â'),
+            ('E', 'Ê'),
+            ('I', 'Î'),
+            ('O', 'Ô'),
+            ('U', 'Û'),
+        ] {
+            assert_eq!(circumflex_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(circumflex_composed('x'), None);
+    }
+
+    #[test]
+    fn umlaut_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'ä'),
+            ('e', 'ë'),
+            ('i', 'ï'),
+            ('o', 'ö'),
+            ('u', 'ü'),
+            ('A', 'Ä'),
+            ('E', 'Ë'),
+            ('I', 'Ï'),
+            ('O', 'Ö'),
+            ('U', 'Ü'),
+        ] {
+            assert_eq!(umlaut_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(umlaut_composed('x'), None);
+    }
+
+    #[test]
+    fn tilde_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'ã'),
+            ('n', 'ñ'),
+            ('o', 'õ'),
+            ('A', 'Ã'),
+            ('N', 'Ñ'),
+            ('O', 'Õ'),
+        ] {
+            assert_eq!(tilde_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(tilde_composed('x'), None);
+    }
+
+    #[test]
+    fn macron_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'ā'),
+            ('e', 'ē'),
+            ('i', 'ī'),
+            ('o', 'ō'),
+            ('u', 'ū'),
+            ('A', 'Ā'),
+            ('E', 'Ē'),
+            ('I', 'Ī'),
+            ('O', 'Ō'),
+            ('U', 'Ū'),
+        ] {
+            assert_eq!(macron_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(macron_composed('x'), None);
+    }
+
+    #[test]
+    fn dot_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'ȧ'),
+            ('e', 'ė'),
+            ('o', 'ȯ'),
+            ('A', 'Ȧ'),
+            ('E', 'Ė'),
+            ('O', 'Ȯ'),
+        ] {
+            assert_eq!(dot_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(dot_composed('x'), None);
+    }
+
+    #[test]
+    fn cedilla_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('c', 'ç'),
+            ('C', 'Ç'),
+            ('s', 'ş'),
+            ('S', 'Ş'),
+            ('t', 'ţ'),
+            ('T', 'Ţ'),
+        ] {
+            assert_eq!(cedilla_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(cedilla_composed('x'), None);
+    }
+
+    #[test]
+    fn caron_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('c', 'č'),
+            ('C', 'Č'),
+            ('s', 'š'),
+            ('S', 'Š'),
+            ('z', 'ž'),
+            ('Z', 'Ž'),
+            ('e', 'ě'),
+            ('E', 'Ě'),
+            ('r', 'ř'),
+            ('R', 'Ř'),
+            ('n', 'ň'),
+            ('N', 'Ň'),
+        ] {
+            assert_eq!(caron_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(caron_composed('x'), None);
+    }
+
+    #[test]
+    fn breve_composed_covers_every_arm() {
+        for (base, expected) in [
+            ('a', 'ă'),
+            ('A', 'Ă'),
+            ('e', 'ĕ'),
+            ('E', 'Ĕ'),
+            ('i', 'ĭ'),
+            ('I', 'Ĭ'),
+            ('o', 'ŏ'),
+            ('O', 'Ŏ'),
+            ('u', 'ŭ'),
+            ('U', 'Ŭ'),
+        ] {
+            assert_eq!(breve_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(breve_composed('x'), None);
+    }
+
+    #[test]
+    fn double_acute_composed_covers_every_arm() {
+        for (base, expected) in [('o', 'ő'), ('O', 'Ő'), ('u', 'ű'), ('U', 'Ű')] {
+            assert_eq!(double_acute_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(double_acute_composed('x'), None);
+    }
+
+    #[test]
+    fn ring_composed_covers_every_arm() {
+        for (base, expected) in [('a', 'å'), ('A', 'Å'), ('u', 'ů'), ('U', 'Ů')] {
+            assert_eq!(ring_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(ring_composed('x'), None);
+    }
+
+    #[test]
+    fn ogonek_composed_covers_every_arm() {
+        for (base, expected) in [('a', 'ą'), ('A', 'Ą'), ('e', 'ę'), ('E', 'Ę')] {
+            assert_eq!(ogonek_composed(base), Some(expected), "{base}");
+        }
+        assert_eq!(ogonek_composed('x'), None);
+    }
+
+    #[test]
+    fn extract_base_reads_a_braced_letter() {
+        assert_eq!(extract_base_from_text_start("{a}"), Some(('a', 3)));
+        assert_eq!(extract_base_from_text_start("  {b} rest"), Some(('b', 5)));
+    }
+
+    #[test]
+    fn extract_base_reads_a_direct_letter() {
+        assert_eq!(extract_base_from_text_start("e"), Some(('e', 1)));
+        assert_eq!(extract_base_from_text_start("  x rest"), Some(('x', 3)));
+    }
+
+    #[test]
+    fn extract_base_rejects_non_letters_and_bad_braces() {
+        assert_eq!(extract_base_from_text_start("123"), None);
+        assert_eq!(extract_base_from_text_start("{ab}"), None);
+        assert_eq!(extract_base_from_text_start(""), None);
+        assert_eq!(extract_base_from_text_start("   "), None);
+    }
+
+    /// A non-braced tail must not be misread as a braced base: `xa}` starts
+    /// with `x`, not `{`, so the base is `x` even though the tail is long
+    /// enough to look braced.
+    #[test]
+    fn extract_base_prefers_the_direct_letter_over_a_later_brace() {
+        assert_eq!(extract_base_from_text_start("xa}"), Some(('x', 1)));
+    }
+
+    fn dotless_tokens(inner: Token, closing: &str) -> Vec<SpannedToken> {
+        vec![
+            SpannedToken {
+                token: Token::Text("{".to_string()),
+                start: 0,
+                end: 1,
+            },
+            SpannedToken {
+                token: inner,
+                start: 1,
+                end: 2,
+            },
+            SpannedToken {
+                token: Token::Text(closing.to_string()),
+                start: 2,
+                end: 3,
+            },
+        ]
+    }
+
+    fn dotless_i() -> Token {
+        Token::Command {
+            name: "i".to_string(),
+            args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn dotless_i_with_bare_closing_bracket_skips_nothing_further() {
+        let tokens = dotless_tokens(dotless_i(), "}");
+        let (composed, source) = resolve_dotless_ij('\'', &tokens, 1).expect("dotless i");
+        assert_eq!(composed, 'í');
+        match source {
+            AccentBaseSource::FromDotlessIJ {
+                extra_tokens_to_skip,
+                chars_to_skip_in_last,
+            } => {
+                assert_eq!(extra_tokens_to_skip, 3);
+                assert_eq!(chars_to_skip_in_last, 0);
+            }
+            _ => panic!("expected FromDotlessIJ"),
+        }
+    }
+
+    #[test]
+    fn dotless_i_with_trailing_text_skips_one_char() {
+        let tokens = dotless_tokens(dotless_i(), "}ndice");
+        let (composed, source) = resolve_dotless_ij('\'', &tokens, 1).expect("dotless i");
+        assert_eq!(composed, 'í');
+        match source {
+            AccentBaseSource::FromDotlessIJ {
+                chars_to_skip_in_last,
+                ..
+            } => assert_eq!(chars_to_skip_in_last, 1),
+            _ => panic!("expected FromDotlessIJ"),
+        }
+    }
+
+    /// `\i` and `\j` each stand for their own letter; no other command is
+    /// dotless (including a look-alike that merely starts the same way).
+    #[test]
+    fn dotless_base_covers_i_and_j_only() {
+        assert_eq!(dotless_base("i"), Some('i'));
+        assert_eq!(dotless_base("j"), Some('j'));
+        for name in ["x", "I", "J", "ii", "", "dotless_i"] {
+            assert_eq!(dotless_base(name), None, "{name} is not dotless");
+        }
+    }
+
+    #[test]
+    fn dotless_j_has_no_composition_and_resolves_to_none() {
+        let tokens = dotless_tokens(
+            Token::Command {
+                name: "j".to_string(),
+                args: Vec::new(),
+            },
+            "}",
+        );
+        assert!(
+            resolve_dotless_ij('~', &tokens, 1).is_none(),
+            "no tilde-j composition exists, so j must not resolve"
+        );
+    }
+
+    #[test]
+    fn dotless_rejects_non_ij_commands_args_and_open_tails() {
+        let other = dotless_tokens(
+            Token::Command {
+                name: "x".to_string(),
+                args: Vec::new(),
+            },
+            "}",
+        );
+        assert_eq!(resolve_dotless_ij('\'', &other, 1).map(|r| r.0), None);
+        let with_args = dotless_tokens(
+            Token::Command {
+                name: "i".to_string(),
+                args: vec!["oops".to_string()],
+            },
+            "}",
+        );
+        assert_eq!(resolve_dotless_ij('\'', &with_args, 1).map(|r| r.0), None);
+        let open_tail = dotless_tokens(dotless_i(), "ndice");
+        assert_eq!(resolve_dotless_ij('\'', &open_tail, 1).map(|r| r.0), None);
+        let not_a_command = dotless_tokens(Token::Text("i".to_string()), "}");
+        assert_eq!(
+            resolve_dotless_ij('\'', &not_a_command, 1).map(|r| r.0),
+            None
+        );
     }
 }

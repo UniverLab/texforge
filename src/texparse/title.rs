@@ -58,6 +58,10 @@ impl<'a> TitleResolver<'a> {
 
     /// Reads a balanced `{...}` group's inner content. On unbalanced input,
     /// returns everything scanned up to the end of input (best effort).
+    ///
+    /// The loop is bounded by the characters left in the input: every pass
+    /// consumes at least one character, so at most that many passes can run
+    /// before the input is exhausted and the loop breaks.
     fn read_group(&mut self) -> Option<Vec<char>> {
         if self.peek() != Some('{') {
             return None;
@@ -65,7 +69,13 @@ impl<'a> TitleResolver<'a> {
         self.bump();
         let mut depth = 1usize;
         let mut out = Vec::new();
-        while let Some(c) = self.peek() {
+        // One pass consumes at least one character, so iterating one past
+        // the characters left always reaches the end of input.
+        let remaining = self.chars.len().saturating_sub(self.pos);
+        for _ in 0..=remaining {
+            let Some(c) = self.peek() else {
+                break;
+            };
             match c {
                 '\\' => {
                     out.push(c);
@@ -96,16 +106,24 @@ impl<'a> TitleResolver<'a> {
         Some(out)
     }
 
+    /// Reads one command name after the backslash: a run of ASCII letters,
+    /// or the single character that follows (a control symbol such as `\%`).
+    ///
+    /// Bounded like [`Self::read_group`]: every pass consumes one character.
     fn read_command_name(&mut self) -> String {
         let mut name = String::new();
         match self.peek() {
             Some(c) if c.is_ascii_alphabetic() => {
-                while let Some(c) = self.peek() {
-                    if c.is_ascii_alphabetic() {
-                        name.push(c);
-                        self.bump();
-                    } else {
-                        break;
+                // One pass consumes one letter; one past the input length
+                // always reaches a non-letter or the end of input.
+                let remaining = self.chars.len().saturating_sub(self.pos);
+                for _ in 0..=remaining {
+                    match self.peek() {
+                        Some(c) if c.is_ascii_alphabetic() => {
+                            name.push(c);
+                            self.bump();
+                        }
+                        _ => break,
                     }
                 }
             }
@@ -118,9 +136,22 @@ impl<'a> TitleResolver<'a> {
         name
     }
 
+    /// Drives the scan to the end of the input.
+    ///
+    /// Bounded by the input length plus one: every branch of the loop body
+    /// consumes at least one character (the backslash bump, the group read,
+    /// the stray-brace skip, or the prose push), so the scan cannot run
+    /// longer and always terminates at the end of input.
     fn resolve(&mut self) -> String {
         let mut out = String::new();
-        while let Some(c) = self.peek() {
+        // Every branch below consumes at least one character (the backslash
+        // bump, the group read, the stray-brace skip, or the prose push), so
+        // one pass per character plus one always reaches the end of input.
+        let total = self.chars.len();
+        for _ in 0..=total {
+            let Some(c) = self.peek() else {
+                break;
+            };
             match c {
                 '\\' => self.resolve_backslash_macro(&mut out),
                 '{' => self.resolve_bare_group(&mut out),
@@ -154,16 +185,21 @@ impl<'a> TitleResolver<'a> {
             // one group it dresses (e.g. `\hbox{.}`).
             let _ = self.read_group();
         } else if TITLE_TEXT_MACROS.contains(&name.as_str()) {
-            self.resolve_text_macro(out);
+            self.resolve_group_content(out);
         } else if name == "textcolor" || name == "href" {
             self.resolve_textcolor_or_href(out);
         } else {
-            self.resolve_unknown_macro(out);
+            self.resolve_group_content(out);
         }
     }
 
-    /// A text macro (`\textit`, `\textbf`, `\emph`): resolve its group.
-    fn resolve_text_macro(&mut self, out: &mut String) {
+    /// Resolve one braced group's content into `out`: the shared body behind
+    /// a text macro (`\textit`, `\textbf`, `\emph`), an unknown macro, and a
+    /// bare group. All three keep the group's resolved prose — a text macro
+    /// keeps its argument, an unknown macro keeps its textual content rather
+    /// than dropping the title, and a bare group still groups prose
+    /// (`{Emphasis}`) — with no braced argument nothing is emitted.
+    fn resolve_group_content(&mut self, out: &mut String) {
         let Some(group) = self.read_group() else {
             return;
         };
@@ -180,22 +216,10 @@ impl<'a> TitleResolver<'a> {
         out.push_str(&TitleResolver::new(&text).resolve());
     }
 
-    /// Unknown macro: keep its textual content rather than dropping the
-    /// title or emitting raw source. With no braced argument, drop silently.
-    fn resolve_unknown_macro(&mut self, out: &mut String) {
-        let Some(group) = self.read_group() else {
-            return;
-        };
-        out.push_str(&TitleResolver::new(&group).resolve());
-    }
-
     /// A bare group not attached to a command still groups prose
     /// (`{Emphasis}`); keep its resolved content.
     fn resolve_bare_group(&mut self, out: &mut String) {
-        let Some(group) = self.read_group() else {
-            return;
-        };
-        out.push_str(&TitleResolver::new(&group).resolve());
+        self.resolve_group_content(out);
     }
 }
 
@@ -331,5 +355,81 @@ mod tests {
                 raw_title: r"\textit{Fundador \& Lead Engineer}".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn bare_group_keeps_its_prose() {
+        assert_eq!(resolve_section_title("{Emphasis}"), "Emphasis");
+    }
+
+    #[test]
+    fn unknown_macro_without_group_drops_silently() {
+        assert_eq!(resolve_section_title(r"a\foo b"), "a b");
+    }
+
+    #[test]
+    fn textcolor_with_a_single_group_emits_nothing() {
+        assert_eq!(resolve_section_title(r"\textcolor{red}"), "");
+        assert_eq!(resolve_section_title(r"\href{https://example.com}"), "");
+    }
+
+    #[test]
+    fn read_command_name_reads_a_control_symbol_verbatim() {
+        let chars: Vec<char> = r"\1{x}".chars().collect();
+        let mut resolver = TitleResolver::new(&chars);
+        resolver.bump();
+        assert_eq!(resolver.read_command_name(), "1");
+    }
+
+    #[test]
+    fn read_command_name_stops_at_the_first_non_letter() {
+        let chars: Vec<char> = "ab1cd".chars().collect();
+        let mut resolver = TitleResolver::new(&chars);
+        assert_eq!(resolver.read_command_name(), "ab");
+    }
+
+    #[test]
+    fn control_symbol_macro_keeps_its_group_text() {
+        assert_eq!(resolve_section_title(r"\1{x}"), "x");
+    }
+
+    #[test]
+    fn read_group_keeps_an_escaped_closing_brace_inside() {
+        let chars: Vec<char> = r"{a\}b}".chars().collect();
+        let mut resolver = TitleResolver::new(&chars);
+        let group = resolver.read_group().expect("balanced group");
+        assert_eq!(group.iter().collect::<String>(), r"a\}b");
+    }
+
+    #[test]
+    fn read_group_tracks_nested_braces() {
+        let chars: Vec<char> = "{a{b}c}".chars().collect();
+        let mut resolver = TitleResolver::new(&chars);
+        let group = resolver.read_group().expect("balanced group");
+        assert_eq!(group.iter().collect::<String>(), "a{b}c");
+    }
+
+    #[test]
+    fn read_group_returns_none_without_an_opening_brace() {
+        let chars: Vec<char> = "abc".chars().collect();
+        let mut resolver = TitleResolver::new(&chars);
+        assert_eq!(resolver.read_group(), None);
+    }
+
+    #[test]
+    fn nested_braces_inside_a_text_macro_resolve_fully() {
+        assert_eq!(resolve_section_title(r"\textit{a{b}c}"), "abc");
+    }
+
+    #[test]
+    fn peek_and_bump_walk_the_input_once() {
+        let chars: Vec<char> = "ab".chars().collect();
+        let mut resolver = TitleResolver::new(&chars);
+        assert_eq!(resolver.peek(), Some('a'));
+        assert_eq!(resolver.bump(), Some('a'));
+        assert_eq!(resolver.peek(), Some('b'));
+        assert_eq!(resolver.bump(), Some('b'));
+        assert_eq!(resolver.peek(), None);
+        assert_eq!(resolver.bump(), None);
     }
 }

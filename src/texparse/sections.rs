@@ -42,10 +42,68 @@ impl SectionTracker {
             .iter()
             .map(|counter| counter.to_string())
             .collect();
-        let start = parts
-            .iter()
-            .position(|part| part != "0")
-            .unwrap_or(parts.len() - 1);
+        let start = first_significant(&parts);
         parts[start..].join(".")
+    }
+}
+
+/// Index of the first part that is not a zero counter — the point where the
+/// dotted number starts. A number whose counters are all zero keeps its last
+/// part rather than losing the whole thing.
+fn first_significant(parts: &[String]) -> usize {
+    parts
+        .iter()
+        .position(|part| part != "0")
+        .unwrap_or(parts.len() - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn section_only_document_numbers_without_leading_zeros() {
+        let mut tracker = SectionTracker::new(6);
+        assert_eq!(tracker.enter(2), "1");
+        assert_eq!(tracker.enter(2), "2");
+    }
+
+    #[test]
+    fn nested_levels_produce_dotted_numbers() {
+        let mut tracker = SectionTracker::new(6);
+        assert_eq!(tracker.enter(2), "1");
+        assert_eq!(tracker.enter(3), "1.1");
+        assert_eq!(tracker.enter(3), "1.2");
+        assert_eq!(tracker.enter(2), "2");
+    }
+
+    #[test]
+    fn entering_a_level_resets_deeper_counters() {
+        let mut tracker = SectionTracker::new(6);
+        assert_eq!(tracker.enter(2), "1");
+        assert_eq!(tracker.enter(3), "1.1");
+        assert_eq!(tracker.enter(2), "2");
+        assert_eq!(tracker.enter(3), "2.1");
+    }
+
+    #[test]
+    fn subsection_only_document_drops_leading_zeros() {
+        let mut tracker = SectionTracker::new(6);
+        assert_eq!(tracker.enter(3), "1");
+        assert_eq!(tracker.enter(3), "2");
+    }
+
+    /// Every counter at zero keeps the last part: the dotted number must not
+    /// vanish entirely.
+    #[test]
+    fn all_zero_parts_fall_back_to_the_last_one() {
+        assert_eq!(first_significant(&["0".into(), "0".into()]), 1);
+        assert_eq!(first_significant(&["0".into()]), 0);
+    }
+
+    #[test]
+    fn the_first_nonzero_part_starts_the_number() {
+        assert_eq!(first_significant(&["0".into(), "3".into()]), 1);
+        assert_eq!(first_significant(&["2".into(), "0".into()]), 0);
     }
 }
