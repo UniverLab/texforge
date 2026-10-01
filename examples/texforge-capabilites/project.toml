@@ -10,6 +10,7 @@ bibliography = "bib/references.bib"
 [highlight]
 theme = "one-light"
 style = "light"
+font = "inconsolata"
 
 [highlight.by_lang]
 bash = "dark"

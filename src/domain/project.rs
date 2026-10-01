@@ -44,6 +44,12 @@ pub struct HighlightConfig {
     /// Override the language's list-of-listings heading.
     #[serde(default)]
     pub list_name: Option<String>,
+    /// Typewriter family for code blocks, from the monospace families the
+    /// tectonic bundle ships. `document` (the default) keeps the preamble's
+    /// own `\ttfamily` (Latin Modern Mono in the bundled templates).
+    /// Unrecognised values fail the build by name.
+    #[serde(default)]
+    pub font: Option<String>,
 }
 
 /// `[diagrams]` section of `project.toml`.
@@ -414,6 +420,7 @@ theme = "github"
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
         let highlight = config.highlight.expect("highlight section");
         assert_eq!(highlight.style, None);
+        assert_eq!(highlight.font, None);
         assert!(
             highlight.by_lang.is_empty(),
             "an absent table is empty, not an error"
@@ -454,5 +461,24 @@ theme = "github"
         assert_eq!(highlight.theme.as_deref(), Some("github"));
         assert_eq!(highlight.lstlisting, None);
         assert_eq!(highlight.numbers, None);
+    }
+
+    #[test]
+    fn project_config_highlight_font_parses() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+font = "inconsolata"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.font.as_deref(), Some("inconsolata"));
     }
 }

@@ -14,7 +14,7 @@ use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::{Project, Reproducible};
 use crate::highlight;
-use crate::highlight::{HighlightStyle, HighlightTheme};
+use crate::highlight::{HighlightStyle, HighlightTheme, ListingFont};
 use crate::raster::PdfDocument;
 use crate::utils::sanitize_filename;
 
@@ -61,8 +61,8 @@ fn resolve_default_style(project: &Project) -> Result<diagrams::style::DiagramSt
 /// Resolve `project.toml`'s `[highlight]` section into the code-listing
 /// pass's settings, mirroring [`resolve_default_style`]: an absent section
 /// keeps every default (github theme, light style, no `lstlisting` rewrite, no
-/// gutter), and an unrecognised theme or style fails the build by name instead
-/// of silently falling back to a default.
+/// gutter), and an unrecognised theme, style, or font fails the build by name
+/// instead of silently falling back to a default.
 fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
     let Some(section) = project.config.highlight.as_ref() else {
         return Ok(highlight::Settings::default());
@@ -81,6 +81,10 @@ fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
         numbers: section.numbers.unwrap_or(false),
         caption_name: section.caption_name.clone(),
         list_name: section.list_name.clone(),
+        font: match section.font.as_deref() {
+            Some(name) => ListingFont::parse(name)?,
+            None => ListingFont::default(),
+        },
         fallback_language: None,
     })
 }
@@ -681,6 +685,46 @@ mod tests {
         let err = resolve_highlight(&project).unwrap_err().to_string();
         assert!(err.contains("solarized"), "{err}");
         assert!(err.contains("dark-mono"), "{err}");
+    }
+
+    /// Font parsing and defaults.
+    #[test]
+    fn highlight_font_parses_and_defaults_to_document() {
+        let mut project = project_with_highlight(Some("github"), None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = Some("inconsolata".to_string());
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Inconsolata);
+
+        // Absent section → Document
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight = None;
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Document);
+
+        // Present section, absent key → Document
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = None;
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Document);
+    }
+
+    /// Invalid font fails naming the value and all six valid names.
+    #[test]
+    fn invalid_highlight_font_fails_naming_valid_ones() {
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = Some("jetbrains-mono".to_string());
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("jetbrains-mono"), "{err}");
+        for name in [
+            "document",
+            "inconsolata",
+            "source-code-pro",
+            "dejavu-sans-mono",
+            "plex-mono",
+            "fira-mono",
+        ] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
     }
 
     fn tectonic_available() -> bool {

@@ -59,10 +59,11 @@ entry = "main.tex"
 # style = "editorial"               # optional: document-wide diagram style default
 
 # [highlight]
-# theme = "github"                  # optional: syntax palette ("github", "one-light")
-# style = "light"                   # optional: listing style ("light", "light-mono", "dark", "dark-mono")
-# lstlisting = true                 # optional: also rewrite lstlisting blocks
+# theme = "github"                  # optional: code-listing palette ("github", "one-light")
+# style = "light"                   # optional: document-wide listing style ("light", "light-mono", "dark", "dark-mono")
+# lstlisting = true                 # optional: also rewrite \begin{lstlisting} blocks
 # numbers = true                    # optional: number every code block
+# font = "inconsolata"              # optional: typewriter family for code blocks ("document", "inconsolata", "source-code-pro", "dejavu-sans-mono", "plex-mono", "fira-mono")
 # caption_name = "Listing"          # optional: override the listing name
 # list_name = "List of Listings"    # optional: override the list heading
 
@@ -84,5 +85,6 @@ entry = "main.tex"
 | `highlight.by_lang` | Optional: per-language styles, keyed by language name or alias (`bash = "dark"`); wins over `highlight.style` for blocks in that language. |
 | `highlight.lstlisting` | Optional: also rewrite `\begin{lstlisting}` blocks with native highlighting (default `false` — without it, `listings` users keep real `listings.sty` behaviour). |
 | `highlight.numbers` | Optional: number every line of every code block unless the block sets `numbers=` itself. |
+| `highlight.font` | Optional: typewriter family for code blocks (`document`, `inconsolata`, `source-code-pro`, `dejavu-sans-mono`, `plex-mono`, `fira-mono`; see [Code listings](listings.md)). |
 | `highlight.caption_name` | Optional: override the language-resolved listing name (`Listing` / `Listado`). |
 | `highlight.list_name` | Optional: override the language-resolved list-of-listings heading. |

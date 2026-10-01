@@ -29,6 +29,7 @@ mod preamble;
 pub use engine::language_key;
 pub use linemap::LineMap;
 pub use palette::{HighlightStyle, HighlightTheme};
+pub use preamble::ListingFont;
 
 use emit::{EmitCaption, EmitOpts};
 use engine::Rgb;
@@ -78,6 +79,8 @@ pub struct Settings {
     pub numbers: bool,
     pub caption_name: Option<String>,
     pub list_name: Option<String>,
+    /// Typewriter family for code blocks; `Document` (default) injects nothing.
+    pub font: ListingFont,
     /// Global `defaults.language`; `None` → english (spell-checker precedence).
     pub fallback_language: Option<String>,
 }
@@ -92,6 +95,7 @@ impl Default for Settings {
             numbers: false,
             caption_name: None,
             list_name: None,
+            font: ListingFont::Document,
             fallback_language: None,
         }
     }
@@ -137,6 +141,7 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
         numbers,
         caption_name,
         list_name,
+        font,
         fallback_language,
     } = cfg;
     let paths = texutil::collect_tex_files(build_dir, entry).files;
@@ -224,9 +229,10 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
                 Some(&names),
                 color_loaded,
                 theme,
+                font,
             )
         } else {
-            preamble::injected_block(&colors, has_gutter, color_loaded, theme)
+            preamble::injected_block(&colors, has_gutter, color_loaded, theme, font)
         };
         let (anchor, entry_lines) = preamble::inject_entry(&build_dir.join(entry), &block)?;
         line_map.shift_for_injection(entry, anchor, block.lines().count(), entry_lines);
@@ -2209,6 +2215,65 @@ mod tests {
         assert!(
             text.contains("Listing 1.1:"),
             "chapter numbering missing: {text:?}"
+        );
+    }
+
+    /// Font setting reaches the injected preamble exactly once.
+    #[test]
+    fn font_setting_reaches_the_injected_preamble_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+
+        // With Inconsolata font, the load line and its guard must appear once.
+        let cfg = Settings {
+            font: ListingFont::Inconsolata,
+            ..Settings::default()
+        };
+        run(dir.path(), "main.tex", cfg).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        let guard = r"\@ifpackageloaded{inconsolata}{}{\usepackage[varqu,varl]{inconsolata}}%";
+        assert_eq!(out.matches(guard).count(), 1, "guard appears once:\n{out}");
+        assert_eq!(
+            out.matches(r"\usepackage[varqu,varl]{inconsolata}").count(),
+            1,
+            "load line appears once:\n{out}"
+        );
+
+        // With default Document font, no font line is injected (existing
+        // snapshots pin byte-identity, so this is a sanity check).
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir2.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir2.path(), "main.tex", Settings::default()).unwrap();
+        let out2 = std::fs::read_to_string(dir2.path().join("main.tex")).unwrap();
+        assert!(
+            !out2.contains("inconsolata"),
+            "Document font injects nothing:\n{out2}"
+        );
+        assert!(
+            !out2.contains("sourcecodepro"),
+            "Document font injects nothing:\n{out2}"
+        );
+        assert!(
+            !out2.contains("DejaVuSansMono"),
+            "Document font injects nothing:\n{out2}"
+        );
+        assert!(
+            !out2.contains("plex-mono"),
+            "Document font injects nothing:\n{out2}"
+        );
+        assert!(
+            !out2.contains("FiraMono"),
+            "Document font injects nothing:\n{out2}"
         );
     }
 }

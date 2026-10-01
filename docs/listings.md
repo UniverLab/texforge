@@ -51,12 +51,34 @@ theme = "github"     # "github" (default) or "one-light"
 style = "light"      # "light" (default), "light-mono", "dark", "dark-mono"
 lstlisting = true    # also rewrite \begin{lstlisting} blocks (default false)
 numbers = true       # number every block unless it says otherwise
+font = "inconsolata" # typewriter family for code blocks (default "document")
 # caption_name = "Listing"        # override the language's listing name
 # list_name = "List of Listings"  # override the list-of-listings heading
 
 [highlight.by_lang]
 bash = "dark"        # shell commands in a terminal-dark frame
 ```
+
+## Font
+
+The `[highlight] font` key sets the document's **typewriter family** (`\ttfamily`) so
+inline `\texttt{}` matches the code blocks. The value must be one of the monospace
+families shipped in the Tectonic bundle:
+
+| value | family |
+|---|---|
+| `document` (default) | whatever the preamble sets — Latin Modern Mono in the bundled templates |
+| `inconsolata` | Inconsolata (with `varqu`/`varl` for straight quotes and distinguishable `l`) |
+| `source-code-pro` | Source Code Pro |
+| `dejavu-sans-mono` | DejaVu Sans Mono |
+| `plex-mono` | IBM Plex Mono |
+| `fira-mono` | Fira Mono |
+
+The chosen package is loaded once, guarded by `\@ifpackageloaded`, so a document
+that already loads the same package is not loaded twice. Because the injection
+happens **after** the author's preamble, the chosen family wins over a mono
+package the author loaded earlier. Unknown values fail the build, naming the
+value and listing the six valid ones.
 
 ## Captions, labels and the list of listings
 

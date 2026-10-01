@@ -18,6 +18,92 @@ use super::caption;
 use super::engine::Rgb;
 use super::palette::{self, HighlightStyle, HighlightTheme, Palette};
 
+/// The typewriter family `[highlight] font` selects. `Document` injects
+/// nothing, so output is byte-identical to before this key existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListingFont {
+    #[default]
+    Document,
+    Inconsolata,
+    SourceCodePro,
+    DejaVuSansMono,
+    PlexMono,
+    FiraMono,
+}
+
+/// Every valid `[highlight] font` value, in the order errors list them.
+pub const VALID_FONT_NAMES: [&str; 6] = [
+    "document",
+    "inconsolata",
+    "source-code-pro",
+    "dejavu-sans-mono",
+    "plex-mono",
+    "fira-mono",
+];
+
+/// A font's package name (for the guard) and its load line.
+struct FontLoad {
+    package: &'static str,
+    line: &'static str,
+}
+
+impl ListingFont {
+    /// Parse a `[highlight] font` value. Unknown fails naming the value and
+    /// every valid alternative — mirroring `HighlightTheme::parse`.
+    pub fn parse(name: &str) -> Result<Self> {
+        match name {
+            "document" => Ok(Self::Document),
+            "inconsolata" => Ok(Self::Inconsolata),
+            "source-code-pro" => Ok(Self::SourceCodePro),
+            "dejavu-sans-mono" => Ok(Self::DejaVuSansMono),
+            "plex-mono" => Ok(Self::PlexMono),
+            "fira-mono" => Ok(Self::FiraMono),
+            other => anyhow::bail!(
+                "Unknown code font '{other}' — valid fonts are: {}",
+                VALID_FONT_NAMES.join(", ")
+            ),
+        }
+    }
+
+    fn load(self) -> Option<FontLoad> {
+        let load = match self {
+            Self::Document => return None,
+            Self::Inconsolata => FontLoad {
+                package: "inconsolata",
+                line: r"\usepackage[varqu,varl]{inconsolata}",
+            },
+            Self::SourceCodePro => FontLoad {
+                package: "sourcecodepro",
+                line: r"\usepackage[ttdefault=true]{sourcecodepro}",
+            },
+            Self::DejaVuSansMono => FontLoad {
+                package: "DejaVuSansMono",
+                line: r"\usepackage{DejaVuSansMono}",
+            },
+            Self::PlexMono => FontLoad {
+                package: "plex-mono",
+                line: r"\usepackage{plex-mono}",
+            },
+            Self::FiraMono => FontLoad {
+                package: "FiraMono",
+                line: r"\usepackage{FiraMono}",
+            },
+        };
+        Some(load)
+    }
+
+    /// The guarded stanza this font contributes, or `""` for `Document`.
+    /// Emitted after the author's preamble, so the chosen family wins over a
+    /// mono package loaded earlier; the guard skips a duplicate load when the
+    /// author already loaded the very same package. Tokenised under
+    /// `\makeatletter` so `\@ifpackageloaded` is safe.
+    fn preamble_stanza(self) -> String {
+        let Some(FontLoad { package, line }) = self.load() else {
+            return String::new();
+        };
+        format!("\\makeatletter\n\\@ifpackageloaded{{{package}}}{{}}{{{line}}}%\n\\makeatother\n")
+    }
+}
 pub(crate) const BEGIN_MARKER: &str =
     "% ---- texforge code listings (injected; do not edit, rebuild to refresh) ----";
 pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
@@ -38,13 +124,22 @@ pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
 /// * `caption_names` — `Some` when at least one block carries `caption=`;
 ///   appends the listing counter, the chapter-aware numbering and
 ///   `\listoflistings`.
+/// * `font` — the typewriter family for code blocks; `Document` injects nothing.
 pub(crate) fn injected_block(
     colors: &BTreeSet<Rgb>,
     has_gutter: bool,
     color_pkg_visible_load: bool,
     theme: HighlightTheme,
+    font: ListingFont,
 ) -> String {
-    injected_block_with_caption(colors, has_gutter, None, color_pkg_visible_load, theme)
+    injected_block_with_caption(
+        colors,
+        has_gutter,
+        None,
+        color_pkg_visible_load,
+        theme,
+        font,
+    )
 }
 
 /// [`injected_block`] with an optional caption machinery section.
@@ -54,6 +149,7 @@ pub(crate) fn injected_block_with_caption(
     caption_names: Option<&caption::Names>,
     color_pkg_visible_load: bool,
     theme: HighlightTheme,
+    font: ListingFont,
 ) -> String {
     let frame = light_palette(theme);
     let load_color = if color_pkg_visible_load {
@@ -74,6 +170,7 @@ pub(crate) fn injected_block_with_caption(
     out.push('\n');
     out.push_str(r"\makeatother");
     out.push('\n');
+    out.push_str(&font.preamble_stanza());
     out.push_str(
         r"\newcommand{\tfxcodestyle}{\ttfamily\small\setlength{\parindent}{0pt}\setlength{\parskip}{0pt}}",
     );
@@ -367,7 +464,13 @@ mod tests {
         let mut used = BTreeSet::new();
         used.insert(Rgb::new(0x03, 0x2f, 0x62));
         used.insert(Rgb::new(0x00, 0x00, 0x00));
-        let block = injected_block(&used, false, false, HighlightTheme::Github);
+        let block = injected_block(
+            &used,
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
         let first = block.find("\\definecolor{tfxcol000000}").unwrap();
         let second = block.find("\\definecolor{tfxcol032f62}").unwrap();
         assert!(first < second, "colors must be sorted by name:\n{block}");
@@ -381,26 +484,56 @@ mod tests {
 
     #[test]
     fn gutter_color_only_when_numbered() {
-        let block = injected_block(&BTreeSet::new(), true, false, HighlightTheme::Github);
+        let block = injected_block(
+            &BTreeSet::new(),
+            true,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
         assert!(block.contains("\\definecolor{tfxgutter}{rgb}{0.416,0.451,0.490}"));
-        let one_light = injected_block(&BTreeSet::new(), true, false, HighlightTheme::OneLight);
+        let one_light = injected_block(
+            &BTreeSet::new(),
+            true,
+            false,
+            HighlightTheme::OneLight,
+            ListingFont::Document,
+        );
         assert!(one_light.contains("\\definecolor{tfxgutter}{rgb}{0.627,0.631,0.655}"));
     }
 
     #[test]
     fn frame_colors_come_from_the_theme() {
-        let block = injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github);
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
         assert!(block.contains("\\definecolor{tfxtint}{rgb}{0.965,0.973,0.980}"));
         assert!(block.contains("\\definecolor{tfxframe}{rgb}{0.765,0.780,0.796}"));
         assert!(block.contains("\\newcommand{\\tfxsmash}"));
-        let one_light = injected_block(&BTreeSet::new(), false, false, HighlightTheme::OneLight);
+        let one_light = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::OneLight,
+            ListingFont::Document,
+        );
         assert!(one_light.contains("\\definecolor{tfxtint}{rgb}{0.980,0.980,0.980}"));
         assert!(one_light.contains("\\definecolor{tfxframe}{rgb}{0.851,0.851,0.863}"));
     }
 
     #[test]
     fn visible_color_load_drops_the_usepackage_but_keeps_the_guard() {
-        let block = injected_block(&BTreeSet::new(), false, true, HighlightTheme::Github);
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            true,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
         assert!(!block.contains("\\usepackage{color}"), "{block}");
         assert!(block.contains(r"\@ifpackageloaded{color}"), "{block}");
         assert!(block.contains(r"\@ifpackageloaded{xcolor}"), "{block}");
@@ -606,6 +739,7 @@ mod tests {
             Some(&names),
             false,
             HighlightTheme::Github,
+            ListingFont::Document,
         );
         assert!(block.contains("\\newcounter{tfxlisting}"), "{block}");
         assert!(block.contains("\\@ifundefined{chapter}"), "{block}");
@@ -635,9 +769,93 @@ mod tests {
 
     #[test]
     fn no_caption_machinery_without_a_caption() {
-        let block = injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github);
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
         assert!(!block.contains("tfxlisting"), "{block}");
         assert!(!block.contains("listoflistings"), "{block}");
         assert!(!block.contains("tfxlistingname"), "{block}");
+    }
+
+    /// `Document` font injects nothing — byte-identical to before this feature.
+    #[test]
+    fn document_font_injects_no_stanza() {
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
+        // Only the colour guard's two \@ifpackageloaded occurrences should exist
+        let count = block.matches("\\@ifpackageloaded{").count();
+        assert_eq!(count, 2, "only colour guard: {block}");
+        assert!(!block.contains("\\usepackage{inconsolata}"));
+        assert!(!block.contains("\\usepackage{sourcecodepro}"));
+        assert!(!block.contains("\\usepackage{DejaVuSansMono}"));
+        assert!(!block.contains("\\usepackage{plex-mono}"));
+        assert!(!block.contains("\\usepackage{FiraMono}"));
+    }
+
+    /// Each of the five fonts injects exactly its guarded line, once.
+    #[test]
+    fn each_font_injects_exactly_its_guarded_line() {
+        let cases = [
+            (
+                ListingFont::Inconsolata,
+                "inconsolata",
+                r"\usepackage[varqu,varl]{inconsolata}",
+            ),
+            (
+                ListingFont::SourceCodePro,
+                "sourcecodepro",
+                r"\usepackage[ttdefault=true]{sourcecodepro}",
+            ),
+            (
+                ListingFont::DejaVuSansMono,
+                "DejaVuSansMono",
+                r"\usepackage{DejaVuSansMono}",
+            ),
+            (
+                ListingFont::PlexMono,
+                "plex-mono",
+                r"\usepackage{plex-mono}",
+            ),
+            (ListingFont::FiraMono, "FiraMono", r"\usepackage{FiraMono}"),
+        ];
+        for (font, pkg, line) in cases {
+            let block =
+                injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github, font);
+            let guard = format!("\\@ifpackageloaded{{{pkg}}}{{}}{{{line}}}%");
+            let occurrences = block.matches(&guard).count();
+            assert_eq!(occurrences, 1, "{font:?} guard must appear once:\n{block}");
+            let line_count = block.matches(line).count();
+            assert_eq!(
+                line_count, 1,
+                "{font:?} load line must appear once:\n{block}"
+            );
+        }
+    }
+
+    /// Unknown font fails naming the value and all six valid names.
+    #[test]
+    fn unknown_font_fails_naming_all_valid_values() {
+        let err = ListingFont::parse("jetbrains-mono")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("jetbrains-mono"), "{err}");
+        for name in VALID_FONT_NAMES {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
+        assert!(ListingFont::parse("inconsolata").is_ok());
+        assert!(ListingFont::parse("source-code-pro").is_ok());
+        assert!(ListingFont::parse("dejavu-sans-mono").is_ok());
+        assert!(ListingFont::parse("plex-mono").is_ok());
+        assert!(ListingFont::parse("fira-mono").is_ok());
+        assert!(ListingFont::parse("document").is_ok());
     }
 }
