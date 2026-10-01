@@ -23,13 +23,16 @@ mod caption;
 mod emit;
 mod engine;
 mod linemap;
+mod palette;
 mod preamble;
 
-pub use engine::HighlightTheme;
+pub use engine::language_key;
 pub use linemap::LineMap;
+pub use palette::{HighlightStyle, HighlightTheme};
 
 use emit::{EmitCaption, EmitOpts};
 use engine::Rgb;
+use palette::BlockStyle;
 
 /// The `code` environment this pass owns; `check_collisions` guarantees
 /// nothing else defines it.
@@ -40,7 +43,13 @@ pub const LST_ENV: &str = "lstlisting";
 /// Option keys each environment consumes. Anything else warns through the
 /// shared parser — which is exactly the "lstlisting options are dropped"
 /// feedback, with no extra machinery.
-const CODE_OPTION_KEYS: &[&str] = &["lang", "numbers", "caption", "label", "pos", "size"];
+// `style` is deliberately absent from `LSTLISTING_OPTION_KEYS`: `lstlisting`
+// takes its style from `[highlight.by_lang]` or the document default, so a
+// `style=` there keeps the usual "unknown option" warning instead of
+// silently picking a treatment the author may have meant for a `code` block.
+const CODE_OPTION_KEYS: &[&str] = &[
+    "lang", "numbers", "caption", "label", "pos", "size", "style",
+];
 const LSTLISTING_OPTION_KEYS: &[&str] = &[
     "language",
     "numbers",
@@ -55,6 +64,12 @@ const LSTLISTING_OPTION_KEYS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub theme: HighlightTheme,
+    /// Document-wide default style; a block's `style=` or a `[highlight.by_lang]`
+    /// entry wins over it.
+    pub style: HighlightStyle,
+    /// Per-language styles from `[highlight.by_lang]`, keyed by
+    /// [`language_key`] of the language name or alias.
+    pub by_lang: HashMap<String, HighlightStyle>,
     /// Rewrite `\begin{lstlisting}` blocks too (off by default: `listings`
     /// users keep real `listings.sty` behaviour until they opt in).
     pub lstlisting: bool,
@@ -71,6 +86,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: HighlightTheme::Github,
+            style: HighlightStyle::Light,
+            by_lang: HashMap::new(),
             lstlisting: false,
             numbers: false,
             caption_name: None,
@@ -114,6 +131,8 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
 fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warning>, LineMap)> {
     let Settings {
         theme,
+        style,
+        by_lang,
         lstlisting,
         numbers,
         caption_name,
@@ -176,7 +195,18 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
             warnings: &mut warnings,
             origins: &mut origins,
         };
-        let rewritten = rewrite_file(rel, content, blocks, numbers, theme, &mut state)?;
+        let rewritten = rewrite_file(
+            rel,
+            content,
+            blocks,
+            numbers,
+            theme,
+            &StyleDefaults {
+                by_lang: &by_lang,
+                document: style,
+            },
+            &mut state,
+        )?;
         std::fs::write(build_dir.join(rel.as_str()), &rewritten)?;
         if !origins.is_empty() {
             *line_map.file_mut(rel) = origins;
@@ -293,6 +323,7 @@ fn rewrite_file(
     blocks: &[Target],
     default_numbers: bool,
     theme: HighlightTheme,
+    styles: &StyleDefaults<'_>,
     state: &mut RewriteState,
 ) -> Result<String> {
     let mut result = String::with_capacity(content.len());
@@ -351,7 +382,11 @@ fn rewrite_file(
         }
 
         let lang = lang_for(env, &opts);
-        let spans = match engine::highlight(&lang, &body, theme)? {
+        let style = styles.resolve(env, &opts, &lang)?;
+        let block_palette = palette::palette(theme, style);
+        let block_style =
+            block_palette.block_style(block_numbers, style.paints_base(), state.colors);
+        let spans = match engine::highlight(&lang, &body, theme, style)? {
             Some(spans) => Some(spans),
             None => {
                 let warning = unknown_language_warning(env, &lang, first_line, rel);
@@ -371,7 +406,14 @@ fn rewrite_file(
         let rendered = emit::render_block(
             &body,
             spans.as_deref(),
-            &resolved.emit_opts(rel, first_line, body_line, end_line, block_numbers),
+            &resolved.emit_opts(
+                rel,
+                first_line,
+                body_line,
+                end_line,
+                block_numbers,
+                &block_style,
+            ),
             state.colors,
             state.warnings,
             &mut block_origins,
@@ -449,6 +491,9 @@ struct ResolvedBlock<'a> {
 }
 
 impl<'a> ResolvedBlock<'a> {
+    /// Everything the emission needs: the block's own caption/float/size
+    /// options, where it sits in the build copy, and the frame colours its
+    /// style resolved to.
     fn emit_opts(
         &'a self,
         file: &'a str,
@@ -456,6 +501,7 @@ impl<'a> ResolvedBlock<'a> {
         body_line: usize,
         end_line: usize,
         numbers: bool,
+        style: &'a BlockStyle,
     ) -> EmitOpts<'a> {
         EmitOpts {
             file,
@@ -469,7 +515,40 @@ impl<'a> ResolvedBlock<'a> {
             }),
             float: self.float.as_deref(),
             size_command: self.size_command,
+            colors: &style.colors,
+            base: style.base,
         }
+    }
+}
+
+/// Where a block's style comes from when the block does not say: the
+/// `[highlight.by_lang]` table (keyed by [`language_key`], so aliases agree)
+/// over the document-wide `[highlight] style`.
+struct StyleDefaults<'a> {
+    by_lang: &'a HashMap<String, HighlightStyle>,
+    document: HighlightStyle,
+}
+
+impl StyleDefaults<'_> {
+    /// Resolve one block's style, most specific first: the `code` block's own
+    /// `style=`, then the language's entry, then the document default. An
+    /// unknown `style=` value fails the build by name, like an unknown theme.
+    fn resolve(
+        &self,
+        env: &str,
+        opts: &HashMap<String, String>,
+        lang: &str,
+    ) -> Result<HighlightStyle> {
+        if env == CODE_ENV {
+            if let Some(name) = opts.get("style") {
+                return HighlightStyle::parse(name);
+            }
+        }
+        Ok(self
+            .by_lang
+            .get(&language_key(lang))
+            .copied()
+            .unwrap_or(self.document))
     }
 }
 
@@ -877,6 +956,230 @@ mod tests {
         );
         assert!(!numbers_for(LST_ENV, &opts("bogus"), false));
         assert!(numbers_for(CODE_ENV, &HashMap::new(), true));
+    }
+
+    /// Resolution order, most specific first: the `code` block's own
+    /// `style=`, then the language's `[highlight.by_lang]` entry, then the
+    /// document-wide default.
+    #[test]
+    fn style_resolution_runs_block_then_by_lang_then_document() {
+        let rules = StyleDefaults {
+            by_lang: &HashMap::from([("bash".to_string(), HighlightStyle::Dark)]),
+            document: HighlightStyle::LightMono,
+        };
+        let code = |v: &str| HashMap::from([("style".to_string(), v.to_string())]);
+
+        assert_eq!(
+            rules.resolve(CODE_ENV, &code("dark-mono"), "bash").unwrap(),
+            HighlightStyle::DarkMono,
+            "the block option beats the language entry"
+        );
+        assert_eq!(
+            rules.resolve(CODE_ENV, &HashMap::new(), "bash").unwrap(),
+            HighlightStyle::Dark,
+            "by_lang beats the document default"
+        );
+        assert_eq!(
+            rules.resolve(CODE_ENV, &HashMap::new(), "python").unwrap(),
+            HighlightStyle::LightMono,
+            "an unlisted language falls back to the document"
+        );
+    }
+
+    /// `[highlight.by_lang]` keys are normalised on both sides, so one entry
+    /// covers every spelling of its language.
+    #[test]
+    fn by_lang_matches_a_block_through_the_aliases() {
+        let rules = StyleDefaults {
+            by_lang: &HashMap::from([("bash".to_string(), HighlightStyle::Dark)]),
+            document: HighlightStyle::Light,
+        };
+        for spelling in ["bash", "sh", "shell", "zsh", "Bash"] {
+            assert_eq!(
+                rules.resolve(CODE_ENV, &HashMap::new(), spelling).unwrap(),
+                HighlightStyle::Dark,
+                "lang={spelling}"
+            );
+        }
+    }
+
+    /// An unknown `style=` is a build failure naming the value and the valid
+    /// names — never a warning that silently paints the wrong thing.
+    #[test]
+    fn unknown_block_style_fails_naming_the_value_and_valid_names() {
+        let rules = StyleDefaults {
+            by_lang: &HashMap::new(),
+            document: HighlightStyle::Light,
+        };
+        let err = rules
+            .resolve(
+                CODE_ENV,
+                &HashMap::from([("style".into(), "neon".into())]),
+                "python",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("neon"), "{err}");
+        for name in ["light", "light-mono", "dark", "dark-mono"] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
+    }
+
+    /// `lstlisting` has no `style=` option, so one there warns as unknown and
+    /// the block still honours `by_lang` — the warning path and the resolution
+    /// path are independent.
+    #[test]
+    fn lstlisting_ignores_a_block_style_but_honours_by_lang() {
+        let rules = StyleDefaults {
+            by_lang: &HashMap::from([("python".to_string(), HighlightStyle::Dark)]),
+            document: HighlightStyle::Light,
+        };
+        let with_style = HashMap::from([("style".to_string(), "dark-mono".to_string())]);
+        assert_eq!(
+            rules.resolve(LST_ENV, &with_style, "python").unwrap(),
+            HighlightStyle::Dark,
+            "the block option is not consulted for lstlisting"
+        );
+
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{lstlisting}[language=Python, style=dark]\nx = 1\n\\end{lstlisting}\n\
+             \\end{document}\n",
+        );
+        let cfg = Settings {
+            lstlisting: true,
+            style: HighlightStyle::Light,
+            by_lang: HashMap::from([("python".to_string(), HighlightStyle::Dark)]),
+            ..Settings::default()
+        };
+        // The unknown option is reported by the shared option parser on
+        // stderr (it is not a block warning), and by_lang still applies.
+        let warnings = run(dir.path(), "main.tex", cfg).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\definecolor{tfxcol22272e}"),
+            "by_lang still applies: {out}"
+        );
+    }
+
+    /// End to end: a dark block paints its own tint, frame, gutter and base
+    /// colour under its own colour names, while the fixed `tfxtint` keeps the
+    /// light palette — the two coexist in one document.
+    #[test]
+    fn dark_block_emits_its_own_frame_and_base_colour() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=bash, style=dark, numbers=true]\necho hi\n\\end{code}\n\
+             \\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+
+        assert!(
+            out.contains("\\definecolor{tfxcol22272e}{rgb}{0.133,0.153,0.180}"),
+            "the dark tint must be defined: {out}"
+        );
+        assert!(
+            out.contains("\\definecolor{tfxcol8b949e}{rgb}{0.545,0.580,0.620}"),
+            "the dark frame/gutter must be defined: {out}"
+        );
+        assert!(
+            out.contains("\\definecolor{tfxcoladbac7}{rgb}{0.678,0.729,0.780}"),
+            "the dark base foreground must be defined: {out}"
+        );
+        // The light names still exist, at the light palette's values: the
+        // preamble is unchanged for a document that mixes the two.
+        assert!(
+            out.contains("\\definecolor{tfxtint}{rgb}{0.965,0.973,0.980}"),
+            "the light tint must stay: {out}"
+        );
+        assert!(out.contains("\\textcolor{tfxcol22272e}"), "dark tint rule");
+        assert!(out.contains("\\textcolor{tfxcol8b949e}"), "dark frame rule");
+        assert!(
+            out.contains("\\textcolor{tfxcol8b949e}{\\hbox to 2em{\\hss 1}}"),
+            "the gutter uses the dark comment colour: {out}"
+        );
+        assert!(
+            out.contains("{\n\\tfxcodestyle\n\\color{tfxcoladbac7}"),
+            "the base colour opens the style group: {out}"
+        );
+    }
+
+    /// A `light-mono` block leans on weight and slant: the keyword is bold,
+    /// the comment italic, and nothing carries hue.
+    #[test]
+    fn light_mono_block_emits_bold_keywords_and_italic_comments() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, style=light-mono]\n\
+             # note\ndef f():\n    return \"x\"\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\definecolor{tfxcolf6f6f6}"),
+            "the mono tint must be defined: {out}"
+        );
+        assert!(out.contains("\\textit{"), "comments are italic: {out}");
+        assert!(out.contains("\\textbf{"), "keywords are bold: {out}");
+        // No hue: every defined colour is a grey.
+        for line in out.lines().filter(|l| l.contains("\\definecolor{tfxcol")) {
+            let rgb = line
+                .rsplit_once('{')
+                .and_then(|(_, rest)| rest.split_once('}'))
+                .expect("an rgb triple");
+            let parts: Vec<f64> = rgb
+                .0
+                .split(',')
+                .map(|v| v.parse().unwrap_or(-1.0))
+                .collect();
+            assert_eq!(parts.len(), 3, "{line}");
+            assert!(
+                parts.iter().all(|v| *v >= 0.0),
+                "light-mono must define no hue-carrying colour: {line}"
+            );
+            assert!(
+                (parts[0] - parts[1]).abs() < 0.002 && (parts[1] - parts[2]).abs() < 0.002,
+                "light-mono must be greyscale: {line}"
+            );
+        }
+    }
+
+    /// The `dark` default in `project.toml` reaches every block that names no
+    /// language the table covers, and a block may still opt back out.
+    #[test]
+    fn document_default_style_applies_and_a_block_can_override_it() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python]\nx = 1\n\\end{code}\n\
+             \\begin{code}[lang=rust, style=light]\nlet x = 1;\n\\end{code}\n\
+             \\end{document}\n",
+        );
+        let cfg = Settings {
+            style: HighlightStyle::Dark,
+            ..Settings::default()
+        };
+        let warnings = run(dir.path(), "main.tex", cfg).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert_eq!(
+            out.matches("\\color{tfxcoladbac7}").count(),
+            1,
+            "only the block that inherited `dark` gets a base colour: {out}"
+        );
+        assert_eq!(
+            out.matches("\\textcolor{tfxcol22272e}").count(),
+            1,
+            "one tinted line in the dark block: {out}"
+        );
+        assert_eq!(
+            out.matches("\\textcolor{tfxtint}").count(),
+            1,
+            "the overriding block keeps the light frame: {out}"
+        );
     }
 
     #[test]

@@ -7,7 +7,9 @@ necesita \texttt{color.sty}, sin depender de \texttt{listings} ni de
 \texttt{minted}. El lenguaje se indica con \texttt{lang} y la numeración de
 líneas con \texttt{numbers}. El tema tipográfico ---\texttt{one-light} en
 este caso--- se elige una sola vez para todo el documento en
-\texttt{project.toml}; ningún bloque lo cambia por su cuenta.
+\texttt{project.toml}, y el \emph{estilo} de color se puede cambiar por
+bloque: hay cuatro (\texttt{light}, \texttt{light-mono}, \texttt{dark} y
+\texttt{dark-mono}) y se pueden mezclar en un mismo documento.
 
 \subsection{Python}
 
@@ -48,14 +50,29 @@ fn main() {
 
 \subsection{Shell}
 
-Estos caracteres son especiales en LaTeX y se imprimen tal cual, porque
-cada carácter se escapa antes de llegar al motor:
+La tabla \texttt{[highlight.by\_lang]} de \texttt{project.toml} fija
+\texttt{bash = "dark"}, así que este bloque usa el estilo \texttt{dark} sin
+tener que pedirlo en su propio encabezado --- igual que una terminal. Estos
+caracteres son especiales en LaTeX y se imprimen tal cual, porque cada
+carácter se escapa antes de llegar al motor:
 
 \begin{code}[lang=bash]
 #!/usr/bin/env bash
 set -euo pipefail
 
 echo '$ % & # _ ^ ~ { } \'
+\end{code}
+
+\subsection{Estilos monocromos}
+
+Un bloque puede pedir su propio estilo con la opción \texttt{style}. El
+variante \texttt{light-mono} quita todo el color: las palabras clave van en
+negrita y los comentarios en cursiva, que es lo que funciona en una
+impresión en blanco y negro.
+
+\begin{code}[lang=python, style=light-mono]
+def sumar(numeros):  # solo grises: apto para B/N
+    return sum(numeros)
 \end{code}
 
 \subsection{TOML}
@@ -65,6 +82,10 @@ La configuración del propio proyecto se muestra con el mismo entorno:
 \begin{code}[lang=toml]
 [highlight]
 theme = "one-light"
+style = "light"
+
+[highlight.by_lang]
+bash = "dark"
 \end{code}
 
 \listoflistings

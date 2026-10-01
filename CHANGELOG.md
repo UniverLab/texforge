@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numbered per chapter when the class defines `\chapter`; the names follow
   the document language (english / spanish) and are overridable with
   `[highlight] caption_name` / `list_name`.
+- Four code-listing styles — `light`, `light-mono`, `dark`, `dark-mono` —
+  selectable per block (`style=` on `code`), per language
+  (`[highlight.by_lang] bash = "dark"`) or per document (`[highlight]
+  style`), most specific winning. `dark` takes the dark twin of the theme
+  (GitHub Dark Dimmed or One Dark) on a dark frame; the `-mono` styles are
+  greyscale, using bold keywords and italic comments instead of hue, and
+  are the black-and-white-printing choice. Styles can be mixed in one
+  document; `light` is unchanged byte for byte.
 
 ### Changed
 

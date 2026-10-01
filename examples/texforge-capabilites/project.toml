@@ -9,3 +9,7 @@ bibliography = "bib/references.bib"
 
 [highlight]
 theme = "one-light"
+style = "light"
+
+[highlight.by_lang]
+bash = "dark"

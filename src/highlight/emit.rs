@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 
 use crate::highlight::engine::{Rgb, Span};
+use crate::highlight::palette::{BlockColors, FontStyle};
 use crate::highlight::Warning;
 
 /// A line longer than this many display columns (tab-expanded source plus the
@@ -47,6 +48,13 @@ pub(crate) struct EmitOpts<'a> {
     pub(crate) float: Option<&'a str>,
     /// `None` = default `small`; `Some("\\footnotesize")` etc.
     pub(crate) size_command: Option<&'static str>,
+    /// This block's frame colours. A document may mix styles, so they travel
+    /// with the block instead of living in one global set of names.
+    pub(crate) colors: &'a BlockColors,
+    /// The palette's base foreground, when the style needs it spelled out:
+    /// a dark frame must not leave unscoped tokens on the document's black.
+    /// `None` for the light styles, which inherit black exactly as before.
+    pub(crate) base: Option<Rgb>,
 }
 
 /// Map one source character to its LaTeX expansion, or `None` when it passes
@@ -133,8 +141,8 @@ fn display_width(line: &str, numbers: bool, gutter_width: usize) -> usize {
 /// hugs the 0.3pt separator rule instead of the frame's left edge (the
 /// separator rule and the 0.8em gap are emitted separately by
 /// [`render_block`]).
-fn gutter(number: usize, width: usize) -> String {
-    format!("\\textcolor{{tfxgutter}}{{\\hbox to {width}em{{\\hss {number}}}}}")
+fn gutter(number: usize, width: usize, color: &str) -> String {
+    format!("\\textcolor{{{color}}}{{\\hbox to {width}em{{\\hss {number}}}}}")
 }
 
 /// Width of the gutter: at least two columns, wider only when the block has
@@ -162,46 +170,58 @@ fn geometry(first: bool, last: bool) -> (&'static str, String) {
 }
 
 /// The background tint for one line, full `\linewidth` minus the borders.
-fn tint_rule(first: bool, last: bool) -> String {
+fn tint_rule(first: bool, last: bool, color: &str) -> String {
+    const TEMPLATE: &str = "\\tfxsmash{\\rlap{\\kern0.4pt\\textcolor{@tint@}{\\rule[@raise@]{\\dimexpr\\linewidth-0.8pt\\relax}{@height@}}}}";
     let (raise, height) = geometry(first, last);
-    format!(
-        "\\tfxsmash{{\\rlap{{\\kern0.4pt\\textcolor{{tfxtint}}{{\\rule[{raise}]{{\\dimexpr\\linewidth-0.8pt\\relax}}{{{height}}}}}}}}}"
-    )
+    fill(TEMPLATE, color, raise, &height)
 }
 
-/// The 0.4pt left and right hairlines in `tfxframe`.
-fn side_rules(first: bool, last: bool) -> String {
+/// Substitute one frame rule's placeholders. The rules are brace-dense
+/// templates rather than format strings — see the note in [`end_rules`].
+fn fill(template: &str, color: &str, raise: &'static str, height: &str) -> String {
+    template
+        .replace("@frame@", color)
+        .replace("@tint@", color)
+        .replace("@raise@", raise)
+        .replace("@height@", height)
+}
+
+/// The 0.4pt left and right hairlines in the frame colour.
+fn side_rules(first: bool, last: bool, color: &str) -> String {
+    const LEFT: &str = "\\tfxsmash{\\rlap{\\textcolor{@frame@}{\\rule[@raise@]{0.4pt}{@height@}}}}";
+    const RIGHT: &str = "\\tfxsmash{\\rlap{\\kern\\dimexpr\\linewidth-0.4pt\\relax\\textcolor{@frame@}{\\rule[@raise@]{0.4pt}{@height@}}}}";
     let (raise, height) = geometry(first, last);
-    format!(
-        "\\tfxsmash{{\\rlap{{\\textcolor{{tfxframe}}{{\\rule[{raise}]{{0.4pt}}{{{height}}}}}}}}}\
-         \\tfxsmash{{\\rlap{{\\kern\\dimexpr\\linewidth-0.4pt\\relax\\textcolor{{tfxframe}}{{\\rule[{raise}]{{0.4pt}}{{{height}}}}}}}}}"
-    )
+    fill(LEFT, color, raise, &height) + &fill(RIGHT, color, raise, &height)
 }
 
 /// The horizontal borders: top rule on the first line, bottom rule on the
 /// last (a single-line block gets both). Mid lines carry none, so a block
 /// split across pages stays open at the break.
-fn end_rules(first: bool, last: bool) -> String {
+///
+/// Written as templates with a `@frame@` placeholder rather than as format
+/// strings: these rules are brace-dense, and doubling every literal brace by
+/// hand is exactly the kind of edit that silently loses one.
+fn end_rules(first: bool, last: bool, color: &str) -> String {
+    const TOP: &str = "\\tfxsmash{\\rlap{\\kern0.4pt\\textcolor{@frame@}{\\rule[\\baselineskip]{\\dimexpr\\linewidth-0.8pt\\relax}{0.4pt}}}}";
+    const BOTTOM: &str = "\\tfxsmash{\\rlap{\\kern0.4pt\\textcolor{@frame@}{\\rule[-6.4pt]{\\dimexpr\\linewidth-0.8pt\\relax}{0.4pt}}}}";
     let mut out = String::new();
     if first {
-        out.push_str(
-            "\\tfxsmash{\\rlap{\\kern0.4pt\\textcolor{tfxframe}{\\rule[\\baselineskip]{\\dimexpr\\linewidth-0.8pt\\relax}{0.4pt}}}}",
-        );
+        out.push_str(&TOP.replace("@frame@", color));
     }
     if last {
-        out.push_str(
-            "\\tfxsmash{\\rlap{\\kern0.4pt\\textcolor{tfxframe}{\\rule[-6.4pt]{\\dimexpr\\linewidth-0.8pt\\relax}{0.4pt}}}}",
-        );
+        out.push_str(&BOTTOM.replace("@frame@", color));
     }
     out
 }
 
-/// The 0.3pt gutter separator in `tfxframe` (numbered blocks only). Smashed
-/// like the rest, but not `\rlap`ped: its 0.3pt width is real spacing
+/// The 0.3pt gutter separator in the frame colour (numbered blocks only).
+/// Smashed like the rest, but not `\rlap`ped: its 0.3pt width is real spacing
 /// between the numbers and the code.
-fn separator_rule(first: bool, last: bool) -> String {
+fn separator_rule(first: bool, last: bool, color: &str) -> String {
+    // Template form, as in `end_rules` (see the note there).
+    const RULE: &str = "\\tfxsmash{\\textcolor{@frame@}{\\rule[@raise@]{0.3pt}{@height@}}}";
     let (raise, height) = geometry(first, last);
-    format!("\\tfxsmash{{\\textcolor{{tfxframe}}{{\\rule[{raise}]{{0.3pt}}{{{height}}}}}}}")
+    fill(RULE, color, raise, &height)
 }
 
 /// Widow/orphan protection: glue the first two and the last two lines of
@@ -222,18 +242,25 @@ fn break_penalty(line: usize, last: usize) -> &'static str {
 /// Render one line's overlay + gutter + code into a single `\noindent`
 /// paragraph. Stays on one output file line: the build-copy line map
 /// depends on it.
-fn emit_line(body: &str, line: usize, last: usize, numbers: bool, width: usize) -> String {
+fn emit_line(
+    body: &str,
+    line: usize,
+    last: usize,
+    numbers: bool,
+    width: usize,
+    colors: &BlockColors,
+) -> String {
     let first = line == 1;
     let is_last = line == last;
     let mut out = String::from("\\noindent ");
-    out.push_str(&tint_rule(first, is_last));
-    out.push_str(&side_rules(first, is_last));
-    out.push_str(&end_rules(first, is_last));
+    out.push_str(&tint_rule(first, is_last, &colors.tint));
+    out.push_str(&side_rules(first, is_last, &colors.frame));
+    out.push_str(&end_rules(first, is_last, &colors.frame));
     // 4pt inner padding between the frame and the code.
     out.push_str("\\kern4pt");
     if numbers {
-        out.push_str(&gutter(line, width));
-        out.push_str(&separator_rule(first, is_last));
+        out.push_str(&gutter(line, width, &colors.gutter));
+        out.push_str(&separator_rule(first, is_last, &colors.frame));
         out.push_str("\\hspace{0.8em}");
     }
     out.push_str(body);
@@ -241,39 +268,57 @@ fn emit_line(body: &str, line: usize, last: usize, numbers: bool, width: usize) 
     out
 }
 
-/// Emit one line's runs, merging adjacent spans that share a colour and
-/// leaving base-colour runs unwrapped (they are plain black text; wrapping
-/// them would inflate the output for no visual change).
+/// How one run of tokens is wrapped: its colour (if any) and its emphasis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Run {
+    color: Option<Rgb>,
+    font: FontStyle,
+}
+
+/// Emit one line's runs, merging adjacent spans that share colour *and*
+/// emphasis, and leaving base-colour plain runs unwrapped (they are plain
+/// black text; wrapping them would inflate the output for no visual change).
+/// Emphasis exists only for the mono styles, where it replaces hue.
 fn render_runs(spans: &[Span], used: &mut BTreeSet<Rgb>) -> String {
     let mut out = String::new();
-    let mut current: Option<Option<Rgb>> = None;
+    let mut current: Option<Run> = None;
     let mut buf = String::new();
 
-    let mut flush = |current: &mut Option<Option<Rgb>>, buf: &mut String, out: &mut String| {
-        match *current {
-            Some(Some(rgb)) => {
-                used.insert(rgb);
-                out.push_str("\\textcolor{");
-                out.push_str(&rgb.name());
-                out.push_str("}{");
-                out.push_str(buf);
-                out.push('}');
-            }
-            Some(None) => out.push_str(buf),
-            None => {}
-        }
-        buf.clear();
-    };
-
     for span in spans {
-        if current != Some(span.color) {
-            flush(&mut current, &mut buf, &mut out);
-            current = Some(span.color);
+        let run = Run {
+            color: span.color,
+            font: span.font,
+        };
+        if current != Some(run) {
+            flush(current, &mut buf, &mut out, used);
+            current = Some(run);
         }
         escape_into(&mut buf, &span.text);
     }
-    flush(&mut current, &mut buf, &mut out);
+    flush(current, &mut buf, &mut out, used);
     out
+}
+
+/// Wrap and emit the pending run, then clear the buffer.
+fn flush(run: Option<Run>, buf: &mut String, out: &mut String, used: &mut BTreeSet<Rgb>) {
+    let Some(run) = run else { return };
+    let emphasised = match run.font {
+        FontStyle::Normal => buf.clone(),
+        FontStyle::Bold => format!("\\textbf{{{}}}", buf),
+        FontStyle::Italic => format!("\\textit{{{}}}", buf),
+    };
+    match run.color {
+        Some(rgb) => {
+            used.insert(rgb);
+            out.push_str("\\textcolor{");
+            out.push_str(&rgb.name());
+            out.push_str("}{");
+            out.push_str(&emphasised);
+            out.push('}');
+        }
+        None => out.push_str(&emphasised),
+    }
+    buf.clear();
 }
 
 /// Render one whole block into the LaTeX that replaces it.
@@ -285,6 +330,11 @@ fn render_runs(spans: &[Span], used: &mut BTreeSet<Rgb>) -> String {
 ///   (plain or unknown-language) block.
 /// * `origins` — receives one pass-input line per output line, so the build
 ///   can map finished-copy lines back to source lines.
+///
+/// The frame colours come from `opts.colors` (per block, because a document
+/// may mix styles) and `opts.base` adds the style's base foreground inside the
+/// style group when the style needs one — `None` leaves the light styles
+/// exactly as they were.
 ///
 /// Structure: `\par\medskip`, then a group scoping `\tfxcodestyle` with one
 /// framed `\noindent` paragraph per source line separated by blank lines (so
@@ -311,6 +361,14 @@ pub(crate) fn render_block(
     let mut out_lines: Vec<String> = Vec::with_capacity(total * 2 + 10);
     let mut out_origins: Vec<usize> = Vec::with_capacity(total * 2 + 10);
     push_opening(&mut out_lines, &mut out_origins, opts);
+    // The style's base foreground, inside the `{ … }` group: a dark frame
+    // needs its light text colour spelled out, and the group keeps it off the
+    // caption above and the `\medskip` below.
+    if let Some(base) = opts.base {
+        used.insert(base);
+        out_lines.push(format!("\\color{{{}}}", base.name()));
+        out_origins.push(opts.first_line);
+    }
     if let Some(size) = opts.size_command {
         out_lines.push(size.to_string());
         out_origins.push(opts.first_line);
@@ -340,7 +398,14 @@ pub(crate) fn render_block(
         // The space after `\noindent` is skipped by TeX (it is the control
         // word's delimiter); without it the first code character would glue
         // onto `\noindent` and form an undefined control sequence.
-        out_lines.push(emit_line(&rendered_body, i + 1, total, opts.numbers, width));
+        out_lines.push(emit_line(
+            &rendered_body,
+            i + 1,
+            total,
+            opts.numbers,
+            width,
+            opts.colors,
+        ));
         out_origins.push(opts.body_line + i);
         if i + 1 < total {
             // Blank separator between two line paragraphs: Tectonic reports
@@ -434,6 +499,8 @@ fn push_closing(out_lines: &mut Vec<String>, out_origins: &mut Vec<usize>, opts:
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
 
     fn opts(file: &str, body_line: usize, numbers: bool) -> EmitOpts<'_> {
@@ -446,6 +513,8 @@ mod tests {
             caption: None,
             float: None,
             size_command: None,
+            colors: &LEGACY,
+            base: None,
         }
     }
 
@@ -466,8 +535,19 @@ mod tests {
             caption: Some(EmitCaption { text, label }),
             float,
             size_command,
+            colors: &LEGACY,
+            base: None,
         }
     }
+
+    /// The legacy light frame: the fixed `tfxtint`/`tfxframe`/`tfxgutter`
+    /// names and no base-colour line, which is what every existing snapshot
+    /// was rendered with.
+    static LEGACY: LazyLock<BlockColors> = LazyLock::new(|| BlockColors {
+        tint: "tfxtint".to_string(),
+        frame: "tfxframe".to_string(),
+        gutter: "tfxgutter".to_string(),
+    });
 
     fn render(
         body: &str,
@@ -725,6 +805,8 @@ mod tests {
             caption: None,
             float: None,
             size_command: None,
+            colors: &LEGACY,
+            base: None,
         };
         let (out, _, _, origins) = render("a\nb", None, &o);
         let lines: Vec<&str> = out.split('\n').collect();
@@ -798,18 +880,22 @@ mod tests {
             Span {
                 text: "def".to_string(),
                 color: Some(Rgb::new(0xd7, 0x3a, 0x49)),
+                font: FontStyle::Normal,
             },
             Span {
                 text: " ".to_string(),
                 color: Some(Rgb::new(0xd7, 0x3a, 0x49)),
+                font: FontStyle::Normal,
             },
             Span {
                 text: "x".to_string(),
                 color: None,
+                font: FontStyle::Normal,
             },
             Span {
                 text: " = ".to_string(),
                 color: None,
+                font: FontStyle::Normal,
             },
         ]];
         let (out, used, _, _) = render("def x = ", Some(&spans), &opts("main.tex", 1, false));
@@ -820,6 +906,132 @@ mod tests {
         assert!(out.contains("}x\\tfxsp{}=\\tfxsp{}"), "out: {out}");
         assert_eq!(used.len(), 1);
         assert!(used.contains(&Rgb::new(0xd7, 0x3a, 0x49)));
+    }
+
+    /// The mono styles carry the hierarchy in weight and slant instead of
+    /// hue: a keyword is `\textbf`, a comment `\textit`, and both merge with
+    /// their neighbours only when the emphasis matches too.
+    #[test]
+    fn font_runs_emit_textbf_and_textit() {
+        let spans = vec![vec![
+            Span {
+                text: "def ".to_string(),
+                color: Some(Rgb::new(0, 0, 0)),
+                font: FontStyle::Bold,
+            },
+            Span {
+                text: "f".to_string(),
+                color: Some(Rgb::new(0, 0, 0)),
+                font: FontStyle::Bold,
+            },
+            Span {
+                text: " # note".to_string(),
+                color: Some(Rgb::new(0x6e, 0x6e, 0x6e)),
+                font: FontStyle::Italic,
+            },
+            Span {
+                text: "plain".to_string(),
+                color: None,
+                font: FontStyle::Normal,
+            },
+        ]];
+        let (out, used, _, _) = render(
+            "def f # note plain",
+            Some(&spans),
+            &opts("main.tex", 1, false),
+        );
+        assert!(
+            out.contains("\\textcolor{tfxcol000000}{\\textbf{def\\tfxsp{}f}}"),
+            "bold keyword, merged: {out}"
+        );
+        assert!(
+            out.contains("\\textcolor{tfxcol6e6e6e}{\\textit{\\tfxsp{}\\#\\tfxsp{}note}}"),
+            "italic comment: {out}"
+        );
+        assert!(
+            out.contains("note}}plain\n\\par"),
+            "the base-colour run stays unwrapped: {out}"
+        );
+        assert_eq!(used.len(), 2, "the base colour is the document's: {used:?}");
+    }
+
+    /// An emphasised run with no colour of its own still needs its wrapper —
+    /// the mono palettes paint some tokens in the base colour, which syntect
+    /// reports as `None`.
+    #[test]
+    fn emphasis_survives_a_run_without_a_colour() {
+        let spans = vec![vec![Span {
+            text: "def".to_string(),
+            color: None,
+            font: FontStyle::Bold,
+        }]];
+        let (out, used, _, _) = render("def", Some(&spans), &opts("main.tex", 1, false));
+        assert!(out.contains("\\kern4pt\\textbf{def}"), "out: {out}");
+        assert!(used.is_empty(), "no colour to define: {used:?}");
+    }
+
+    /// A dark frame's base colour is emitted inside the style group, once per
+    /// block; a light block emits nothing there and stays byte-identical.
+    #[test]
+    fn base_colour_line_is_emitted_only_when_set() {
+        let (plain, _, _, origins) = render("a", None, &opts("main.tex", 1, false));
+        assert!(
+            !plain.contains("\\color{"),
+            "the light styles emit no base colour line: {plain}"
+        );
+        assert_eq!(origins.len(), plain.lines().count());
+
+        let dark = BlockColors {
+            tint: "tfxcol22272e".to_string(),
+            frame: "tfxcol8b949e".to_string(),
+            gutter: "tfxcol8b949e".to_string(),
+        };
+        let o = EmitOpts {
+            colors: &dark,
+            base: Some(Rgb::new(0xad, 0xba, 0xc7)),
+            ..opts("main.tex", 1, false)
+        };
+        let (out, used, _, origins) = render("a", None, &o);
+        assert!(
+            out.contains("{\n\\tfxcodestyle\n\\color{tfxcoladbac7}"),
+            "{out}"
+        );
+        assert!(
+            out.contains("\\textcolor{tfxcol22272e}"),
+            "dark tint: {out}"
+        );
+        assert!(
+            out.contains("\\textcolor{tfxcol8b949e}"),
+            "dark frame: {out}"
+        );
+        assert_eq!(origins.len(), out.lines().count(), "one origin per line");
+        assert!(
+            used.contains(&Rgb::new(0xad, 0xba, 0xc7)),
+            "the base colour needs a \\definecolor: {used:?}"
+        );
+    }
+
+    /// The base colour must not leak out of the group: the `\medskip` that
+    /// follows the block is document text.
+    #[test]
+    fn base_colour_stays_inside_the_style_group() {
+        let dark = BlockColors {
+            tint: "tfxcol22272e".to_string(),
+            frame: "tfxcol8b949e".to_string(),
+            gutter: "tfxcol8b949e".to_string(),
+        };
+        let o = EmitOpts {
+            colors: &dark,
+            base: Some(Rgb::new(0xad, 0xba, 0xc7)),
+            ..opts("main.tex", 1, false)
+        };
+        let (out, _, _, _) = render("a", None, &o);
+        let color = out.find("\\color{tfxcoladbac7}").unwrap();
+        let close = out.find("\n}").unwrap();
+        assert!(
+            color < close,
+            "the colour must precede the group's end: {out}"
+        );
     }
 
     #[test]

@@ -37,6 +37,7 @@ pass writes nothing and documents compile exactly as before.
 | `label` | label for `\ref`/`\pageref` (e.g. `lst:fib`); only meaningful with `caption` | _(none)_ — without a caption it warns (`label without caption is ignored`) |
 | `pos` | `H` (inline, the default), `h`, `t`, `b`, `p` | `H` — the listing stays where it is written and may break across pages |
 | `size` | `scriptsize`, `footnotesize`, `small`, `normalsize` | `small` (today's size); any other value warns and uses `small` |
+| `style` | `light`, `light-mono`, `dark`, `dark-mono` (see [Styles](#styles)) | `[highlight.by_lang]` for that language, else `[highlight] style`, else `light`; any other value fails the build |
 
 An unknown `lang` never fails the build: the block renders monochrome and
 `texforge build` warns, naming the language and pointing at
@@ -47,10 +48,14 @@ Project-wide defaults live in `project.toml`:
 ```toml
 [highlight]
 theme = "github"     # "github" (default) or "one-light"
+style = "light"      # "light" (default), "light-mono", "dark", "dark-mono"
 lstlisting = true    # also rewrite \begin{lstlisting} blocks (default false)
 numbers = true       # number every block unless it says otherwise
 # caption_name = "Listing"        # override the language's listing name
 # list_name = "List of Listings"  # override the list-of-listings heading
+
+[highlight.by_lang]
+bash = "dark"        # shell commands in a terminal-dark frame
 ```
 
 ## Captions, labels and the list of listings
@@ -119,22 +124,67 @@ are conveniences for the spellings authors actually type.
 | `jsx`, `tsx` | JSX / TSX | — |
 | `text`, `txt`, `plaintext`, *(empty)* | deliberate plain block — no warning | — |
 
-## Themes
+## Styles
 
-Two light palettes: `github` (default) and `one-light`, set with
-`[highlight] theme`. Both are light-only by design: the frame tints are
-light (`github` `#f6f8fa`, `one-light` `#fafafa`), so a dark theme's white
-foreground text would disappear on paper. An unknown theme name fails the
-build and lists the valid names.
+Four styles, and you can mix them in one document — Python in the light
+palette, shell commands in a terminal-dark one, a monochrome block for the
+print edition:
+
+| Style | Palette | Frame background |
+|---|---|---|
+| `light` (default) | the theme's own (`github` or `one-light`) | `github` `#f6f8fa`, `one-light` `#fafafa` |
+| `light-mono` | greys only — keywords bold, comments italic | `#f6f6f6` |
+| `dark` | the dark twin of the theme: GitHub Dark Dimmed or One Dark | `#22272e`, `#282c34` |
+| `dark-mono` | greys only, on a dark frame | `#2b2b2b` |
+
+`theme` still picks the *palette family* (`github` / `one-light`) and `style`
+picks light vs dark vs monochrome; a `dark` block takes its colours from the
+dark twin of the theme. The two `-mono` styles ignore `theme`: with hue gone
+there is nothing left for the family to decide. An unknown style name fails
+the build, naming the value and listing the valid ones.
+
+The style of a block is resolved most-specific-first:
+
+1. the block's own `style=` option
+2. the `[highlight.by_lang]` table, keyed by `lang=` name **or alias**
+   (`bash`, `sh`, `shell` and `zsh` are one entry)
+3. `[highlight] style`
+4. `light`
+
+```toml
+[highlight]
+style = "light"
+
+[highlight.by_lang]
+bash = "dark"        # every shell block, whatever spelling its lang= uses
+```
+
+```latex
+\begin{code}[lang=python, style=light-mono]  % …or one block on its own
+def fib(n):
+    return n
+\end{code}
+```
+
+`lstlisting` blocks take their style from `by_lang` or the document default —
+they have no `style=` option, so one there warns like any other unknown
+`listings` option.
+
+**Printing.** The dark styles lay down a good deal more ink and are meant for
+screen and for colour printers; the `-mono` styles are the black-and-white
+choice, where weight and slant carry the structure instead of hue. Every
+token in every style meets WCAG AA contrast (4.5:1) against its own
+background.
 
 ## The frame
 
 Every rewritten block (`code`, or an opted-in `lstlisting`) renders inside
-a frame: a very light background tint from the theme (`github` `#f6f8fa`,
-`one-light` `#fafafa`), a 0.4pt hairline border in the theme's comment
-colour at 40% (`github` `#c3c7cb`, `one-light` `#d9d9dc`), 4pt inner
-padding left and right, 3pt top and bottom, full text width — plain LaTeX
-(`color.sty` rules only, no `tcolorbox`/`mdframed`).
+a frame: a background tint from its style (`light` uses the theme's `#f6f8fa`
+/ `#fafafa`, every other style its own), a 0.4pt hairline border in the
+palette's comment colour, 4pt inner padding left and right, 3pt top and
+bottom, full text width — plain LaTeX (`color.sty` rules only, no
+`tcolorbox`/`mdframed`). The colours travel with the block, which is what
+lets one document mix styles.
 
 The frame is painted per line with zero-size overlays, so page breaking
 works exactly as without it and a block split across pages stays open at
@@ -142,7 +192,7 @@ the break: the first fragment has no bottom border, the second no top
 border, and both keep their side borders and tint.
 
 With `numbers`, the gutter sits inside the frame: numbers right-aligned in
-the theme's comment colour, separated from the code by a 0.3pt rule in the
+the palette's comment colour, separated from the code by a 0.3pt rule in the
 border colour.
 
 Vertical rhythm is `\medskip` before and after every block. The paragraph
@@ -246,4 +296,6 @@ fn main() {
 ```
 
 With `[highlight] theme = "one-light"` in `project.toml`, both blocks render
-in the One Light palette; the Rust block gains line numbers.
+in the One Light palette; the Rust block gains line numbers. Add
+`[highlight.by_lang] bash = "dark"` and every shell block moves to a
+terminal-dark frame while the rest of the document is untouched.

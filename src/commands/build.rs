@@ -1,5 +1,6 @@
 //! `texforge build` command implementation.
 
+use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -13,7 +14,7 @@ use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::{Project, Reproducible};
 use crate::highlight;
-use crate::highlight::HighlightTheme;
+use crate::highlight::{HighlightStyle, HighlightTheme};
 use crate::raster::PdfDocument;
 use crate::utils::sanitize_filename;
 
@@ -59,9 +60,9 @@ fn resolve_default_style(project: &Project) -> Result<diagrams::style::DiagramSt
 
 /// Resolve `project.toml`'s `[highlight]` section into the code-listing
 /// pass's settings, mirroring [`resolve_default_style`]: an absent section
-/// keeps every default (github theme, no `lstlisting` rewrite, no gutter),
-/// and an unrecognised theme fails the build by name instead of silently
-/// falling back to `github`.
+/// keeps every default (github theme, light style, no `lstlisting` rewrite, no
+/// gutter), and an unrecognised theme or style fails the build by name instead
+/// of silently falling back to a default.
 fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
     let Some(section) = project.config.highlight.as_ref() else {
         return Ok(highlight::Settings::default());
@@ -71,12 +72,29 @@ fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
             Some(name) => HighlightTheme::parse(name)?,
             None => HighlightTheme::default(),
         },
+        style: match section.style.as_deref() {
+            Some(name) => HighlightStyle::parse(name)?,
+            None => HighlightStyle::default(),
+        },
+        by_lang: resolve_by_lang(&section.by_lang)?,
         lstlisting: section.lstlisting.unwrap_or(false),
         numbers: section.numbers.unwrap_or(false),
         caption_name: section.caption_name.clone(),
         list_name: section.list_name.clone(),
         fallback_language: None,
     })
+}
+
+/// Parse `[highlight.by_lang]`, normalising each key with the same
+/// [`highlight::language_key`] a block's `lang=` value goes through — that is
+/// what makes one entry match every alias of its language. An unknown style
+/// value fails the build naming the offending value.
+fn resolve_by_lang(table: &HashMap<String, String>) -> Result<HashMap<String, HighlightStyle>> {
+    let mut resolved = HashMap::with_capacity(table.len());
+    for (lang, style) in table {
+        resolved.insert(highlight::language_key(lang), HighlightStyle::parse(style)?);
+    }
+    Ok(resolved)
 }
 
 /// Like [`resolve_highlight`], but also fills `fallback_language` from the
@@ -547,6 +565,22 @@ mod tests {
             numbers,
             caption_name: caption_name.map(str::to_string),
             list_name: list_name.map(str::to_string),
+            ..Default::default()
+        });
+        project
+    }
+
+    /// A project whose `[highlight]` section carries the two style keys —
+    /// the document-wide `style` and a `[highlight.by_lang]` table.
+    fn project_with_highlight_styles(style: Option<&str>, by_lang: &[(&str, &str)]) -> Project {
+        let mut project = project_with_diagrams_style(None);
+        project.config.highlight = Some(crate::domain::project::HighlightConfig {
+            style: style.map(str::to_string),
+            by_lang: by_lang
+                .iter()
+                .map(|(lang, value)| ((*lang).to_string(), (*value).to_string()))
+                .collect(),
+            ..Default::default()
         });
         project
     }
@@ -602,6 +636,51 @@ mod tests {
         let project = project_with_highlight(None, None, None, Some("Snippet"), None);
         let settings = resolve_highlight(&project).unwrap();
         assert_eq!(settings.fallback_language, None);
+    }
+
+    #[test]
+    fn highlight_document_style_is_honoured_and_defaults_to_light() {
+        let project = project_with_highlight_styles(Some("dark-mono"), &[]);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.style, HighlightStyle::DarkMono);
+        assert!(settings.by_lang.is_empty());
+
+        let project = project_with_highlight_styles(None, &[]);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.style, HighlightStyle::Light);
+    }
+
+    /// The key goes through the same alias normalisation a block's `lang=`
+    /// value does, so `bash = "dark"` is one entry however it is spelled.
+    #[test]
+    fn by_lang_keys_are_normalised_to_the_syntax_name() {
+        let project =
+            project_with_highlight_styles(None, &[("Bash", "dark"), ("tex", "light-mono")]);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.by_lang.get("bash"), Some(&HighlightStyle::Dark));
+        assert_eq!(
+            settings.by_lang.get("latex"),
+            Some(&HighlightStyle::LightMono)
+        );
+        assert_eq!(settings.by_lang.len(), 2);
+    }
+
+    #[test]
+    fn invalid_style_fails_naming_the_value_and_the_valid_ones() {
+        let project = project_with_highlight_styles(Some("neon"), &[]);
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("neon"), "{err}");
+        for name in ["light", "light-mono", "dark", "dark-mono"] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
+    }
+
+    #[test]
+    fn invalid_by_lang_value_fails_the_build() {
+        let project = project_with_highlight_styles(None, &[("bash", "solarized")]);
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("solarized"), "{err}");
+        assert!(err.contains("dark-mono"), "{err}");
     }
 
     fn tectonic_available() -> bool {

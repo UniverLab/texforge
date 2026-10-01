@@ -15,7 +15,8 @@ use crate::texparse;
 use crate::texutil;
 
 use super::caption;
-use super::engine::{HighlightTheme, Rgb};
+use super::engine::Rgb;
+use super::palette::{self, HighlightStyle, HighlightTheme, Palette};
 
 pub(crate) const BEGIN_MARKER: &str =
     "% ---- texforge code listings (injected; do not edit, rebuild to refresh) ----";
@@ -30,7 +31,10 @@ pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
 ///   themselves; the `\usepackage{color}` inside the guard is then dropped
 ///   (the guard itself stays, as defense in depth for classes such as beamer
 ///   that load `xcolor` behind the scan's back);
-/// * `theme` — the active highlight theme (frame tint/border + gutter).
+/// * `theme` — the active highlight theme, which picks the *light* palette
+///   whose tint/frame/gutter get the fixed `tfxtint`/`tfxframe`/`tfxgutter`
+///   names. Any other style brings its own names through `colors`, so a
+///   document mixing styles needs no extra preamble lines.
 /// * `caption_names` — `Some` when at least one block carries `caption=`;
 ///   appends the listing counter, the chapter-aware numbering and
 ///   `\listoflistings`.
@@ -51,6 +55,7 @@ pub(crate) fn injected_block_with_caption(
     color_pkg_visible_load: bool,
     theme: HighlightTheme,
 ) -> String {
+    let frame = light_palette(theme);
     let load_color = if color_pkg_visible_load {
         ""
     } else {
@@ -85,11 +90,11 @@ pub(crate) fn injected_block_with_caption(
     out.push('\n');
     out.push_str(&format!(
         "\\definecolor{{tfxtint}}{{rgb}}{{{}}}\n",
-        theme.tint().to_rgb_list()
+        frame.tint.to_rgb_list()
     ));
     out.push_str(&format!(
         "\\definecolor{{tfxframe}}{{rgb}}{{{}}}\n",
-        theme.frame().to_rgb_list()
+        frame.frame.to_rgb_list()
     ));
     for color in colors {
         out.push_str(&format!(
@@ -101,7 +106,7 @@ pub(crate) fn injected_block_with_caption(
     if has_gutter {
         out.push_str(&format!(
             "\\definecolor{{tfxgutter}}{{rgb}}{{{}}}\n",
-            theme.comment().to_rgb_list()
+            frame.gutter.to_rgb_list()
         ));
     }
     if let Some(names) = caption_names {
@@ -110,6 +115,13 @@ pub(crate) fn injected_block_with_caption(
     out.push_str(END_MARKER);
     out.push('\n');
     out
+}
+
+/// The palette behind the fixed frame colour names. Always the `light`
+/// style: those three names describe one frame, and a document using only
+/// other styles has its colours in `colors` instead.
+fn light_palette(theme: HighlightTheme) -> &'static Palette {
+    palette::palette(theme, HighlightStyle::Light)
 }
 
 /// LaTeX caption machinery: the listing counter (reset per chapter when the

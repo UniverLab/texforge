@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(from_path, from_bytes);
         let (entries, page_count) = from_path.expect("capabilities PDF must have an outline");
         assert_eq!(page_count, 10, "fixture page count");
-        assert_eq!(entries.len(), 21, "fixture outline entry count");
+        assert_eq!(entries.len(), 22, "fixture outline entry count");
     }
 
     /// Exact pages, titles and nesting from the capabilities PDF's own
@@ -581,7 +581,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[20],
+            entries[21],
             PdfOutlineEntry {
                 title: "Conclusión".into(),
                 // The caption, the listing index and the labelled listing push
