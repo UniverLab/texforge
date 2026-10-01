@@ -165,20 +165,24 @@ impl PlaceholderResolver {
     }
 
     /// Extract value from user config by placeholder name (convention: section.key)
+    ///
+    /// Identity fields count as resolved only when non-empty: an empty config
+    /// entry must keep falling through to the git fallback / empty-string
+    /// rule of [`Self::resolve_interpolations`], not short-circuit it.
     fn resolve_from_user_config(&self, cfg: &config::Config, placeholder: &str) -> Option<String> {
         // Try direct match in each section
-        if let Some(name) = &cfg.user.name {
+        if let Some(name) = non_empty(&cfg.user.name) {
             if placeholder == "author" || placeholder == "user.name" {
                 return Some(name.clone());
             }
         }
-        if let Some(email) = &cfg.user.email {
+        if let Some(email) = non_empty(&cfg.user.email) {
             if placeholder == "email" || placeholder == "user.email" {
                 return Some(email.clone());
             }
         }
 
-        if let Some(name) = &cfg.institution.name {
+        if let Some(name) = non_empty(&cfg.institution.name) {
             if placeholder == "institution" || placeholder == "institution.name" {
                 return Some(name.clone());
             }
@@ -197,6 +201,12 @@ impl PlaceholderResolver {
 
         None
     }
+}
+
+/// `Some` only when the config value carries content — an empty identity
+/// entry is treated as "not set" everywhere in the resolution chain.
+fn non_empty(value: &Option<String>) -> Option<&String> {
+    value.as_ref().filter(|v| !v.is_empty())
 }
 
 /// `git config --get <key>` run in `dir`. Returns `None` when git is not
@@ -721,6 +731,59 @@ mod tests {
         let result =
             resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "language");
         assert_eq!(result, Some("spanish".to_string()));
+    }
+
+    /// An identity field explicitly set to `""` in the config is treated as
+    /// unset, so the precedence chain keeps falling through (to the git
+    /// fallback / empty-string rule) instead of short-circuiting on "".
+    #[test]
+    fn test_resolve_from_user_config_empty_identity_falls_through() {
+        let mut user_config = config::Config::default();
+        user_config.user.name = Some(String::new());
+        user_config.user.email = Some(String::new());
+        user_config.institution.name = Some(String::new());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+            target_dir: PathBuf::new(),
+        };
+
+        let cfg = resolver.user_config.as_ref().unwrap();
+        assert_eq!(resolver.resolve_from_user_config(cfg, "author"), None);
+        assert_eq!(resolver.resolve_from_user_config(cfg, "email"), None);
+        assert_eq!(resolver.resolve_from_user_config(cfg, "institution"), None);
+    }
+
+    /// End-to-end shape of the same rule: an empty config identity does not
+    /// short-circuit `resolve()` — the chain keeps going to the template
+    /// default. With the `{{user.name}}` default of the general template the
+    /// git fallback runs next (it cannot with this unit test's empty target
+    /// dir) and the result is the empty string; a literal default wins over
+    /// the empty config entry instead of being masked by it.
+    #[test]
+    fn test_empty_config_identity_falls_through_to_default() {
+        let mut user_config = config::Config::default();
+        user_config.user.name = Some(String::new());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+            target_dir: PathBuf::new(),
+        };
+
+        let mut ph = make_placeholder("author", true);
+        ph.default = Some("{{user.name}}".to_string());
+        assert_eq!(resolver.resolve(&ph).unwrap(), Some(String::new()));
+
+        let mut ph_literal = make_placeholder("author", true);
+        ph_literal.default = Some("Fallback Author".to_string());
+        assert_eq!(
+            resolver.resolve(&ph_literal).unwrap(),
+            Some("Fallback Author".to_string())
+        );
     }
 
     #[test]
