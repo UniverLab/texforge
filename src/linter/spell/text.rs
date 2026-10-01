@@ -35,7 +35,13 @@ pub(super) fn build_spell_text(
             Token::Text(t) => {
                 let skip = pending_text_skip;
                 pending_text_skip = 0;
-                let line = line_of(source, spanned.start);
+                // `skip` swallows the base character an accent macro took from
+                // the head of this token (e.g. `\'` then a newline then `e`).
+                // The chunk starts `skip` bytes into the token, so its line is
+                // the line of that byte, not of the token's first byte —
+                // otherwise every word after a skipped newline inherits the
+                // token's start line.
+                let line = line_of(source, spanned.start + skip);
                 let chunk = strip_empty_groups(&t[skip..]);
                 if !chunk.is_empty() {
                     let base = out.len();
@@ -319,6 +325,28 @@ mod tests {
             assert_eq!(
                 findings[0].line, 2,
                 "café is on source line 2: {findings:?}"
+            );
+        });
+    }
+
+    /// An accent macro may take its base from the head of the next text
+    /// token after skipping whitespace — including a newline. The chunk that
+    /// follows the skipped base therefore begins on a later line than the
+    /// token did, and words after it must report their own line.
+    #[test]
+    fn word_after_accent_skips_a_newline_reports_its_own_line() {
+        let src = "alpha \\'\ne zzzword";
+        run_with_home("", "alpha\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            let zzzword = findings
+                .iter()
+                .find(|f| f.message.contains("zzzword"))
+                .expect("zzzword must be flagged");
+            assert_eq!(
+                zzzword.line, 2,
+                "zzzword is on source line 2, after the skipped newline: {findings:?}"
             );
         });
     }
