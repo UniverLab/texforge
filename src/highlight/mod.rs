@@ -1213,6 +1213,17 @@ mod tests {
                 "fib",
             ),
             (
+                // spanish `babel` redefines `\%` to eat the preceding interword
+                // glue and insert a thin space, which used to knock every glyph
+                // after a `$ %` off the monospace grid; the emitter prints `%`
+                // as `\char37{}` instead.
+                "spanish-percent",
+                "\\usepackage[spanish]{babel}\n",
+                "\\begin{code}[lang=bash]\necho '$ % & # _ ^ ~ { } \\'\n\\end{code}\n",
+                false,
+                "echo",
+            ),
+            (
                 "unknown",
                 "",
                 "\\begin{code}[lang=brainfuck]\n+++[->+<]\n\\end{code}\n",

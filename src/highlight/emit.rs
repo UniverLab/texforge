@@ -54,9 +54,20 @@ pub(crate) fn escape_char(c: char) -> Option<&'static str> {
         '&' => Some("\\&"),
         '#' => Some("\\#"),
         '_' => Some("\\_"),
-        '%' => Some("\\%"),
+        // `%` passes through babel's `\%`, which spanish redefines to drop the
+        // preceding interword glue and insert a `\,` thin space (see spanish.ldf
+        // `\es@sppercent`), knocking every following glyph off the cell grid.
+        // `\char37{}` prints the font's `%` without touching the preceding space —
+        // the same defense as `"` below.
+        '%' => Some("\\char37{}"),
         '~' => Some("\\textasciitilde{}"),
         '^' => Some("\\textasciicircum{}"),
+        // `'` and `` ` `` must print as straight quotes: a literal U+0027/U+0060
+        // is typeset as a curly quote under T1 (and reads back as `’`/`‘`), so
+        // the listing would not be copy-pasteable. `textcomp` provides both and
+        // is in the LaTeX kernel.
+        '\'' => Some("\\textquotesingle{}"),
+        '`' => Some("\\textasciigrave{}"),
         // `"` is active under `babel` shorthands (e.g. spanish): a literal
         // `"` would be misread as `\language@active@arg"`. `\char34{}` prints
         // the glyph without ever emitting a `"` character.
@@ -370,7 +381,9 @@ mod tests {
         assert_eq!(escape_char('&'), Some("\\&"));
         assert_eq!(escape_char('#'), Some("\\#"));
         assert_eq!(escape_char('_'), Some("\\_"));
-        assert_eq!(escape_char('%'), Some("\\%"));
+        assert_eq!(escape_char('%'), Some("\\char37{}"));
+        assert_eq!(escape_char('\''), Some("\\textquotesingle{}"));
+        assert_eq!(escape_char('`'), Some("\\textasciigrave{}"));
         assert_eq!(escape_char('~'), Some("\\textasciitilde{}"));
         assert_eq!(escape_char('^'), Some("\\textasciicircum{}"));
         assert_eq!(escape_char('"'), Some("\\char34{}"));
@@ -383,9 +396,7 @@ mod tests {
         );
         assert_eq!(escape_char('\r'), Some(""));
         // Pass-through: everything else, including `|` and non-ASCII.
-        for c in [
-            'a', '|', '=', '\'', '`', '/', '-', ':', ';', ',', '!', '?', 'é', 'λ',
-        ] {
+        for c in ['a', '|', '=', '/', '-', ':', ';', ',', '!', '?', 'é', 'λ'] {
             assert_eq!(escape_char(c), None, "{c:?} must pass through");
         }
     }
@@ -406,7 +417,7 @@ mod tests {
         assert!(out.ends_with("\\par\n}"), "out: {out}");
         assert!(
             out.contains(
-                "\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}a\\tfxsp{}=\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}\\$\\tfxsp{}\\%\\tfxsp{}\\textasciicircum{}\\tfxsp{}\\&\\tfxsp{}\\_\\tfxsp{}\\{\\tfxsp{}\\}\\tfxsp{}\\textasciitilde{}\\tfxsp{}\\(<\\)\\(>\\)"
+                "\\tfxsp{}\\tfxsp{}\\tfxsp{}\\tfxsp{}a\\tfxsp{}=\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}\\$\\tfxsp{}\\char37{}\\tfxsp{}\\textasciicircum{}\\tfxsp{}\\&\\tfxsp{}\\_\\tfxsp{}\\{\\tfxsp{}\\}\\tfxsp{}\\textasciitilde{}\\tfxsp{}\\(<\\)\\(>\\)"
             ),
             "the escaped payload must survive byte-for-byte: {out}"
         );
@@ -445,6 +456,31 @@ mod tests {
             "out: {out}"
         );
         assert!(!out.contains('"'), "no raw double quote may survive: {out}");
+    }
+
+    /// Req 2/3: the space between `$` and `%` is one `\tfxsp{}` cell; `%` must
+    /// never reach babel's space-eating `\%` (spanish `\es@sppercent`).
+    #[test]
+    fn dollar_space_percent_keeps_a_fixed_width_cell() {
+        let (out, _, _, _) = render("$ %", None, &opts("main.tex", 1, false));
+        assert!(out.contains("\\$\\tfxsp{}\\char37{}"), "out: {out}");
+        assert!(
+            !out.contains("\\%"),
+            "babel's percent must never be emitted: {out}"
+        );
+    }
+
+    /// Req 1/3: straight quotes/backtick are textcomp commands, not raw chars.
+    #[test]
+    fn straight_quotes_and_backtick_use_textcomp_commands() {
+        let (out, _, _, _) = render("'`", None, &opts("main.tex", 1, false));
+        assert!(
+            out.contains("\\textquotesingle{}\\textasciigrave{}"),
+            "out: {out}"
+        );
+        assert!(!out.contains('\''), "no raw apostrophe may survive: {out}");
+        // Backtick check must exclude the wrapper's own backslashes:
+        assert!(!out.contains("`"), "no raw backtick may survive: {out}");
     }
 
     #[test]
