@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # reuse the release binaries the PR to main already built
 
 jobs:
   release:
