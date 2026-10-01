@@ -120,7 +120,17 @@ pub fn lint_files(
         }
     }
 
-    for (word, (file, line)) in unknowns {
+    // Spell findings are emitted in a total order — (file, line, word) — so
+    // two runs over the same project print byte-identical output regardless
+    // of the HashMap's iteration order. Only spell findings are ordered; the
+    // language-disagreement warning pushed above keeps its position.
+    let mut spell_findings: Vec<(String, usize, String)> = unknowns
+        .into_iter()
+        .map(|(word, (file, line))| (file, line, word))
+        .collect();
+    spell_findings.sort();
+
+    for (file, line, word) in spell_findings {
         findings.push(LintFinding {
             file,
             line,
@@ -143,7 +153,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    use super::test_support::hunspell_fixture_paths;
+    use super::test_support::{hunspell_fixture_paths, run_with_home};
     use crate::test_sync::ENV_LOCK;
 
     #[test]
@@ -417,5 +427,47 @@ Hello world. This is some text. \label{sec:intro} More text.
             "suggestion should not point at --global now that it is the default: {}",
             suggestion
         );
+    }
+
+    /// Five unknown words across two files: two runs must give identical,
+    /// `(file, line, word)`-sorted vectors — the fix for nondeterministic
+    /// `HashMap` iteration order.
+    #[test]
+    fn spell_findings_are_identical_and_sorted_across_runs() {
+        run_with_home("", "known\n", || {
+            let files = vec![
+                ("a.tex".to_string(), "alpha\nbravo charlie".to_string()),
+                ("b.tex".to_string(), "delta\necho".to_string()),
+            ];
+            let root = TempDir::new().unwrap();
+
+            // LintFinding only derives Debug, so compare the projection that
+            // matches the printed output. The constant "Unknown word: '"
+            // prefix makes message order equal to word order.
+            let project = |findings: &[LintFinding]| -> Vec<(String, usize, String)> {
+                findings
+                    .iter()
+                    .map(|f| (f.file.clone(), f.line, f.message.clone()))
+                    .collect()
+            };
+
+            let first = lint_files(&files, root.path(), Some("english")).unwrap();
+            let second = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert_eq!(first.len(), 5, "{first:?}");
+
+            let first_projection = project(&first);
+            assert_eq!(
+                first_projection,
+                project(&second),
+                "two runs over the same project must be byte-identical"
+            );
+
+            let mut sorted = first_projection.clone();
+            sorted.sort();
+            assert_eq!(
+                first_projection, sorted,
+                "spell findings must be sorted by (file, line, word)"
+            );
+        });
     }
 }

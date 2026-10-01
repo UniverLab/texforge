@@ -38,8 +38,10 @@ pub(super) fn build_spell_text(
                 let line = line_of(source, spanned.start);
                 let chunk = strip_empty_groups(&t[skip..]);
                 if !chunk.is_empty() {
-                    line_chunks.push((out.len(), line));
+                    let base = out.len();
+                    line_chunks.push((base, line));
                     out.push_str(&chunk);
+                    push_line_breaks(&mut line_chunks, base, &chunk, line);
                 }
             }
             Token::Command { name, args } if is_accent_command(name) => {
@@ -92,6 +94,15 @@ pub(super) fn build_spell_text(
     (out, line_chunks)
 }
 
+/// Record the line each embedded newline starts inside one appended text
+/// chunk. The chunk begins at `base` on `line`, so the n-th newline (1-based)
+/// is followed by the first byte of line `line + n`.
+fn push_line_breaks(line_chunks: &mut Vec<(usize, usize)>, base: usize, chunk: &str, line: usize) {
+    for (n, (byte, _)) in chunk.match_indices('\n').enumerate() {
+        line_chunks.push((base + byte + 1, line + n + 1));
+    }
+}
+
 pub(super) fn line_for_offset(line_chunks: &[(usize, usize)], offset: usize) -> usize {
     match line_chunks.binary_search_by_key(&offset, |(off, _)| *off) {
         Ok(idx) => line_chunks[idx].1,
@@ -106,6 +117,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::super::lint_files;
+    use super::super::test_support::run_with_home;
     use crate::test_sync::ENV_LOCK;
 
     // --- TE12: ligature-workaround empty groups must not split words ---
@@ -254,5 +266,60 @@ mod tests {
     #[test]
     fn accented_dotless_i_skips_only_the_braced_command() {
         assert_eq!(spell_text(r"\'{\i} ok"), "í ok");
+    }
+
+    // --- line accuracy: a Text token spanning several source lines must
+    // report each misspelling on its own line ---
+
+    /// A long Text token (one token, several source lines) must report each
+    /// misspelling on its own line, not on the line the token began.
+    #[test]
+    fn word_after_newline_in_a_long_text_token_reports_its_own_line() {
+        let src = "one\ntwo recieve\n\nthree teh";
+        // The whole bug is that this is a single Text token.
+        let text_tokens = crate::texparse::tokenize_with_spans(src)
+            .tokens
+            .iter()
+            .filter(|t| matches!(t.token, crate::texparse::Token::Text(_)))
+            .count();
+        assert_eq!(text_tokens, 1, "fixture must be one Text token");
+
+        run_with_home("", "one\ntwo\nthree\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert_eq!(findings.len(), 2, "{findings:?}");
+            let recieve = findings
+                .iter()
+                .find(|f| f.message.contains("recieve"))
+                .expect("recieve must be flagged");
+            assert_eq!(recieve.line, 2, "recieve is on source line 2: {findings:?}");
+            let teh = findings
+                .iter()
+                .find(|f| f.message.contains("'teh'"))
+                .expect("teh must be flagged");
+            assert_eq!(teh.line, 4, "teh is on source line 4: {findings:?}");
+        });
+    }
+
+    /// An accent-composed word after a newline reports the line of the word's
+    /// own source line, not the line of the text chunk that precedes it.
+    #[test]
+    fn accent_composed_word_after_newline_reports_its_own_line() {
+        let src = "x $a$ y\nA caf\\'{e} z";
+        run_with_home("", "hello\nworld\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert!(
+                findings[0].message.contains("café"),
+                "must report the composed word: {findings:?}"
+            );
+            assert_eq!(
+                findings[0].line, 2,
+                "café is on source line 2: {findings:?}"
+            );
+        });
     }
 }
