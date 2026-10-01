@@ -54,9 +54,13 @@ digraph G {
 
 | Option | Default | Description |
 |---|---|---|
-| `width` | `\linewidth` | Image width |
+| `width` | `\linewidth` | Image width (ignored when `scale` is set) |
+| `height` | _(none)_ | Image height (ignored when `scale` is set) |
+| `scale` | _(none)_ | Scale factor — overrides `width`/`height` when set |
+| `keepaspectratio` | _(off)_ | Keep the aspect ratio; only meaningful with both `width` and `height` |
 | `pos` | `H` | Figure placement (`H`, `t`, `b`, `h`, `p`) |
 | `caption` | _(none)_ | Figure caption |
+| `label` | _(none)_ | `\label{…}` placed after the caption, for `\ref` |
 | `style` | `default` | Editorial style preset — see below |
 
 When a `caption` is given the diagram is wrapped in a `figure` environment
