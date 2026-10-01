@@ -599,6 +599,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = fixture();
         compiler::compile(
             dir.path(),
@@ -632,6 +633,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = fixture();
         compiler::compile(
             dir.path(),
@@ -665,6 +667,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = fixture();
         compiler::compile(
             dir.path(),
@@ -730,6 +733,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("project.toml"),

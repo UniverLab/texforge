@@ -18,6 +18,8 @@ mod placeholders;
 mod raster;
 mod templates;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod test_sync;
 mod texparse;
 mod texutil;

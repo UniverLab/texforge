@@ -985,6 +985,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = tempfile::tempdir().unwrap();
         let long = "x".repeat(150);
         let main = format!(
@@ -1119,6 +1120,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = tempfile::tempdir().unwrap();
         let main = "\\documentclass{article}\n\\begin{document}\n\
                     \\begin{code}\nshort\n\\end{code}\nProse.\n\\undefinedcommand\n\\end{document}\n";

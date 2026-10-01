@@ -1196,6 +1196,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         for (name, preamble, block, expect_warning, expect_text) in [
             (
                 "plain",
@@ -1255,6 +1256,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = tempfile::tempdir().unwrap();
         let prose = "The quick brown fox jumps over the lazy dog. ".repeat(140);
         let mut body = String::new();
