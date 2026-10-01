@@ -9,6 +9,9 @@ order: 5
 `texforge build` intercepts embedded diagram environments before
 compilation and replaces them with rendered figures. Your original `.tex`
 files are never modified — rendering happens in the `build/` copies.
+If your preamble doesn't load them already, texforge adds `graphicx`
+(and `float` for `pos=H`) to the build copy whenever a document uses
+diagrams.
 
 All three renderers are pure Rust: no browser, no Node.js, no `dot` binary
 required.

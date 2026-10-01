@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use crate::texutil;
 
 mod fonts;
+mod preamble;
 pub mod style;
 use fonts::{shared_fontdb, shared_svg2pdf_fontdb};
 use style::DiagramStyle;
@@ -37,6 +38,8 @@ pub fn process(
 
     // Process .tex files
     let tex_files = collect_tex_files(root, entry);
+    let mut replaced_any = false;
+    let mut uses_float_h = false;
     for src in &tex_files {
         let rel = src.strip_prefix(root).unwrap_or(src);
         let dest = build_dir.join(rel);
@@ -44,24 +47,58 @@ pub fn process(
             std::fs::create_dir_all(parent)?;
         }
         let content = std::fs::read_to_string(src)?;
-        let processed = render_diagrams(&content, &diagrams_dir, default_style)
-            .with_context(|| format!("Failed to render diagrams in {}", src.display()))?;
+        let (processed, file_uses_h) =
+            render_diagrams_facts(&content, &diagrams_dir, default_style)
+                .with_context(|| format!("Failed to render diagrams in {}", src.display()))?;
+        // Byte-compare: a replacement always changes the bytes (a
+        // `\begin{mermaid}` tag can never equal a `figure` environment),
+        // and a file without diagram blocks comes through untouched.
+        replaced_any |= processed != content;
+        uses_float_h |= file_uses_h;
         std::fs::write(&dest, processed)?;
     }
 
     // Mirror asset files so tectonic resolves relative paths
     crate::utils::mirror_assets(root, build_dir)?;
 
+    // The rewrite introduces `\includegraphics` (and `[H]` when a diagram
+    // opted into `pos=H`): if the author's preamble doesn't load the packages
+    // those need, add them to the build copy of the entry — the original
+    // sources are never written.
+    if replaced_any {
+        let pkgs = preamble::packages_to_insert(root, entry, uses_float_h);
+        if !pkgs.is_empty() {
+            preamble::insert_packages(&build_dir.join(entry), &pkgs)?;
+        }
+    }
+
     Ok(build_dir.join(entry))
 }
 
 /// Replace all `\begin{mermaid}[opts]...\end{mermaid}` with figure environments.
+///
+/// Test-only view of [`render_diagrams_facts`] that discards the `float`
+/// requirement report; production code keeps the report so `process` can
+/// satisfy the packages the rewrite introduced.
+#[cfg(test)]
 fn render_diagrams(
     content: &str,
     diagrams_dir: &Path,
     default_style: DiagramStyle,
 ) -> Result<String> {
-    let content = render_env(
+    render_diagrams_facts(content, diagrams_dir, default_style).map(|(text, _)| text)
+}
+
+/// Same as the (test-only) `render_diagrams`, also reporting whether any
+/// replaced figure was emitted with `[H]` — i.e. whether the rewritten file
+/// will need the `float` package. The three environments are chained and the
+/// report OR-ed.
+fn render_diagrams_facts(
+    content: &str,
+    diagrams_dir: &Path,
+    default_style: DiagramStyle,
+) -> Result<(String, bool)> {
+    let (content, mermaid_h) = render_env_facts(
         content,
         "mermaid",
         diagrams_dir,
@@ -71,7 +108,7 @@ fn render_diagrams(
             convert_svg_or_fallback("mermaid", &svg)
         },
     )?;
-    let content = render_env(
+    let (content, graphviz_h) = render_env_facts(
         &content,
         "graphviz",
         diagrams_dir,
@@ -81,11 +118,12 @@ fn render_diagrams(
             convert_svg_or_fallback("graphviz", &svg)
         },
     )?;
-    let content = render_env(&content, "d2", diagrams_dir, default_style, |src, sty| {
-        let svg = render_d2(src, sty)?;
-        convert_svg_or_fallback("d2", &svg)
-    })?;
-    Ok(content)
+    let (content, d2_h) =
+        render_env_facts(&content, "d2", diagrams_dir, default_style, |src, sty| {
+            let svg = render_d2(src, sty)?;
+            convert_svg_or_fallback("d2", &svg)
+        })?;
+    Ok((content, mermaid_h || graphviz_h || d2_h))
 }
 
 /// Render a Mermaid diagram, applying `style`'s theme and layout spacing.
@@ -96,10 +134,9 @@ fn render_mermaid_with_config(src: &str, sty: DiagramStyle) -> Result<String> {
 
 /// Generic environment renderer: replaces `\begin{env}[opts]...\end{env}` with figure.
 ///
-/// Rendered artefacts are named after a hash of the diagram source, so
-/// unchanged diagrams are reused across rebuilds (watch mode) instead of
-/// re-rendered. `render_fn` returns the encoded bytes and the extension
-/// (`"pdf"` on the vector path, `"png"` when it fell back to rasterizing).
+/// Test-only view of [`render_env_facts`] that discards the `float`
+/// requirement report (existing tests only care about the rewritten text).
+#[cfg(test)]
 pub(crate) fn render_env(
     content: &str,
     env: &str,
@@ -107,11 +144,30 @@ pub(crate) fn render_env(
     default_style: DiagramStyle,
     render_fn: impl Fn(&str, DiagramStyle) -> Result<(Vec<u8>, &'static str)>,
 ) -> Result<String> {
+    render_env_facts(content, env, diagrams_dir, default_style, render_fn).map(|(text, _)| text)
+}
+
+/// Generic environment renderer that also reports whether any replaced
+/// figure was emitted with `[H]` (an explicit `pos=H`) — i.e. whether the
+/// rewritten text needs the `float` package.
+///
+/// Rendered artefacts are named after a hash of the diagram source, so
+/// unchanged diagrams are reused across rebuilds (watch mode) instead of
+/// re-rendered. `render_fn` returns the encoded bytes and the extension
+/// (`"pdf"` on the vector path, `"png"` when it fell back to rasterizing).
+fn render_env_facts(
+    content: &str,
+    env: &str,
+    diagrams_dir: &Path,
+    default_style: DiagramStyle,
+    render_fn: impl Fn(&str, DiagramStyle) -> Result<(Vec<u8>, &'static str)>,
+) -> Result<(String, bool)> {
     let begin_tag = format!("\\begin{{{}}}", env);
     let end_tag = format!("\\end{{{}}}", env);
 
     let mut result = String::new();
     let mut remaining: &str = content;
+    let mut uses_float_h = false;
 
     while let Some(start) = remaining.find(&begin_tag) {
         result.push_str(&remaining[..start]);
@@ -123,6 +179,10 @@ pub(crate) fn render_env(
         let diagram_src = after_opts[..end].trim();
 
         validate_pos_option(&opts, env)?;
+        // Only an explicit `pos=H` reaches `[H]` in the figure: an omitted
+        // `pos` emits a plain `\begin{figure}` (build_figure_default_no_pos),
+        // so it needs no `float`.
+        uses_float_h |= opts.get("pos").map(String::as_str) == Some("H");
         let diagram_style = resolve_style(&opts, env, default_style)?;
 
         let base = format!("{}-{:016x}", env, content_hash(diagram_src, diagram_style));
@@ -142,7 +202,7 @@ pub(crate) fn render_env(
     }
 
     result.push_str(remaining);
-    Ok(result)
+    Ok((result, uses_float_h))
 }
 
 /// Look for an already-rendered artefact for `base`, vector form first.
@@ -1120,5 +1180,123 @@ mod tests {
         opts.insert("pos".to_string(), "t".to_string());
         let fig = build_figure_environment(&opts, "mermaid", "d1.png").unwrap();
         assert!(fig.contains("\\begin{figure}[t]"));
+    }
+
+    // ── FR4: the diagram pass satisfies its own package dependencies ───────
+
+    /// Run the full [`process`] over a one-file project and return the
+    /// rewritten temp entry (never the source, which stays byte-identical).
+    fn process_fixture(source: &str) -> String {
+        let root = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("main.tex"), source).unwrap();
+        process(root.path(), "main.tex", build.path(), DiagramStyle::Default).unwrap();
+        std::fs::read_to_string(build.path().join("main.tex")).unwrap()
+    }
+
+    /// The physical line immediately before the `\begin{document}` anchor.
+    fn line_before_anchor(out: &str) -> &str {
+        let anchor = out.find("\\begin{document}").expect("anchor present");
+        out[..anchor]
+            .trim_end_matches('\n')
+            .rsplit('\n')
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn process_inserts_exactly_one_graphicx_for_a_mermaid_document() {
+        let out = process_fixture(
+            "\\documentclass{article}\n\\usepackage{booktabs}\n\\begin{document}\n\
+             \\begin{mermaid}[style=editorial, caption={Flow}]\nflowchart LR\n  A --> B\n\\end{mermaid}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(
+            out.matches("\\usepackage{graphicx}").count(),
+            1,
+            "exactly one inserted graphicx line:\n{out}"
+        );
+        let inserted = out.find("\\usepackage{graphicx}").unwrap();
+        let anchor = out.find("\\begin{document}").unwrap();
+        assert!(inserted < anchor, "insertion must precede the anchor");
+        assert_eq!(line_before_anchor(&out), "\\usepackage{graphicx}");
+        // The rewrite itself still happened.
+        assert!(out.contains("\\includegraphics"), "{out}");
+    }
+
+    #[test]
+    fn process_inserts_nothing_when_the_preamble_loads_amsmath_graphicx() {
+        let out = process_fixture(
+            "\\documentclass{article}\n\\usepackage{amsmath,graphicx}\n\\begin{document}\n\
+             \\begin{graphviz}[caption={Flow}]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert!(out.contains("\\includegraphics"), "rewritten:\n{out}");
+        // Assert on the exact insertion string: the fixture's own comma
+        // list contains "graphicx" but is not `\usepackage{graphicx}`.
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 0, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn process_inserts_nothing_without_a_diagram() {
+        let source =
+            "\\documentclass{article}\n\\usepackage{booktabs}\n\\begin{document}\nHi.\n\\end{document}\n";
+        let out = process_fixture(source);
+        assert_eq!(out, source, "build copy must be byte-identical");
+    }
+
+    #[test]
+    fn process_inserts_float_for_pos_h_when_missing() {
+        let out = process_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=H, caption={Flow}]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 1, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 1, "{out}");
+        let anchor = out.find("\\begin{document}").unwrap();
+        assert!(out.find("\\usepackage{float}").unwrap() < anchor, "{out}");
+        assert_eq!(line_before_anchor(&out), "\\usepackage{float}");
+    }
+
+    #[test]
+    fn process_skips_float_when_the_preamble_loads_it_or_pos_is_not_h() {
+        // (a) `float` already loaded (with options — a blind duplicate would
+        // clash) → no inserted line, graphicx still added.
+        let out = process_fixture(
+            "\\documentclass{article}\n\\usepackage[table]{float}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=H]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 1, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 0, "{out}");
+
+        // (b) no `[H]` figure → float is never needed (the D1 negative pin).
+        let out = process_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=t]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 1, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn process_detects_graphicx_in_an_input_preamble_file() {
+        let root = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("main.tex"),
+            "\\documentclass{article}\n\\input{pre}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=t]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("pre.tex"), "\\usepackage{graphicx}\n").unwrap();
+        process(root.path(), "main.tex", build.path(), DiagramStyle::Default).unwrap();
+        let out = std::fs::read_to_string(build.path().join("main.tex")).unwrap();
+        assert!(out.contains("\\includegraphics"), "rewritten:\n{out}");
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 0, "{out}");
     }
 }
