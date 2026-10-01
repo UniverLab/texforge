@@ -45,10 +45,9 @@ fn read_pdf_outline_from_doc(doc: &Document) -> Result<Option<(Vec<PdfOutlineEnt
     let pages_map = doc.get_pages();
     let page_count = pages_map.len();
     let mut entries = Vec::new();
-    let mut level_counters: Vec<usize> = vec![0; 1];
 
     if let Ok(first) = outlines_dict.get(b"First") {
-        walk_outline_items(doc, first, 0, &pages_map, &mut entries, &mut level_counters);
+        walk_outline_items(doc, first, 0, &pages_map, &mut entries);
     }
 
     if entries.is_empty() {
@@ -64,13 +63,7 @@ fn walk_outline_items(
     level: usize,
     pages_map: &std::collections::BTreeMap<u32, ObjectId>,
     entries: &mut Vec<PdfOutlineEntry>,
-    level_counters: &mut Vec<usize>,
 ) {
-    while level_counters.len() <= level {
-        level_counters.push(0);
-    }
-    level_counters[level] += 1;
-
     let Some(item_dict) = resolve_dict(doc, Some(first_obj)) else {
         return;
     };
@@ -87,18 +80,11 @@ fn walk_outline_items(
     }
 
     if let Ok(first_child) = item_dict.get(b"First") {
-        walk_outline_items(
-            doc,
-            first_child,
-            level + 1,
-            pages_map,
-            entries,
-            level_counters,
-        );
+        walk_outline_items(doc, first_child, level + 1, pages_map, entries);
     }
 
     if let Ok(next) = item_dict.get(b"Next") {
-        walk_outline_items(doc, next, level, pages_map, entries, level_counters);
+        walk_outline_items(doc, next, level, pages_map, entries);
     }
 }
 
