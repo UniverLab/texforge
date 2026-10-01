@@ -33,6 +33,10 @@ pass writes nothing and documents compile exactly as before.
 |---|---|---|
 | `lang` | language name or alias (table below); empty means a deliberate plain monospace block | plain block, no warning |
 | `numbers` | `true` shows a line-number gutter | `false`, unless `[highlight] numbers = true` sets the document default (the block option wins) |
+| `caption` | caption text (LaTeX; wrap in braces if it contains a comma) | _(none)_ — without it the block has no number, no label and no list entry |
+| `label` | label for `\ref`/`\pageref` (e.g. `lst:fib`); only meaningful with `caption` | _(none)_ — without a caption it warns (`label without caption is ignored`) |
+| `pos` | `H` (inline, the default), `h`, `t`, `b`, `p` | `H` — the listing stays where it is written and may break across pages |
+| `size` | `scriptsize`, `footnotesize`, `small`, `normalsize` | `small` (today's size); any other value warns and uses `small` |
 
 An unknown `lang` never fails the build: the block renders monochrome and
 `texforge build` warns, naming the language and pointing at
@@ -45,7 +49,48 @@ Project-wide defaults live in `project.toml`:
 theme = "github"     # "github" (default) or "one-light"
 lstlisting = true    # also rewrite \begin{lstlisting} blocks (default false)
 numbers = true       # number every block unless it says otherwise
+# caption_name = "Listing"        # override the language's listing name
+# list_name = "List of Listings"  # override the list-of-listings heading
 ```
+
+## Captions, labels and the list of listings
+
+A block with `caption=` gains a numbered caption line directly above the
+frame — kept on the same page as the frame's first line — reading
+"**Listing** N: …" (bold name, counter `tfxlisting`, numbered per chapter
+as `chapter.N` when the class defines `\chapter`, else plain N):
+
+```latex
+\begin{code}[lang=rust, numbers=true, caption={Fibonacci}, label={lst:fib}, pos=t, size=footnotesize]
+fn fib(n: u64) -> u64 { if n < 2 { n } else { fib(n-1) + fib(n-2) } }
+\end{code}
+```
+
+With `label=` (placed right after the counter step), reference it from the
+text with `\ref{lst:fib}` (prints N) or `\pageref{lst:fib}`. Every
+captioned listing adds an entry to the list of listings; print it with
+`\listoflistings` (a `\chapter*`/`\section*` heading plus the entries). A
+document that never calls `\listoflistings` is unaffected.
+
+The name follows the document language — resolved exactly as the
+spell checker resolves it (`babel`/`polyglossia` option, else the
+configured fallback language): english → "Listing" / "List of Listings";
+spanish → "Listado" / "Índice de listados"; any other language → the
+English names. `project.toml` `[highlight] caption_name` and `list_name`
+override both.
+
+Behaviour notes:
+
+- By default a listing is **not** a float: it stays where it is written
+  and may break across pages. With `pos=` other than `H` the block is
+  wrapped in a `figure` of that placement (non-breaking), caption or not —
+  `H` is never emitted as `figure[H]`, so no `float` package is needed.
+  `pos=H` means inline (the default), accepted for symmetry with diagrams.
+- A floated block longer than the text height cannot fit: the build warns
+  (`floated listing is too tall …`) and renders it inline instead.
+- Line numbers scale with `size=`. The caption machinery (counter, names,
+  `\listoflistings`) is injected only when some block actually carries a
+  `caption`, so a document without captions compiles exactly as before.
 
 ## Languages
 
@@ -165,7 +210,11 @@ blocks are rewritten the same way: `language=` (case-insensitive, `[ISO]`
 dialect prefixes stripped) carries over, `numbers=left|right` turns the
 gutter on (and `numbers=none` turns it off, even against a document-wide
 `[highlight] numbers = true`), and every other `listings` option is dropped
-with the usual unknown-option warning.
+with the usual unknown-option warning — except the caption vocabulary,
+which maps onto the same behaviour: `caption=`, `label=`,
+`float=`/`placement=` (first present wins) and a
+`basicstyle=\footnotesize`-style font size (`\scriptsize`, `\footnotesize`,
+`small`, `\normalsize`; `\smallskip` is not mistaken for `\small`).
 
 ## Why not minted
 

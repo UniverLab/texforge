@@ -9,12 +9,13 @@ pub use spell::{
     PROJECT_WHITELIST_FILES,
 };
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
 
-use crate::texparse;
+use crate::texparse::verbatim::VerbatimBlock;
+use crate::texparse::{self, verbatim_blocks};
 use crate::texutil;
 
 /// Severity of a lint finding.
@@ -110,6 +111,11 @@ fn collect_tex_files_and_report_circular(
 }
 
 /// Collect every `\label` defined across files, skipping verbatim bodies.
+///
+/// Two sources define a label: a `\label{…}` command in document markup, and
+/// a `label={…}` block option on a listing (`\begin{code}[caption={…},
+/// label={lst:x}]`), which the highlighter turns into a real `\label`. Both
+/// must be known or every `\ref` to a listing would be reported as dangling.
 fn collect_labels(tex_files: &[std::path::PathBuf]) -> Result<HashSet<String>> {
     let mut all_labels = HashSet::new();
     for file in tex_files {
@@ -124,8 +130,79 @@ fn collect_labels(tex_files: &[std::path::PathBuf]) -> Result<HashSet<String>> {
                 all_labels.insert(label.to_string());
             }
         }
+        for block in verbatim_blocks(&content) {
+            if let Some(label) = listing_label_option(&content, &block) {
+                all_labels.insert(label);
+            }
+        }
     }
     Ok(all_labels)
+}
+
+/// The `label={…}` a listing block declares, when it also has a `caption` —
+/// the same pairing the highlighter enforces, since a label without a caption
+/// is ignored there and must not be counted as a definition here.
+///
+/// Returns `None` for every other verbatim environment (`verbatim`,
+/// `minted`, …), whose options belong to another package.
+fn listing_label_option(content: &str, block: &VerbatimBlock) -> Option<String> {
+    if block.env != "code" && block.env != "lstlisting" {
+        return None;
+    }
+    let opts = &content[block.begin_start..block.body_start];
+    let opts = opts.strip_prefix(&format!("\\begin{{{}}}", block.env))?;
+    let (caption, label) = listing_caption_and_label(opts)?;
+    caption?;
+    Some(label)
+}
+
+/// The `caption` and `label` values of a listing's option list, honouring the
+/// same brace nesting `texutil::parse_opts` implements (so `caption={a, b}` is
+/// one value, not two). `None` when there is no option list at all.
+fn listing_caption_and_label(opts: &str) -> Option<(Option<String>, String)> {
+    let rest = opts.trim_start().strip_prefix('[')?;
+    let mut values = HashMap::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut end = None;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                record_option(&rest[start..i], &mut values);
+                start = i + 1;
+            }
+            ']' if depth == 0 => {
+                end = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    record_option(rest.get(start..end?)?, &mut values);
+    Some((
+        values.get("caption").cloned(),
+        values.get("label").cloned().unwrap_or_default(),
+    ))
+}
+
+/// Record one `key=value` option, unwrapping the `{…}` form `parse_opts`
+/// accepts. Only `caption` and `label` are kept; everything else is the
+/// highlighter's business.
+fn record_option(part: &str, values: &mut HashMap<String, String>) {
+    let Some((key, value)) = part.trim().split_once('=') else {
+        return;
+    };
+    let value = value.trim();
+    let value = value
+        .strip_prefix('{')
+        .and_then(|v| v.strip_suffix('}'))
+        .unwrap_or(value)
+        .trim();
+    if matches!(key.trim(), "caption" | "label") {
+        values.insert(key.trim().to_string(), value.to_string());
+    }
 }
 
 /// Run per-file reference, environment, diagram and glyph checks.
@@ -1126,6 +1203,72 @@ mod tests {
         assert!(
             has_error(&findings, "\\ref{sec:ghost}"),
             "a code body cannot define a label: {findings:?}"
+        );
+    }
+
+    /// A captioned listing's `label={…}` option defines a real label — the
+    /// highlighter turns it into `\label{…}` — so a `\ref` to it resolves.
+    #[test]
+    fn a_listing_label_option_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Fibo, clásico}, label={lst:fib}]\n\
+             x = 1\n\\end{code}\n\
+             Ver \\ref{lst:fib}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{lst:fib}"),
+            "the listing option defines the label: {findings:?}"
+        );
+    }
+
+    /// The same on an opted-in `lstlisting` block.
+    #[test]
+    fn a_lstlisting_label_option_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{lstlisting}[language=Python, caption={Fibo}, label={lst:fib}]\n\
+             x = 1\n\\end{lstlisting}\n\
+             Ver \\ref{lst:fib}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{lst:fib}"),
+            "the listing option defines the label: {findings:?}"
+        );
+    }
+
+    /// A `label=` without a `caption=` is ignored by the highlighter, so the
+    /// `\ref` to it really is dangling and must still be reported.
+    #[test]
+    fn a_listing_label_without_a_caption_is_still_dangling() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, label={lst:fib}]\nx = 1\n\\end{code}\n\
+             Ver \\ref{lst:fib}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "\\ref{lst:fib}"),
+            "no caption means no label: {findings:?}"
+        );
+    }
+
+    /// `verbatim`/`minted` options belong to another package: a `label=`
+    /// there is never a document label.
+    #[test]
+    fn a_foreign_environment_label_option_is_not_a_definition() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{verbatim}[caption={C}, label={lst:ghost}]\n\
+             x = 1\n\\end{verbatim}\n\
+             Ver \\ref{lst:ghost}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "\\ref{lst:ghost}"),
+            "foreign options do not define labels: {findings:?}"
         );
     }
 

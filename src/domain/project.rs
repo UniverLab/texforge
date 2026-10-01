@@ -29,6 +29,12 @@ pub struct HighlightConfig {
     /// Number every line of every block unless the block says otherwise.
     #[serde(default)]
     pub numbers: Option<bool>,
+    /// Override the language's listing name (`Listing` / `Listado`).
+    #[serde(default)]
+    pub caption_name: Option<String>,
+    /// Override the language's list-of-listings heading.
+    #[serde(default)]
+    pub list_name: Option<String>,
 }
 
 /// `[diagrams]` section of `project.toml`.

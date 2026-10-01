@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   syntect pass into plain LaTeX needing only `color.sty` — no
   `listings`/`minted` setup, no shell-escape. `texforge check` now warns on
   `\usepackage{minted}` and suggests `code` instead.
+- Captions, labels and placement for code listings: `caption=`, `label=`,
+  `pos=` and `size=` on `code` (and `caption=`, `label=`, `float=`/
+  `placement=`, `basicstyle=\footnotesize` on an opted-in `lstlisting`).
+  A captioned listing gets a bold "Listing N:" line above the frame, a
+  `\ref`/`\pageref`-able label, and an entry in a new `\listoflistings`,
+  numbered per chapter when the class defines `\chapter`; the names follow
+  the document language (english / spanish) and are overridable with
+  `[highlight] caption_name` / `list_name`.
 
 ### Changed
 

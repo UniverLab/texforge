@@ -62,6 +62,8 @@ entry = "main.tex"
 # theme = "github"                  # optional: syntax palette ("github", "one-light")
 # lstlisting = true                 # optional: also rewrite lstlisting blocks
 # numbers = true                    # optional: number every code block
+# caption_name = "Listing"          # optional: override the listing name
+# list_name = "List of Listings"    # optional: override the list heading
 ```
 
 | Key | Description |
@@ -76,3 +78,5 @@ entry = "main.tex"
 | `highlight.theme` | Optional: code-listing palette (`github`, `one-light`; see [Code listings](listings.md)). |
 | `highlight.lstlisting` | Optional: also rewrite `\begin{lstlisting}` blocks with native highlighting (default `false` — without it, `listings` users keep real `listings.sty` behaviour). |
 | `highlight.numbers` | Optional: number every line of every code block unless the block sets `numbers=` itself. |
+| `highlight.caption_name` | Optional: override the language-resolved listing name (`Listing` / `Listado`). |
+| `highlight.list_name` | Optional: override the language-resolved list-of-listings heading. |

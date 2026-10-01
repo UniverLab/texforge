@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use crate::texparse;
 use crate::texutil;
 
+use super::caption;
 use super::engine::{HighlightTheme, Rgb};
 
 pub(crate) const BEGIN_MARKER: &str =
@@ -30,9 +31,23 @@ pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
 ///   (the guard itself stays, as defense in depth for classes such as beamer
 ///   that load `xcolor` behind the scan's back);
 /// * `theme` — the active highlight theme (frame tint/border + gutter).
+/// * `caption_names` — `Some` when at least one block carries `caption=`;
+///   appends the listing counter, the chapter-aware numbering and
+///   `\listoflistings`.
 pub(crate) fn injected_block(
     colors: &BTreeSet<Rgb>,
     has_gutter: bool,
+    color_pkg_visible_load: bool,
+    theme: HighlightTheme,
+) -> String {
+    injected_block_with_caption(colors, has_gutter, None, color_pkg_visible_load, theme)
+}
+
+/// [`injected_block`] with an optional caption machinery section.
+pub(crate) fn injected_block_with_caption(
+    colors: &BTreeSet<Rgb>,
+    has_gutter: bool,
+    caption_names: Option<&caption::Names>,
     color_pkg_visible_load: bool,
     theme: HighlightTheme,
 ) -> String {
@@ -89,8 +104,41 @@ pub(crate) fn injected_block(
             theme.comment().to_rgb_list()
         ));
     }
+    if let Some(names) = caption_names {
+        out.push_str(&caption_machinery(names));
+    }
     out.push_str(END_MARKER);
     out.push('\n');
+    out
+}
+
+/// LaTeX caption machinery: the listing counter (reset per chapter when the
+/// class defines `\chapter`), the list-of-listings command and the
+/// language-resolved names. Tokenised while `\makeatletter` is active so
+/// `\@`-commands are safe.
+fn caption_machinery(names: &caption::Names) -> String {
+    let mut out = String::new();
+    out.push_str("\\makeatletter\n");
+    out.push_str("\\newcounter{tfxlisting}\n");
+    out.push_str("\\@ifundefined{chapter}{}{%\n");
+    out.push_str("  \\@addtoreset{tfxlisting}{chapter}%\n");
+    out.push_str("  \\renewcommand{\\thetfxlisting}{\\thechapter.\\arabic{tfxlisting}}%\n");
+    out.push_str("}\n");
+    out.push_str("\\providecommand{\\listoflistings}{%\n");
+    out.push_str(
+        "  \\@ifundefined{chapter}{\\section*{\\tfxlistname}}{\\chapter*{\\tfxlistname}}%\n",
+    );
+    out.push_str("  \\@starttoc{lol}}\n");
+    out.push_str("\\providecommand*\\l@listing{\\@dottedtocline{1}{1.5em}{2.3em}}\n");
+    out.push_str("\\makeatother\n");
+    out.push_str(&format!(
+        "\\newcommand{{\\tfxlistingname}}{{{}}}\n",
+        names.listing
+    ));
+    out.push_str(&format!(
+        "\\newcommand{{\\tfxlistname}}{{{}}}\n",
+        names.list
+    ));
     out
 }
 
@@ -532,5 +580,52 @@ mod tests {
             .to_string();
         assert!(err.contains("no \\begin{document}"), "{err}");
         assert!(err.contains("main.tex"), "{err}");
+    }
+
+    #[test]
+    fn caption_machinery_defines_counter_chapter_guard_list_and_names() {
+        let names = caption::Names {
+            listing: "Listing".to_string(),
+            list: "List of Listings".to_string(),
+        };
+        let block = injected_block_with_caption(
+            &BTreeSet::new(),
+            false,
+            Some(&names),
+            false,
+            HighlightTheme::Github,
+        );
+        assert!(block.contains("\\newcounter{tfxlisting}"), "{block}");
+        assert!(block.contains("\\@ifundefined{chapter}"), "{block}");
+        assert!(
+            block.contains("\\@addtoreset{tfxlisting}{chapter}"),
+            "{block}"
+        );
+        assert!(
+            block.contains("\\renewcommand{\\thetfxlisting}{\\thechapter.\\arabic{tfxlisting}}"),
+            "{block}"
+        );
+        assert!(
+            block.contains("\\providecommand{\\listoflistings}"),
+            "{block}"
+        );
+        assert!(block.contains("\\@starttoc{lol}"), "{block}");
+        assert!(
+            block.contains("\\newcommand{\\tfxlistingname}{Listing}"),
+            "{block}"
+        );
+        assert!(
+            block.contains("\\newcommand{\\tfxlistname}{List of Listings}"),
+            "{block}"
+        );
+        assert!(block.contains("\\l@listing"), "{block}");
+    }
+
+    #[test]
+    fn no_caption_machinery_without_a_caption() {
+        let block = injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github);
+        assert!(!block.contains("tfxlisting"), "{block}");
+        assert!(!block.contains("listoflistings"), "{block}");
+        assert!(!block.contains("tfxlistingname"), "{block}");
     }
 }

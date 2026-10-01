@@ -19,6 +19,14 @@ use crate::highlight::Warning;
 /// hboxes, so this is a convenience, not a guarantee.
 pub(crate) const OVERFULL_CHAR_LIMIT: usize = 90;
 
+/// The caption vocabulary of one block: the author's text (raw LaTeX, like
+/// the `caption=` contract) and the optional label placed right after the
+/// counter step so `\ref`/`\pageref` resolve.
+pub(crate) struct EmitCaption<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) label: Option<&'a str>,
+}
+
 /// Everything `render_block` needs to place one block in the document: which
 /// build-copy file it came from (warnings point there — the build copy is what
 /// Tectonic reports errors in), the `\begin` line, the line the body starts
@@ -32,6 +40,13 @@ pub(crate) struct EmitOpts<'a> {
     pub(crate) body_line: usize,
     pub(crate) end_line: usize,
     pub(crate) numbers: bool,
+    pub(crate) caption: Option<EmitCaption<'a>>,
+    /// Float placement (`pos=` other than `H`) — `None` renders the block
+    /// inline, where it is written and may break across pages. Independent of
+    /// the caption: a listing may be floated without being numbered.
+    pub(crate) float: Option<&'a str>,
+    /// `None` = default `small`; `Some("\\footnotesize")` etc.
+    pub(crate) size_command: Option<&'static str>,
 }
 
 /// Map one source character to its LaTeX expansion, or `None` when it passes
@@ -293,15 +308,15 @@ pub(crate) fn render_block(
     }
     let total = lines.len();
     let width = gutter_width(total);
-    let mut out_lines: Vec<String> = Vec::with_capacity(total * 2 + 6);
-    out_lines.push("\\par\\medskip".to_string());
-    origins.push(opts.first_line);
-    out_lines.push("{".to_string());
-    origins.push(opts.first_line);
-    out_lines.push("\\tfxcodestyle".to_string());
-    origins.push(opts.first_line);
+    let mut out_lines: Vec<String> = Vec::with_capacity(total * 2 + 10);
+    let mut out_origins: Vec<usize> = Vec::with_capacity(total * 2 + 10);
+    push_opening(&mut out_lines, &mut out_origins, opts);
+    if let Some(size) = opts.size_command {
+        out_lines.push(size.to_string());
+        out_origins.push(opts.first_line);
+    }
     out_lines.push(String::new());
-    origins.push(opts.first_line);
+    out_origins.push(opts.first_line);
 
     for (i, line) in lines.iter().enumerate() {
         let rendered_body = if line.is_empty() {
@@ -326,13 +341,13 @@ pub(crate) fn render_block(
         // word's delimiter); without it the first code character would glue
         // onto `\noindent` and form an undefined control sequence.
         out_lines.push(emit_line(&rendered_body, i + 1, total, opts.numbers, width));
-        origins.push(opts.body_line + i);
+        out_origins.push(opts.body_line + i);
         if i + 1 < total {
             // Blank separator between two line paragraphs: Tectonic reports
             // an overfull paragraph on its end line, so attribute it to the
             // code line above, not below.
             out_lines.push(String::new());
-            origins.push(opts.body_line + i);
+            out_origins.push(opts.body_line + i);
         }
 
         let width_of_line = display_width(line, opts.numbers, width);
@@ -348,10 +363,73 @@ pub(crate) fn render_block(
     }
 
     out_lines.push("\\par".to_string());
-    origins.push(opts.body_line + total.saturating_sub(1));
+    out_origins.push(opts.body_line + total.saturating_sub(1));
     out_lines.push("}".to_string());
-    origins.push(opts.end_line);
+    out_origins.push(opts.end_line);
+    push_closing(&mut out_lines, &mut out_origins, opts);
+    origins.extend(out_origins);
     out_lines.join("\n")
+}
+
+/// Opening lines: `\par\medskip`, an optional float wrapper, the caption
+/// lines, then the style group. Caption/`\begin{figure}` lines map to the
+/// `\begin` line.
+fn push_opening(out_lines: &mut Vec<String>, out_origins: &mut Vec<usize>, opts: &EmitOpts) {
+    out_lines.push("\\par\\medskip".to_string());
+    out_origins.push(opts.first_line);
+    if let Some(pos) = opts.float {
+        out_lines.push(format!("\\begin{{figure}}[{pos}]"));
+        out_origins.push(opts.first_line);
+    }
+    if let Some(caption) = opts.caption.as_ref() {
+        render_caption_lines(out_lines, out_origins, opts, caption);
+    }
+    out_lines.push("{".to_string());
+    out_origins.push(opts.first_line);
+    out_lines.push("\\tfxcodestyle".to_string());
+    out_origins.push(opts.first_line);
+}
+
+/// Caption lines: counter step (+ label), the bold "Name N:" line glued to
+/// the frame's first line, and the list-of-listings entry.
+fn render_caption_lines(
+    out_lines: &mut Vec<String>,
+    out_origins: &mut Vec<usize>,
+    opts: &EmitOpts,
+    caption: &EmitCaption,
+) {
+    let step = match caption.label {
+        Some(label) => format!("\\refstepcounter{{tfxlisting}}\\label{{{label}}}%"),
+        None => "\\refstepcounter{tfxlisting}%".to_string(),
+    };
+    out_lines.push(step);
+    out_origins.push(opts.first_line);
+    let glue = match opts.float {
+        // Inline: forbid a page break right after the caption line so it can
+        // never be orphaned from the frame's first line. `\penalty10000` is
+        // LaTeX's `\nobreak` value (`\@M`) — TeX's *forced* break is `-10000`.
+        // In a float the caption and the frame already share one box.
+        Some(_) => String::new(),
+        None => "\\vadjust{\\penalty10000}".to_string(),
+    };
+    out_lines.push(format!(
+        "\\noindent{{\\normalfont\\textbf{{\\tfxlistingname~\\thetfxlisting:}}~{}}}{}\\par",
+        caption.text, glue
+    ));
+    out_origins.push(opts.first_line);
+    out_lines.push(format!(
+        "\\addcontentsline{{lol}}{{listing}}{{\\protect\\numberline{{\\thetfxlisting}}{}}}",
+        caption.text
+    ));
+    out_origins.push(opts.first_line);
+}
+
+/// Closing lines: `\end{figure}` for a float, mapping to the `\end` line.
+fn push_closing(out_lines: &mut Vec<String>, out_origins: &mut Vec<usize>, opts: &EmitOpts) {
+    if opts.float.is_some() {
+        out_lines.push("\\end{figure}".to_string());
+        out_origins.push(opts.end_line);
+    }
 }
 
 #[cfg(test)]
@@ -365,6 +443,29 @@ mod tests {
             body_line,
             end_line: body_line + 100,
             numbers,
+            caption: None,
+            float: None,
+            size_command: None,
+        }
+    }
+
+    fn caption_opts<'a>(
+        file: &'a str,
+        body_line: usize,
+        text: &'a str,
+        label: Option<&'a str>,
+        float: Option<&'a str>,
+        size_command: Option<&'static str>,
+    ) -> EmitOpts<'a> {
+        EmitOpts {
+            file,
+            first_line: body_line.saturating_sub(1),
+            body_line,
+            end_line: body_line + 100,
+            numbers: false,
+            caption: Some(EmitCaption { text, label }),
+            float,
+            size_command,
         }
     }
 
@@ -621,6 +722,9 @@ mod tests {
             body_line: 5,
             end_line: 9,
             numbers: false,
+            caption: None,
+            float: None,
+            size_command: None,
         };
         let (out, _, _, origins) = render("a\nb", None, &o);
         let lines: Vec<&str> = out.split('\n').collect();
@@ -763,5 +867,74 @@ mod tests {
         let (_, _, warnings, _) = render(&line_88, None, &opts("main.tex", 1, true));
         assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
         assert!(warnings[0].message.contains("91 chars wide"));
+    }
+
+    #[test]
+    fn caption_line_precedes_frame_and_glues_to_the_first_line() {
+        let o = caption_opts("main.tex", 5, "Hello", Some("lst:hi"), None, None);
+        let (out, _, _, _) = render("x = 1", None, &o);
+        assert!(
+            out.contains("\\refstepcounter{tfxlisting}\\label{lst:hi}%"),
+            "{out}"
+        );
+        assert!(out.contains("\\tfxlistingname~\\thetfxlisting:"), "{out}");
+        assert!(out.contains("\\vadjust{\\penalty10000}\\par"), "{out}");
+        assert!(out.contains("\\addcontentsline{lol}{listing}"), "{out}");
+        let caption = out.find("\\refstepcounter").unwrap();
+        let frame = out.find("\\tfxcodestyle").unwrap();
+        assert!(caption < frame, "caption must precede the frame: {out}");
+    }
+
+    #[test]
+    fn float_wraps_the_caption_and_frame_in_a_figure() {
+        let o = caption_opts("main.tex", 5, "Hello", None, Some("t"), None);
+        let (out, _, _, _) = render("x = 1", None, &o);
+        assert!(out.contains("\\begin{figure}[t]"), "{out}");
+        assert!(out.contains("\\end{figure}"), "{out}");
+        let begin = out.find("\\begin{figure}").unwrap();
+        let caption = out.find("\\refstepcounter").unwrap();
+        let end = out.find("\\end{figure}").unwrap();
+        assert!(begin < caption && caption < end, "{out}");
+    }
+
+    /// `pos=` floats a listing whether or not it is captioned: the placement
+    /// is a property of the block, the caption only adds numbering.
+    #[test]
+    fn float_without_a_caption_wraps_the_frame() {
+        let mut o = opts("main.tex", 5, false);
+        o.float = Some("b");
+        let (out, _, _, origins) = render("x = 1", None, &o);
+        let begin = out.find("\\begin{figure}[b]").unwrap();
+        let frame = out.find("\\tfxcodestyle").unwrap();
+        let end = out.find("\\end{figure}").unwrap();
+        assert!(begin < frame && frame < end, "{out}");
+        assert!(!out.contains("tfxlisting"), "no caption machinery: {out}");
+        assert_eq!(origins.len(), out.lines().count(), "{out:?}");
+    }
+
+    #[test]
+    fn inline_caption_has_no_float_and_ends_the_stanza() {
+        let o = caption_opts("main.tex", 5, "Hi", None, None, None);
+        let (out, _, _, _) = render("x", None, &o);
+        assert!(!out.contains("figure"), "{out}");
+        assert!(out.contains("\\vadjust{\\penalty10000}"), "{out}");
+    }
+
+    #[test]
+    fn size_command_is_appended_after_codestyle_only_when_set() {
+        let o = caption_opts("main.tex", 5, "Hi", None, None, Some("\\footnotesize"));
+        let (out, _, _, _) = render("x", None, &o);
+        let style = out.find("\\tfxcodestyle").unwrap();
+        let size = out.find("\\footnotesize").unwrap();
+        assert!(style < size, "{out}");
+        let (plain, _, _, _) = render("x", None, &opts("main.tex", 5, false));
+        assert!(!plain.contains("\\footnotesize"), "{plain}");
+    }
+
+    #[test]
+    fn origins_cover_caption_and_float_lines() {
+        let o = caption_opts("main.tex", 5, "Hi", Some("lst:x"), Some("t"), None);
+        let (out, _, _, origins) = render("a\nb", None, &o);
+        assert_eq!(origins.len(), out.lines().count(), "{out:?}");
     }
 }

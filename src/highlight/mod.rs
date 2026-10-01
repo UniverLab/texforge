@@ -19,6 +19,7 @@ use anyhow::Result;
 use crate::texparse;
 use crate::texutil;
 
+mod caption;
 mod emit;
 mod engine;
 mod linemap;
@@ -27,7 +28,7 @@ mod preamble;
 pub use engine::HighlightTheme;
 pub use linemap::LineMap;
 
-use emit::EmitOpts;
+use emit::{EmitCaption, EmitOpts};
 use engine::Rgb;
 
 /// The `code` environment this pass owns; `check_collisions` guarantees
@@ -39,11 +40,19 @@ pub const LST_ENV: &str = "lstlisting";
 /// Option keys each environment consumes. Anything else warns through the
 /// shared parser — which is exactly the "lstlisting options are dropped"
 /// feedback, with no extra machinery.
-const CODE_OPTION_KEYS: &[&str] = &["lang", "numbers"];
-const LSTLISTING_OPTION_KEYS: &[&str] = &["language", "numbers"];
+const CODE_OPTION_KEYS: &[&str] = &["lang", "numbers", "caption", "label", "pos", "size"];
+const LSTLISTING_OPTION_KEYS: &[&str] = &[
+    "language",
+    "numbers",
+    "caption",
+    "label",
+    "float",
+    "placement",
+    "basicstyle",
+];
 
 /// Everything `project.toml`'s `[highlight]` section contributes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub theme: HighlightTheme,
     /// Rewrite `\begin{lstlisting}` blocks too (off by default: `listings`
@@ -52,6 +61,10 @@ pub struct Settings {
     /// Document-wide default for the line-number gutter; a block's
     /// `numbers=` option overrides it.
     pub numbers: bool,
+    pub caption_name: Option<String>,
+    pub list_name: Option<String>,
+    /// Global `defaults.language`; `None` → english (spell-checker precedence).
+    pub fallback_language: Option<String>,
 }
 
 impl Default for Settings {
@@ -60,6 +73,9 @@ impl Default for Settings {
             theme: HighlightTheme::Github,
             lstlisting: false,
             numbers: false,
+            caption_name: None,
+            list_name: None,
+            fallback_language: None,
         }
     }
 }
@@ -96,6 +112,14 @@ pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>>
 }
 
 fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warning>, LineMap)> {
+    let Settings {
+        theme,
+        lstlisting,
+        numbers,
+        caption_name,
+        list_name,
+        fallback_language,
+    } = cfg;
     let paths = texutil::collect_tex_files(build_dir, entry).files;
 
     // Read everything first: the collision check must see every original —
@@ -119,7 +143,7 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
     // listing that owns it.
     let discovered: Vec<Vec<Target>> = sources
         .iter()
-        .map(|(_, content)| target_blocks(content, cfg))
+        .map(|(_, content)| target_blocks(content, lstlisting))
         .collect();
 
     // Fast gate. No real block → nothing is rewritten, nothing is injected,
@@ -130,8 +154,11 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
 
     preamble::check_collisions(&sources)?;
 
+    let language = crate::linter::spell::document_language(&sources, fallback_language.as_deref());
+    let names = caption::resolve_names(&language, caption_name.as_deref(), list_name.as_deref());
     let mut colors: BTreeSet<Rgb> = BTreeSet::new();
     let mut has_gutter = false;
+    let mut has_caption = false;
     let mut warnings = Vec::new();
     let mut rewritten_any = false;
     let mut line_map = LineMap::default();
@@ -145,10 +172,11 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
         let mut state = RewriteState {
             colors: &mut colors,
             has_gutter: &mut has_gutter,
+            has_caption: &mut has_caption,
             warnings: &mut warnings,
             origins: &mut origins,
         };
-        let rewritten = rewrite_file(rel, content, blocks, cfg, &mut state)?;
+        let rewritten = rewrite_file(rel, content, blocks, numbers, theme, &mut state)?;
         std::fs::write(build_dir.join(rel.as_str()), &rewritten)?;
         if !origins.is_empty() {
             *line_map.file_mut(rel) = origins;
@@ -159,7 +187,17 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
 
     if rewritten_any {
         let color_loaded = preamble::color_pkg_visible_load(&sources);
-        let block = preamble::injected_block(&colors, has_gutter, color_loaded, cfg.theme);
+        let block = if has_caption {
+            preamble::injected_block_with_caption(
+                &colors,
+                has_gutter,
+                Some(&names),
+                color_loaded,
+                theme,
+            )
+        } else {
+            preamble::injected_block(&colors, has_gutter, color_loaded, theme)
+        };
         let (anchor, entry_lines) = preamble::inject_entry(&build_dir.join(entry), &block)?;
         line_map.shift_for_injection(entry, anchor, block.lines().count(), entry_lines);
     }
@@ -186,8 +224,8 @@ type Target = (usize, &'static str);
 ///
 /// Occurrences inside a block this pass itself owns are resolved by
 /// [`rewrite_file`]'s cursor: the outer block starts first and swallows them.
-fn target_blocks(content: &str, cfg: Settings) -> Vec<Target> {
-    let envs: &[&'static str] = if cfg.lstlisting {
+fn target_blocks(content: &str, lstlisting: bool) -> Vec<Target> {
+    let envs: &[&'static str] = if lstlisting {
         &[CODE_ENV, LST_ENV]
     } else {
         &[CODE_ENV]
@@ -232,6 +270,7 @@ fn in_comment(content: &str, offset: usize) -> bool {
 struct RewriteState<'a> {
     colors: &'a mut BTreeSet<Rgb>,
     has_gutter: &'a mut bool,
+    has_caption: &'a mut bool,
     warnings: &'a mut Vec<Warning>,
     origins: &'a mut Vec<usize>,
 }
@@ -252,7 +291,8 @@ fn rewrite_file(
     rel: &str,
     content: &str,
     blocks: &[Target],
-    cfg: Settings,
+    default_numbers: bool,
+    theme: HighlightTheme,
     state: &mut RewriteState,
 ) -> Result<String> {
     let mut result = String::with_capacity(content.len());
@@ -305,13 +345,13 @@ fn rewrite_file(
         let body_line = 1 + content[..body_abs + stripped_newline].matches('\n').count();
 
         let body = strip_one_newline(raw_body).replace('\r', "");
-        let numbers = numbers_for(env, &opts, cfg);
-        if numbers {
+        let block_numbers = numbers_for(env, &opts, default_numbers);
+        if block_numbers {
             *state.has_gutter = true;
         }
 
         let lang = lang_for(env, &opts);
-        let spans = match engine::highlight(&lang, &body, cfg.theme)? {
+        let spans = match engine::highlight(&lang, &body, theme)? {
             Some(spans) => Some(spans),
             None => {
                 let warning = unknown_language_warning(env, &lang, first_line, rel);
@@ -323,17 +363,15 @@ fn rewrite_file(
         // The `\end{env}` tag starts here: its line owns the stanza's
         // closing lines in the line map.
         let end_line = 1 + content[..body_abs + end].matches('\n').count();
+        let resolved = resolve_block_options(env, &opts, &body, rel, first_line, state.warnings);
+        if resolved.has_caption {
+            *state.has_caption = true;
+        }
         let mut block_origins = Vec::new();
         let rendered = emit::render_block(
             &body,
             spans.as_deref(),
-            &EmitOpts {
-                file: rel,
-                first_line,
-                body_line,
-                end_line,
-                numbers,
-            },
+            &resolved.emit_opts(rel, first_line, body_line, end_line, block_numbers),
             state.colors,
             state.warnings,
             &mut block_origins,
@@ -389,15 +427,193 @@ fn strip_one_newline(body: &str) -> &str {
 /// The effective `numbers` value: the environment's option wins over the
 /// project default. `lstlisting` speaks `listings.sty`'s `left`/`right`,
 /// and `none` is how an author turns numbering off for one block.
-fn numbers_for(env: &str, opts: &HashMap<String, String>, cfg: Settings) -> bool {
+fn numbers_for(env: &str, opts: &HashMap<String, String>, default_numbers: bool) -> bool {
     match opts.get("numbers") {
-        None => cfg.numbers,
+        None => default_numbers,
         Some(value) => match value.to_ascii_lowercase().as_str() {
             "left" | "right" | "true" => true,
             "false" | "none" => false,
-            _ if env == LST_ENV => cfg.numbers,
+            _ if env == LST_ENV => default_numbers,
             _ => false,
         },
+    }
+}
+
+/// Resolved caption/size/placement for one block.
+struct ResolvedBlock<'a> {
+    caption: Option<&'a str>,
+    label: Option<&'a str>,
+    float: Option<String>,
+    size_command: Option<&'static str>,
+    has_caption: bool,
+}
+
+impl<'a> ResolvedBlock<'a> {
+    fn emit_opts(
+        &'a self,
+        file: &'a str,
+        first_line: usize,
+        body_line: usize,
+        end_line: usize,
+        numbers: bool,
+    ) -> EmitOpts<'a> {
+        EmitOpts {
+            file,
+            first_line,
+            body_line,
+            end_line,
+            numbers,
+            caption: self.caption.map(|text| EmitCaption {
+                text,
+                label: self.label,
+            }),
+            float: self.float.as_deref(),
+            size_command: self.size_command,
+        }
+    }
+}
+
+/// Resolve `caption=`/`label=`/`pos=`/`size=` (and the `lstlisting`
+/// spellings) for one block, pushing warnings for misuse.
+fn resolve_block_options<'a>(
+    env: &str,
+    opts: &'a HashMap<String, String>,
+    body: &str,
+    rel: &str,
+    first_line: usize,
+    warnings: &mut Vec<Warning>,
+) -> ResolvedBlock<'a> {
+    let caption = opts.get("caption").map(String::as_str);
+    let label = match (opts.get("label").map(String::as_str), caption) {
+        (Some(label), Some(_)) => Some(label),
+        (Some(_), None) => {
+            warnings.push(Warning {
+                file: rel.to_string(),
+                line: first_line,
+                message: "label without caption is ignored".to_string(),
+            });
+            None
+        }
+        (None, _) => None,
+    };
+    let size = size_for(env, opts, rel, first_line, warnings);
+    let mut placement = placement_for(env, opts, rel, first_line, warnings);
+    if let caption::Placement::Float(_) = placement {
+        let lines = if body.is_empty() {
+            1
+        } else {
+            body.split('\n').count()
+        };
+        if !caption::fits_on_page(lines, size) {
+            warnings.push(Warning {
+                file: rel.to_string(),
+                line: first_line,
+                message: "floated listing is too tall to fit on one page — rendering it inline"
+                    .to_string(),
+            });
+            placement = caption::Placement::Inline;
+        }
+    }
+    let float = match placement {
+        caption::Placement::Inline => None,
+        caption::Placement::Float(pos) => Some(pos),
+    };
+    ResolvedBlock {
+        caption,
+        label,
+        float,
+        size_command: size.command(),
+        has_caption: caption.is_some(),
+    }
+}
+
+/// The effective `size`: `code` reads `size=`; `lstlisting` reads a
+/// `basicstyle=` font-size command. Unknown `size=` warns and uses `small`.
+fn size_for(
+    env: &str,
+    opts: &HashMap<String, String>,
+    rel: &str,
+    first_line: usize,
+    warnings: &mut Vec<Warning>,
+) -> caption::Size {
+    if env == CODE_ENV {
+        match opts.get("size").map(String::as_str) {
+            None => caption::Size::Small,
+            Some(value) => match caption::Size::parse(value) {
+                Some(size) => size,
+                None => {
+                    warnings.push(Warning {
+                        file: rel.to_string(),
+                        line: first_line,
+                        message: format!(
+                            "unknown code size '{value}' — valid values are scriptsize, footnotesize, small, normalsize; using small"
+                        ),
+                    });
+                    caption::Size::Small
+                }
+            },
+        }
+    } else {
+        opts.get("basicstyle")
+            .map(String::as_str)
+            .and_then(basicstyle_size)
+            .unwrap_or(caption::Size::Small)
+    }
+}
+
+/// Extract a recognised font-size command from a `basicstyle=` value, with a
+/// whole-word match so `\small` never matches `\smallskip`.
+fn basicstyle_size(value: &str) -> Option<caption::Size> {
+    for (command, size) in [
+        ("\\scriptsize", caption::Size::Scriptsize),
+        ("\\footnotesize", caption::Size::Footnotesize),
+        ("\\small", caption::Size::Small),
+        ("\\normalsize", caption::Size::Normalsize),
+    ] {
+        let mut search = value;
+        while let Some(pos) = search.find(command) {
+            let after = &search[pos + command.len()..];
+            if after
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphabetic())
+            {
+                return Some(size);
+            }
+            search = after;
+        }
+    }
+    None
+}
+
+/// The effective placement: `code` reads `pos=`; `lstlisting` reads `float=`
+/// or `placement=` (first present). Unknown values warn and render inline.
+fn placement_for(
+    env: &str,
+    opts: &HashMap<String, String>,
+    rel: &str,
+    first_line: usize,
+    warnings: &mut Vec<Warning>,
+) -> caption::Placement {
+    let raw = if env == CODE_ENV {
+        opts.get("pos").map(String::as_str)
+    } else {
+        opts.get("float")
+            .or_else(|| opts.get("placement"))
+            .map(String::as_str)
+    };
+    match caption::Placement::parse(raw) {
+        Ok(placement) => placement,
+        Err(value) => {
+            warnings.push(Warning {
+                file: rel.to_string(),
+                line: first_line,
+                message: format!(
+                    "unknown placement '{value}' — expected one of H, h, t, b, p; rendering inline"
+                ),
+            });
+            caption::Placement::Inline
+        }
     }
 }
 
@@ -590,7 +806,7 @@ mod tests {
     #[test]
     fn target_blocks_finds_the_real_block_and_skips_the_commented_one() {
         let content = "\\begin{code}x\\end{code}\n% \\begin{code}y\\end{code}\n";
-        let targets = target_blocks(content, Settings::default());
+        let targets = target_blocks(content, false);
         assert_eq!(targets.len(), 1, "only the uncommented block: {targets:?}");
         assert_eq!(targets[0].0, 0, "the block starts at offset 0");
     }
@@ -603,7 +819,7 @@ mod tests {
     fn blocks_around_a_foreign_region_are_still_owned() {
         let content =
             "\\begin{code}a\\end{code}\\begin{verbatim}v\\end{verbatim}\\begin{code}b\\end{code}";
-        let targets = target_blocks(content, Settings::default());
+        let targets = target_blocks(content, false);
         assert_eq!(
             targets.len(),
             2,
@@ -648,27 +864,19 @@ mod tests {
     #[test]
     fn numbers_for_gives_the_block_option_the_final_say() {
         let opts = |v: &str| HashMap::from([("numbers".to_string(), v.to_string())]);
-        let on = Settings {
-            numbers: true,
-            ..Settings::default()
-        };
-        let off = Settings {
-            numbers: false,
-            ..Settings::default()
-        };
 
-        assert!(numbers_for(CODE_ENV, &opts("left"), off));
-        assert!(!numbers_for(CODE_ENV, &opts("none"), on));
+        assert!(numbers_for(CODE_ENV, &opts("left"), false));
+        assert!(!numbers_for(CODE_ENV, &opts("none"), true));
         assert!(
-            !numbers_for(CODE_ENV, &opts("bogus"), on),
+            !numbers_for(CODE_ENV, &opts("bogus"), true),
             "an unknown value never opts a code block in"
         );
         assert!(
-            numbers_for(LST_ENV, &opts("bogus"), on),
+            numbers_for(LST_ENV, &opts("bogus"), true),
             "lstlisting falls back to the project default"
         );
-        assert!(!numbers_for(LST_ENV, &opts("bogus"), off));
-        assert!(numbers_for(CODE_ENV, &HashMap::new(), on));
+        assert!(!numbers_for(LST_ENV, &opts("bogus"), false));
+        assert!(numbers_for(CODE_ENV, &HashMap::new(), true));
     }
 
     #[test]
@@ -1358,6 +1566,346 @@ mod tests {
             map.get("main.tex", medskip),
             Some(("main.tex", 5)),
             "the line after the block ends on source line 5"
+        );
+    }
+
+    /// Write a one-block document into a temp build dir.
+    fn captioned_fixture(main: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+        dir
+    }
+
+    #[test]
+    fn code_accepts_caption_label_pos_size_without_unknown_option_warnings() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Hi}, label={lst:hi}, pos=t, size=footnotesize]\n\
+             x = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(out.contains("\\refstepcounter{tfxlisting}"), "{out}");
+        assert!(out.contains("\\begin{figure}[t]"), "{out}");
+        assert!(out.contains("\\footnotesize"), "{out}");
+    }
+
+    /// `pos=` floats the block on its own: no caption, no counter, no
+    /// list entry — but still a float.
+    #[test]
+    fn pos_without_a_caption_still_floats_the_block() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, pos=t]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(out.contains("\\begin{figure}[t]"), "{out}");
+        assert!(out.contains("\\end{figure}"), "{out}");
+        assert!(
+            !out.contains("tfxlisting"),
+            "no caption machinery is injected: {out}"
+        );
+    }
+
+    /// `pos=H` is the default and means inline.
+    #[test]
+    fn pos_h_renders_inline_like_the_default() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Hi}, pos=H]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("figure"), "{out}");
+        assert!(out.contains("\\vadjust{\\penalty10000}"), "{out}");
+    }
+
+    #[test]
+    fn label_without_caption_warns_with_line_and_is_ignored() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, label={lst:lonely}]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(
+            warnings[0]
+                .message
+                .contains("label without caption is ignored"),
+            "{warnings:?}"
+        );
+        assert_eq!(warnings[0].line, 3, "{warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("\\refstepcounter"), "{out}");
+        assert!(!out.contains("\\label{lst:lonely}"), "{out}");
+    }
+
+    #[test]
+    fn unknown_size_warns_lists_valid_values_and_uses_small() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Hi}, size=huge]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(warnings[0].message.contains("huge"), "{warnings:?}");
+        assert!(
+            warnings[0]
+                .message
+                .contains("scriptsize, footnotesize, small, normalsize"),
+            "{warnings:?}"
+        );
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("\\huge"), "{out}");
+        assert!(out.contains("\\tfxcodestyle\n\n\\noindent"), "{out}");
+    }
+
+    #[test]
+    fn unknown_placement_warns_and_renders_inline() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Hi}, pos=Z]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(
+            warnings[0].message.contains("unknown placement"),
+            "{warnings:?}"
+        );
+        assert!(warnings[0].message.contains('Z'), "{warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("\\begin{figure}"), "{out}");
+        assert!(out.contains("\\refstepcounter{tfxlisting}"), "{out}");
+    }
+
+    #[test]
+    fn caption_emits_counter_label_and_lol_entry() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Fibonacci}, label={lst:fib}]\n\
+             x = 1\n\\end{code}\n\\end{document}\n",
+        );
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\refstepcounter{tfxlisting}\\label{lst:fib}%"),
+            "{out}"
+        );
+        assert!(out.contains("\\tfxlistingname~\\thetfxlisting:"), "{out}");
+        assert!(out.contains("\\vadjust{\\penalty10000}\\par"), "{out}");
+        assert!(out.contains("\\addcontentsline{lol}{listing}"), "{out}");
+        assert!(out.contains("\\listoflistings"), "{out}");
+        assert!(out.contains("\\newcounter{tfxlisting}"), "{out}");
+    }
+
+    /// A caption with a comma needs braces, like every option value: the
+    /// shared parser keeps the braced text whole and the block keeps its
+    /// other options.
+    #[test]
+    fn caption_with_a_comma_survives_the_brace_parser() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Pila, versión 2}, label={lst:pila}, size=scriptsize]\n\
+             x = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(out.contains("Pila, versión 2"), "{out}");
+        assert!(out.contains("\\label{lst:pila}"), "{out}");
+        assert!(out.contains("\\scriptsize"), "{out}");
+    }
+
+    #[test]
+    fn float_too_tall_falls_back_inline_with_warning() {
+        let mut body = String::new();
+        for i in 1..=500 {
+            body.push_str(&format!("code line {i}\n"));
+        }
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\
+             \\begin{{code}}[lang=python, caption={{Tall}}, pos=t]\n{body}\\end{{code}}\n\\end{{document}}\n"
+        );
+        let dir = captioned_fixture(&main);
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("too tall to fit on one page")),
+            "{warnings:?}"
+        );
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("\\begin{figure}"), "{out}");
+        assert!(out.contains("\\refstepcounter{tfxlisting}"), "{out}");
+    }
+
+    #[test]
+    fn lstlisting_maps_caption_label_float_and_basicstyle() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{lstlisting}[language=Python, caption={Hi}, label={lst:hi}, float=t, basicstyle=\\footnotesize]\n\
+             x = 1\n\\end{lstlisting}\n\\end{document}\n",
+        );
+        let cfg = Settings {
+            lstlisting: true,
+            ..Settings::default()
+        };
+        let warnings = run(dir.path(), "main.tex", cfg).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\refstepcounter{tfxlisting}\\label{lst:hi}%"),
+            "{out}"
+        );
+        assert!(out.contains("\\begin{figure}[t]"), "{out}");
+        assert!(out.contains("\\footnotesize"), "{out}");
+    }
+
+    #[test]
+    fn lstlisting_basicstyle_size_does_not_false_match_smallskip() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{lstlisting}[language=Python, caption={Hi}, basicstyle=\\smallskip]\n\
+             x = 1\n\\end{lstlisting}\n\\end{document}\n",
+        );
+        let cfg = Settings {
+            lstlisting: true,
+            ..Settings::default()
+        };
+        run(dir.path(), "main.tex", cfg).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("\\small\n"), "{out}");
+        assert!(out.contains("\\refstepcounter{tfxlisting}"), "{out}");
+    }
+
+    #[test]
+    fn captioned_document_uses_spanish_names() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\usepackage[spanish]{babel}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Hola}]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\newcommand{\\tfxlistingname}{Listado}"),
+            "{out}"
+        );
+        assert!(
+            out.contains("\\newcommand{\\tfxlistname}{Índice de listados}"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn fallback_language_selects_names_without_babel() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, caption={Hola}]\nx = 1\n\\end{code}\n\\end{document}\n",
+        );
+        let cfg = Settings {
+            fallback_language: Some("spanish".to_string()),
+            ..Settings::default()
+        };
+        run(dir.path(), "main.tex", cfg).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\newcommand{\\tfxlistingname}{Listado}"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn plain_blocks_keep_the_old_golden_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(!out.contains("tfxlisting"), "{out}");
+        assert!(!out.contains("listoflistings"), "{out}");
+        assert!(!out.contains("\\begin{figure}"), "{out}");
+    }
+
+    /// End-to-end: a captioned listing with `\ref` and `\listoflistings`
+    /// compiles, and the PDF text carries the caption, the reference number
+    /// and the list entry. Skips (never fails) without Tectonic.
+    #[test]
+    fn captioned_listing_pdf_has_caption_reference_and_list() {
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if crate::compiler::locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{article}\n\\begin{document}\n\
+             \\listoflistings\n\
+             See Listing~\\ref{lst:fib}.\n\
+             \\begin{code}[lang=python, caption={Fibonacci numbers}, label={lst:fib}]\n\
+             def fib(n):\n    return n\n\\end{code}\n\\end{document}\n";
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        crate::compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .expect("tectonic failed");
+        let text = crate::pdftext::extract_text(&dir.path().join("main.pdf")).unwrap();
+        assert!(text.contains("Listing 1:"), "caption missing: {text:?}");
+        assert!(
+            text.contains("List of Listings"),
+            "list heading missing: {text:?}"
+        );
+        assert!(
+            text.matches("Fibonacci numbers").count() >= 2,
+            "caption and list entry expected: {text:?}"
+        );
+    }
+
+    /// A `report` class numbers listings per chapter: `Listing 1.1` with a
+    /// `\ref` resolving to `1.1`. Skips (never fails) without Tectonic.
+    #[test]
+    fn chapter_class_numbers_listings_per_chapter() {
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if crate::compiler::locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{report}\n\\begin{document}\n\
+             \\chapter{First}\n\
+             See \\ref{lst:one}.\n\
+             \\begin{code}[lang=python, caption={One}, label={lst:one}]\n\
+             x = 1\n\\end{code}\n\\end{document}\n";
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        crate::compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .expect("tectonic failed");
+        let text = crate::pdftext::extract_text(&dir.path().join("main.pdf")).unwrap();
+        assert!(
+            text.contains("Listing 1.1:"),
+            "chapter numbering missing: {text:?}"
         );
     }
 }

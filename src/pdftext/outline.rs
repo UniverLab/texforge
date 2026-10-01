@@ -584,7 +584,10 @@ mod tests {
             entries[20],
             PdfOutlineEntry {
                 title: "Conclusión".into(),
-                page: 9,
+                // The caption, the listing index and the labelled listing push
+                // the last section onto the final page of the 10-page
+                // capabilities document.
+                page: 10,
                 level: 0,
             }
         );
@@ -595,6 +598,168 @@ mod tests {
         assert!(
             entries.iter().any(|e| e.page == 9),
             "some entry must resolve past page 1: {entries:?}"
+        );
+    }
+
+    /// A destination expressed as an explicit array.
+    fn array_dest(page: lopdf::ObjectId) -> lopdf::Object {
+        use lopdf::Object;
+        Object::Array(vec![
+            Object::Reference(page),
+            Object::Name(b"XYZ".to_vec()),
+            Object::Null,
+            Object::Null,
+            Object::Null,
+        ])
+    }
+
+    /// A `GoTo` action pointing at a named destination.
+    fn go_to_action(name: &str) -> lopdf::Object {
+        use lopdf::{dictionary, Object};
+        Object::Dictionary(dictionary! {
+            "S" => "GoTo",
+            "D" => Object::string_literal(name),
+        })
+    }
+
+    /// One outline item: `Title`/`Parent` plus whatever keys the form under
+    /// test needs (`Dest`, `A`, `First`, `Next`).
+    fn outline_item(
+        title: &str,
+        parent: lopdf::ObjectId,
+        extra: Vec<(&str, lopdf::Object)>,
+    ) -> lopdf::Object {
+        use lopdf::{dictionary, Object};
+        let mut dict = dictionary! {
+            "Title" => Object::string_literal(title),
+            "Parent" => parent,
+        };
+        for (key, value) in extra {
+            dict.set(key, value);
+        }
+        Object::Dictionary(dict)
+    }
+
+    /// The object ids the synthetic outline shares between its parts.
+    struct DestForms {
+        outlines_id: lopdf::ObjectId,
+        item1_id: lopdf::ObjectId,
+        item2_id: lopdf::ObjectId,
+        item3_id: lopdf::ObjectId,
+        item4_id: lopdf::ObjectId,
+        child_id: lopdf::ObjectId,
+        page1_id: lopdf::ObjectId,
+        page2_id: lopdf::ObjectId,
+    }
+
+    /// The four outline items the reader must walk — an array dest, its child
+    /// reached through `/First`, a direct page-reference dest and two
+    /// `/A`-action items — plus the outline root.
+    fn insert_outline_items(doc: &mut lopdf::Document, ids: &DestForms) {
+        use lopdf::{dictionary, Object};
+        let DestForms {
+            outlines_id,
+            item1_id,
+            item2_id,
+            item3_id,
+            item4_id,
+            child_id,
+            page1_id,
+            page2_id,
+        } = *ids;
+        doc.objects.insert(
+            item1_id,
+            outline_item(
+                "Array Form",
+                outlines_id,
+                vec![
+                    ("Dest", array_dest(page1_id)),
+                    ("First", Object::Reference(child_id)),
+                    ("Next", Object::Reference(item2_id)),
+                ],
+            ),
+        );
+        doc.objects.insert(
+            child_id,
+            outline_item(
+                "Child Of Array",
+                item1_id,
+                vec![("Dest", array_dest(page2_id))],
+            ),
+        );
+        doc.objects.insert(
+            item2_id,
+            outline_item(
+                "Direct Form",
+                outlines_id,
+                vec![
+                    ("Dest", Object::Reference(page2_id)),
+                    ("Next", Object::Reference(item3_id)),
+                ],
+            ),
+        );
+        doc.objects.insert(
+            item3_id,
+            outline_item(
+                "Named Dict Form",
+                outlines_id,
+                vec![
+                    ("A", go_to_action("named-dict")),
+                    ("Next", Object::Reference(item4_id)),
+                ],
+            ),
+        );
+        doc.objects.insert(
+            item4_id,
+            outline_item(
+                "Named Array Form",
+                outlines_id,
+                vec![("A", go_to_action("named-array"))],
+            ),
+        );
+        doc.objects.insert(
+            outlines_id,
+            Object::Dictionary(dictionary! {
+                "First" => Object::Reference(item1_id),
+                "Last" => Object::Reference(item4_id),
+                "Count" => 5,
+            }),
+        );
+    }
+
+    /// The `/Names` tree behind the two action items: one destination stored
+    /// as a dict holding `/D`, one as a direct dest array.
+    fn insert_named_destinations(
+        doc: &mut lopdf::Document,
+        names_id: lopdf::ObjectId,
+        dests_id: lopdf::ObjectId,
+        dest_dict_id: lopdf::ObjectId,
+        page1_id: lopdf::ObjectId,
+        page2_id: lopdf::ObjectId,
+    ) {
+        use lopdf::{dictionary, Object};
+        doc.objects.insert(
+            dest_dict_id,
+            Object::Dictionary(dictionary! {
+                "D" => array_dest(page2_id),
+            }),
+        );
+        doc.objects.insert(
+            dests_id,
+            Object::Dictionary(dictionary! {
+                "Names" => vec![
+                    Object::string_literal("named-dict"),
+                    Object::Reference(dest_dict_id),
+                    Object::string_literal("named-array"),
+                    array_dest(page1_id),
+                ],
+            }),
+        );
+        doc.objects.insert(
+            names_id,
+            Object::Dictionary(dictionary! {
+                "Dests" => Object::Reference(dests_id),
+            }),
         );
     }
 
@@ -635,114 +800,28 @@ mod tests {
         doc.objects.insert(page1_id, page.clone());
         doc.objects.insert(page2_id, page);
 
-        let array_dest = |page: lopdf::ObjectId| {
-            Object::Array(vec![
-                Object::Reference(page),
-                Object::Name(b"XYZ".to_vec()),
-                Object::Null,
-                Object::Null,
-                Object::Null,
-            ])
-        };
-        let item = |title: &str, parent: lopdf::ObjectId, extra: Vec<(&str, Object)>| {
-            let mut dict = dictionary! {
-                "Title" => Object::string_literal(title),
-                "Parent" => parent,
-            };
-            for (key, value) in extra {
-                dict.set(key, value);
-            }
-            Object::Dictionary(dict)
-        };
-
-        doc.objects.insert(
-            item1_id,
-            item(
-                "Array Form",
+        insert_outline_items(
+            &mut doc,
+            &DestForms {
                 outlines_id,
-                vec![
-                    ("Dest", array_dest(page1_id)),
-                    ("First", Object::Reference(child_id)),
-                    ("Next", Object::Reference(item2_id)),
-                ],
-            ),
-        );
-        doc.objects.insert(
-            child_id,
-            item(
-                "Child Of Array",
                 item1_id,
-                vec![("Dest", array_dest(page2_id))],
-            ),
+                item2_id,
+                item3_id,
+                item4_id,
+                child_id,
+                page1_id,
+                page2_id,
+            },
         );
-        doc.objects.insert(
-            item2_id,
-            item(
-                "Direct Form",
-                outlines_id,
-                vec![
-                    ("Dest", Object::Reference(page2_id)),
-                    ("Next", Object::Reference(item3_id)),
-                ],
-            ),
-        );
-        let action = |name: &str| {
-            Object::Dictionary(dictionary! {
-                "S" => "GoTo",
-                "D" => Object::string_literal(name),
-            })
-        };
-        doc.objects.insert(
-            item3_id,
-            item(
-                "Named Dict Form",
-                outlines_id,
-                vec![
-                    ("A", action("named-dict")),
-                    ("Next", Object::Reference(item4_id)),
-                ],
-            ),
-        );
-        doc.objects.insert(
-            item4_id,
-            item(
-                "Named Array Form",
-                outlines_id,
-                vec![("A", action("named-array"))],
-            ),
-        );
-        doc.objects.insert(
-            outlines_id,
-            Object::Dictionary(dictionary! {
-                "First" => Object::Reference(item1_id),
-                "Last" => Object::Reference(item4_id),
-                "Count" => 5,
-            }),
+        insert_named_destinations(
+            &mut doc,
+            names_id,
+            dests_id,
+            dest_dict_id,
+            page1_id,
+            page2_id,
         );
 
-        doc.objects.insert(
-            dest_dict_id,
-            Object::Dictionary(dictionary! {
-                "D" => array_dest(page2_id),
-            }),
-        );
-        doc.objects.insert(
-            dests_id,
-            Object::Dictionary(dictionary! {
-                "Names" => vec![
-                    Object::string_literal("named-dict"),
-                    Object::Reference(dest_dict_id),
-                    Object::string_literal("named-array"),
-                    array_dest(page1_id),
-                ],
-            }),
-        );
-        doc.objects.insert(
-            names_id,
-            Object::Dictionary(dictionary! {
-                "Dests" => Object::Reference(dests_id),
-            }),
-        );
         let catalog_id = doc.add_object(dictionary! {
             "Type" => "Catalog",
             "Pages" => Object::Reference(pages_id),

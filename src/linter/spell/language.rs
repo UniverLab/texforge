@@ -49,7 +49,7 @@ fn babel_language_from_usepackage(args: &[String]) -> Option<&'static str> {
 /// where it was found. Kept separate from finding-construction so
 /// `resolve_language` stays free of `LintFinding` concerns; callers decide
 /// whether the declaration and the configured default disagree.
-pub(super) struct LanguageResolution {
+pub(crate) struct LanguageResolution {
     /// The language spell-check will use.
     pub(super) language: String,
     /// `(language, file, line)` of the `\usepackage[...]{babel}` (or
@@ -84,7 +84,7 @@ fn find_babel_declaration(source: &str) -> Option<(&'static str, usize)> {
 /// default; (3) `english`. The declaration (if any) is reported alongside the
 /// resolved language so the caller can warn when it disagrees with the
 /// configured default rather than silently overriding it.
-pub(super) fn resolve_language(
+pub(crate) fn resolve_language(
     files: &[(String, String)],
     default_lang: Option<&str>,
 ) -> LanguageResolution {
@@ -100,6 +100,13 @@ pub(super) fn resolve_language(
     };
 
     LanguageResolution { language, declared }
+}
+
+/// The language the document will be typeset in, with the same precedence
+/// spell-check uses: babel/polyglossia option, else the configured default,
+/// else `english`. Callers that only need the name use this.
+pub(crate) fn document_language(files: &[(String, String)], default_lang: Option<&str>) -> String {
+    resolve_language(files, default_lang).language
 }
 
 /// Message for the `Severity::Warning` finding emitted when the document's
@@ -529,5 +536,16 @@ mod tests {
         let src = "\\begin{document}\nHola\n\\usepackage[spanish]{babel}\n\\end{document}";
         let files = vec![("main.tex".to_string(), src.to_string())];
         assert_eq!(resolve_language(&files, None).language, "english");
+    }
+
+    #[test]
+    fn document_language_prefers_babel_then_default() {
+        let spanish = "\\usepackage[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), spanish.to_string())];
+        assert_eq!(document_language(&files, Some("english")), "spanish");
+        let plain = "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}";
+        let files = vec![("main.tex".to_string(), plain.to_string())];
+        assert_eq!(document_language(&files, Some("spanish")), "spanish");
+        assert_eq!(document_language(&files, None), "english");
     }
 }

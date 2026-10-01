@@ -36,7 +36,7 @@
 mod parser;
 mod sections;
 mod title;
-mod verbatim;
+pub mod verbatim;
 
 use parser::Parser;
 

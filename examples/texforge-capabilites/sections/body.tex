@@ -29,9 +29,10 @@ if __name__ == "__main__":
 
 \subsection{Rust}
 
-El mismo mecanismo resalta Rust, aquí sin numeración:
+El mismo mecanismo resalta Rust, aquí con numeración: el
+Listado~\ref{lst:fib} muestra la definición clásica de Fibonacci.
 
-\begin{code}[lang=rust]
+\begin{code}[lang=rust, numbers=true, caption={Fibonacci en Rust}, label={lst:fib}]
 fn fibonacci(n: u64) -> u64 {
     match n {
         0 => 0,
@@ -65,3 +66,5 @@ La configuración del propio proyecto se muestra con el mismo entorno:
 [highlight]
 theme = "one-light"
 \end{code}
+
+\listoflistings

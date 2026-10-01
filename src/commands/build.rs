@@ -73,7 +73,19 @@ fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
         },
         lstlisting: section.lstlisting.unwrap_or(false),
         numbers: section.numbers.unwrap_or(false),
+        caption_name: section.caption_name.clone(),
+        list_name: section.list_name.clone(),
+        fallback_language: None,
     })
+}
+
+/// Like [`resolve_highlight`], but also fills `fallback_language` from the
+/// global `~/.texforge/config.toml` `defaults.language` — the same source
+/// the spell checker uses.
+fn resolve_highlight_settings(project: &Project) -> Result<highlight::Settings> {
+    let mut settings = resolve_highlight(project)?;
+    settings.fallback_language = crate::config::load().ok().and_then(|c| c.defaults.language);
+    Ok(settings)
 }
 
 /// Compile project to PDF using a temp directory, output named after the document title.
@@ -88,7 +100,7 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     }
 
     let default_style = resolve_default_style(&project)?;
-    let highlight_cfg = resolve_highlight(&project)?;
+    let highlight_cfg = resolve_highlight_settings(&project)?;
 
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path();
@@ -262,7 +274,7 @@ fn run_build(
         Ok(style) => style,
         Err(e) => return WatchResult::Err(e.to_string()),
     };
-    let highlight_cfg = match resolve_highlight(project) {
+    let highlight_cfg = match resolve_highlight_settings(project) {
         Ok(cfg) => cfg,
         Err(e) => return WatchResult::Err(e.to_string()),
     };
@@ -525,12 +537,16 @@ mod tests {
         theme: Option<&str>,
         lstlisting: Option<bool>,
         numbers: Option<bool>,
+        caption_name: Option<&str>,
+        list_name: Option<&str>,
     ) -> Project {
         let mut project = project_with_diagrams_style(None);
         project.config.highlight = Some(crate::domain::project::HighlightConfig {
             theme: theme.map(str::to_string),
             lstlisting,
             numbers,
+            caption_name: caption_name.map(str::to_string),
+            list_name: list_name.map(str::to_string),
         });
         project
     }
@@ -547,7 +563,7 @@ mod tests {
 
     #[test]
     fn highlight_section_is_honoured() {
-        let project = project_with_highlight(Some("one-light"), Some(true), Some(true));
+        let project = project_with_highlight(Some("one-light"), Some(true), Some(true), None, None);
         let settings = resolve_highlight(&project).unwrap();
         assert_eq!(settings.theme, HighlightTheme::OneLight);
         assert!(settings.lstlisting);
@@ -556,7 +572,7 @@ mod tests {
 
     #[test]
     fn partial_highlight_section_keeps_other_defaults() {
-        let project = project_with_highlight(None, Some(true), None);
+        let project = project_with_highlight(None, Some(true), None, None, None);
         let settings = resolve_highlight(&project).unwrap();
         assert_eq!(settings.theme, HighlightTheme::Github);
         assert!(settings.lstlisting);
@@ -565,12 +581,27 @@ mod tests {
 
     #[test]
     fn invalid_highlight_theme_fails_naming_valid_ones() {
-        let project = project_with_highlight(Some("dracula"), None, None);
+        let project = project_with_highlight(Some("dracula"), None, None, None, None);
         let err = resolve_highlight(&project).unwrap_err().to_string();
         assert!(err.contains("dracula"), "{err}");
         for name in ["github", "one-light"] {
             assert!(err.contains(name), "missing {name}: {err}");
         }
+    }
+
+    #[test]
+    fn highlight_section_maps_caption_and_list_names() {
+        let project = project_with_highlight(None, None, None, Some("Snippet"), Some("Snippets"));
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.caption_name.as_deref(), Some("Snippet"));
+        assert_eq!(settings.list_name.as_deref(), Some("Snippets"));
+    }
+
+    #[test]
+    fn resolve_highlight_leaves_fallback_language_none() {
+        let project = project_with_highlight(None, None, None, Some("Snippet"), None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.fallback_language, None);
     }
 
     fn tectonic_available() -> bool {

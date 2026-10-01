@@ -23,6 +23,7 @@ pub use dictionary::{
     global_whitelist_path, installed_dictionaries, parse_whitelist_words, InstalledDictionary,
     PROJECT_WHITELIST_FILES,
 };
+pub(crate) use language::document_language;
 use language::{
     expected_dictionary_hint, language_disagreement_message, resolve_language, skip_message,
     using_message,
