@@ -47,26 +47,21 @@ impl<'a> Parser<'a> {
     /// whether a close was actually found.
     pub(super) fn skip_to_inline_dollar(&mut self) -> bool {
         let bytes = self.src.as_bytes();
-        let mut i = self.pos;
         let mut backslashes = 0usize;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => {
-                    backslashes += 1;
-                    i += 1;
+        // Index-driven scan: the counter is carried across iterations while
+        // the position itself moves with the `for`, so no per-byte arithmetic
+        // can leave the scanner parked (or spinning) inside the buffer.
+        for (i, &byte) in bytes.iter().enumerate().skip(self.pos) {
+            match byte {
+                b'\\' => backslashes += 1,
+                // An unescaped `$` closes; an escaped `\$` (odd backslash
+                // run) falls through with the counter reset, exactly like any
+                // other literal byte.
+                b'$' if backslashes % 2 == 0 => {
+                    self.pos = i + 1;
+                    return true;
                 }
-                b'$' => {
-                    if backslashes % 2 == 0 {
-                        self.pos = i + 1;
-                        return true;
-                    }
-                    backslashes = 0;
-                    i += 1;
-                }
-                _ => {
-                    backslashes = 0;
-                    i += 1;
-                }
+                _ => backslashes = 0,
             }
         }
         self.pos = self.src.len();
@@ -82,5 +77,43 @@ impl<'a> Parser<'a> {
         } else {
             self.pos = self.src.len();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::texparse::{tokenize_with_spans, SpannedToken, Token};
+
+    /// An escaped `\$` inside `$...$` is content, not a delimiter: the math
+    /// region runs to the *real* closing `$`, so both delimiters keep their
+    /// own one-byte spans and nothing is reported as unclosed. A backslash
+    /// run that stops being counted would close the region on the escaped
+    /// dollar instead, moving every span after it.
+    #[test]
+    fn escaped_dollar_does_not_close_inline_math() {
+        let src = r"$a \$ b$ tail";
+        let tokenized = tokenize_with_spans(src);
+        assert_eq!(
+            tokenized.tokens,
+            vec![
+                SpannedToken {
+                    token: Token::BeginMath,
+                    start: 0,
+                    end: 1,
+                },
+                SpannedToken {
+                    token: Token::EndMath,
+                    start: 7,
+                    end: 8,
+                },
+                SpannedToken {
+                    token: Token::Text(" tail".to_string()),
+                    start: 8,
+                    end: 13,
+                },
+            ]
+        );
+        assert_eq!(&src[7..8], "$");
+        assert!(tokenized.unclosed_math.is_empty());
     }
 }

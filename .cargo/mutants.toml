@@ -7,6 +7,9 @@
 # hermetically. The injectable cores these adapters wrap (`run_update_with`,
 # `fetch_latest_stable_with`, `is_relevant_watch_event`, …) are covered by
 # tests instead, so the behaviour behind each seam is still mutation-tested.
+# A second, smaller class is excluded only when the mutation is provably
+# equivalent (the mutated expression cannot be observed on any input); each
+# such entry carries a one-line proof comment.
 exclude_re = [
   # src/commands/update/mod.rs — GitHub release-JSON fetch over HTTPS (network).
   '^src/commands/update/mod\.rs:[0-9]+:[0-9]+: .*RealFetcher>::get',
@@ -30,4 +33,8 @@ exclude_re = [
   '^src/commands/init\.rs:[0-9]+:[0-9]+: .*check_for_updates',
   # src/compiler/mod.rs — `compile`: spawns the Tectonic process; hermetic tests cannot invoke it.
   '^src/compiler/mod\.rs:[0-9]+:[0-9]+: replace compile -> Result',
+  # src/linter/spell/language.rs — equivalent: `args[..args.len() / 1]` only adds the package name itself, and the guard restricts that to `babel`/`polyglossia`, neither of which normalizes to a language, so every input yields the same result.
+  '^src/linter/spell/language\.rs:[0-9]+:[0-9]+: replace - with / in babel_language_from_usepackage$',
+  # src/pdftext/outline.rs — equivalent: `level_counters` values are never read (only `.len()` gates further `push`es), so scaling them is unobservable.
+  '^src/pdftext/outline\.rs:[0-9]+:[0-9]+: replace \+= with \*= in walk_outline_items$',
 ]

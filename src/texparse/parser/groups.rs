@@ -18,7 +18,11 @@ impl<'a> Parser<'a> {
         let content_start = self.pos;
         let mut depth = 1usize;
         let mut out = String::new();
-        while let Some(c) = self.peek() {
+        // Capped loop: see `Parser::run` for why the bound is behaviour-neutral.
+        for _ in 0..self.src.len() {
+            let Some(c) = self.peek() else {
+                break;
+            };
             match c {
                 '\\' => {
                     out.push('\\');
@@ -56,7 +60,11 @@ impl<'a> Parser<'a> {
         }
         let mut depth = 1usize;
         let mut out = String::new();
-        while let Some(c) = self.peek() {
+        // Capped loop: see `Parser::run` for why the bound is behaviour-neutral.
+        for _ in 0..self.src.len() {
+            let Some(c) = self.peek() else {
+                break;
+            };
             match c {
                 '\\' => {
                     out.push('\\');
@@ -85,5 +93,74 @@ impl<'a> Parser<'a> {
             }
         }
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Parser;
+    use crate::texparse::{tokenize, Token};
+
+    /// The spanned reader reports the inner content's extent: it starts just
+    /// after the opening `{` and ends on the `}` byte, never past it.
+    #[test]
+    fn braced_group_span_reports_the_inner_extent() {
+        let mut parser = Parser::new("{abc}");
+        assert_eq!(
+            parser.read_braced_group_spanned(),
+            Some(("abc".to_string(), 1, 4))
+        );
+    }
+
+    /// `\{` and `\}` are literal braces: they must not change nesting, so the
+    /// group closes at the real `}` and the text after it stays outside.
+    #[test]
+    fn escaped_braces_do_not_change_group_nesting() {
+        let tokens = tokenize(r"\textbf{a \{ b} rest");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Command {
+                    name: "textbf".to_string(),
+                    args: vec![],
+                },
+                Token::Text("a ".to_string()),
+                Token::Command {
+                    name: "{".to_string(),
+                    args: Vec::new(),
+                },
+                Token::Text(" b".to_string()),
+                Token::Text(" rest".to_string()),
+            ]
+        );
+    }
+
+    /// An escaped `\]` inside an optional argument is literal: the bracket
+    /// group must swallow it instead of closing on it, so the `{x}` after it
+    /// is still read as the next argument.
+    #[test]
+    fn escaped_bracket_does_not_close_the_optional_argument() {
+        let tokens = tokenize(r"\label[a\]b]{x}");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "label".to_string(),
+                args: vec!["a\\]b".to_string(), "x".to_string()],
+            }]
+        );
+    }
+
+    /// Nested `[...]` inside an optional argument increments the depth, so
+    /// only the outermost `]` closes the group.
+    #[test]
+    fn nested_brackets_stay_inside_one_optional_argument() {
+        let tokens = tokenize(r"\label[a[b]c]{x}");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "label".to_string(),
+                args: vec!["a[b]c".to_string(), "x".to_string()],
+            }]
+        );
     }
 }

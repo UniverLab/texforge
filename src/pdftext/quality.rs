@@ -500,4 +500,176 @@ mod tests {
             "Helvetica embedding warning missing: {findings:?}"
         );
     }
+
+    // --- the trailer `/Info` and `/DescendantFonts` each come in two shapes ---
+
+    /// The trailer's `/Info` may be a direct dictionary instead of a
+    /// reference; metadata must be read either way.
+    #[test]
+    fn trailer_info_may_be_a_direct_dictionary() {
+        use lopdf::dictionary;
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.new_object_id();
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        doc.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => Object::Reference(pages_id),
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.trailer.set(
+            "Info",
+            Object::Dictionary(dictionary! {
+                "Title" => Object::string_literal("Direct Info Title"),
+                "Author" => Object::string_literal("Ada Lovelace"),
+            }),
+        );
+
+        let info = info_from_document(&doc);
+        assert_eq!(info.pages, 1);
+        assert_eq!(info.metadata.title.as_deref(), Some("Direct Info Title"));
+        assert_eq!(info.metadata.author.as_deref(), Some("Ada Lovelace"));
+    }
+
+    /// How the parent Type0 font stores its `/DescendantFonts` value: both
+    /// shapes are legal PDF and must produce the same font list.
+    #[derive(Clone, Copy)]
+    enum DescendantsForm {
+        /// A direct array inside the font dictionary.
+        DirectArray,
+        /// A reference to an array held as its own indirect object.
+        ReferencedArray,
+    }
+
+    /// One page referencing a Type0 font whose CID descendant carries a
+    /// `/FontDescriptor` with a `/FontFile2`.
+    fn type0_font_doc(form: DescendantsForm) -> Document {
+        use lopdf::{dictionary, StringFormat};
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.new_object_id();
+        let font_id = doc.new_object_id();
+        let descendant_id = doc.new_object_id();
+        let fd_id = doc.new_object_id();
+        let arr_id = doc.new_object_id();
+
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        doc.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => Object::Reference(pages_id),
+                "Resources" => Object::Dictionary(dictionary! {
+                    "Font" => Object::Dictionary(dictionary! {
+                        "F1" => Object::Reference(font_id),
+                    }),
+                }),
+            }),
+        );
+        let descendants = match form {
+            DescendantsForm::DirectArray => Object::Array(vec![Object::Reference(descendant_id)]),
+            DescendantsForm::ReferencedArray => {
+                doc.objects.insert(
+                    arr_id,
+                    Object::Array(vec![Object::Reference(descendant_id)]),
+                );
+                Object::Reference(arr_id)
+            }
+        };
+        doc.objects.insert(
+            font_id,
+            Object::Dictionary(dictionary! {
+                "Subtype" => Object::Name(b"Type0".to_vec()),
+                "BaseFont" => Object::Name(b"TestParentFont".to_vec()),
+                "DescendantFonts" => descendants,
+            }),
+        );
+        doc.objects.insert(
+            descendant_id,
+            Object::Dictionary(dictionary! {
+                "Subtype" => Object::Name(b"CIDFontType2".to_vec()),
+                "BaseFont" => Object::Name(b"TestDescendantFont".to_vec()),
+                "FontDescriptor" => Object::Reference(fd_id),
+            }),
+        );
+        doc.objects.insert(
+            fd_id,
+            Object::Dictionary(dictionary! {
+                "FontName" => Object::Name(b"TestDescendantFont".to_vec()),
+                "FontFile2" => Object::String(b"not-really-a-font".to_vec(), StringFormat::Literal),
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc
+    }
+
+    /// A direct `/DescendantFonts` array still contributes the CID face to
+    /// the font list, and its descriptor marks the parent embedded.
+    #[test]
+    fn descendant_fonts_as_a_direct_array_reach_the_font_list() {
+        let info = info_from_document(&type0_font_doc(DescendantsForm::DirectArray));
+        let parent = info
+            .fonts
+            .iter()
+            .find(|f| f.name == "TestParentFont")
+            .expect("parent Type0 font must be listed");
+        assert_eq!(parent.pages, vec![1]);
+        assert!(parent.embedded, "embedding lives on the descendant");
+        assert!(
+            info.fonts.iter().any(|f| f.name == "TestDescendantFont"),
+            "descendant CID font must be listed: {:?}",
+            info.fonts
+        );
+    }
+
+    /// The same document with the array behind a reference: both the
+    /// descendant's presence and the parent's `embedded` flag must survive
+    /// the indirection.
+    #[test]
+    fn descendant_fonts_behind_a_reference_reach_the_font_list_and_embedding() {
+        let info = info_from_document(&type0_font_doc(DescendantsForm::ReferencedArray));
+        let parent = info
+            .fonts
+            .iter()
+            .find(|f| f.name == "TestParentFont")
+            .expect("parent Type0 font must be listed");
+        assert_eq!(parent.pages, vec![1]);
+        assert!(parent.embedded, "embedding lives on the descendant");
+        let desc = info
+            .fonts
+            .iter()
+            .find(|f| f.name == "TestDescendantFont")
+            .expect("descendant CID font must be listed");
+        assert!(desc.embedded, "descendant carries the FontDescriptor");
+        assert!(
+            desc.pages.is_empty(),
+            "descendants carry no page attribution: {:?}",
+            desc.pages
+        );
+    }
 }

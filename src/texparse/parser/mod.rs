@@ -38,11 +38,14 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn eat(&mut self, expected: char) -> bool {
-        if self.peek() == Some(expected) {
-            self.bump();
-            true
-        } else {
-            false
+        match self.peek() {
+            Some(c) if c == expected => {
+                self.bump();
+                true
+            }
+            // EOF (or a mismatch) never consumes: every caller's argument
+            // loop therefore terminates at end of input.
+            _ => false,
         }
     }
 
@@ -61,7 +64,14 @@ impl<'a> Parser<'a> {
         let mut text = String::new();
         let mut text_start = 0usize;
 
-        while let Some(c) = self.peek() {
+        // Bounded scan: every arm consumes at least one byte, so a correct
+        // parse always reaches EOF within `src.len()` iterations and the cap
+        // never truncates; a regressed `peek`/`bump` can no longer spin
+        // forever — it emits garbage the tests then reject.
+        for _ in 0..self.src.len() {
+            let Some(c) = self.peek() else {
+                break;
+            };
             match c {
                 '%' => {
                     self.flush_text(&mut tokens, &mut text, text_start);
@@ -108,7 +118,12 @@ impl<'a> Parser<'a> {
     /// Read a comment: `%` through end of line (the newline is not consumed).
     pub(super) fn read_comment(&mut self) -> String {
         let start = self.pos;
-        while let Some(c) = self.peek() {
+        // Capped loop: a comment is at most the rest of the buffer, so a
+        // correct pass never reaches the bound (see `Parser::run`).
+        for _ in 0..self.src.len() {
+            let Some(c) = self.peek() else {
+                break;
+            };
             if c == '\n' {
                 break;
             }

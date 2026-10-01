@@ -941,4 +941,182 @@ mod tests {
         assert_eq!(tokenized.unclosed_math, vec![14]);
         assert_eq!(&src[14..15], "$");
     }
+
+    /// `\[ .. \]` display math: the open span is exactly the two bytes of
+    /// `\[`, the synthesized close span is pinned where the content began
+    /// (the position captured before skipping ahead), and the tail text
+    /// resumes after the real `\]`.
+    #[test]
+    fn bracket_display_math_delimiters_carry_exact_spans() {
+        let src = r"x\[abc\] tail";
+        let spanned = tokenize_with_spans(src).tokens;
+        assert_eq!(
+            spanned,
+            vec![
+                SpannedToken {
+                    token: Token::Text("x".to_string()),
+                    start: 0,
+                    end: 1,
+                },
+                SpannedToken {
+                    token: Token::BeginMath,
+                    start: 1,
+                    end: 3,
+                },
+                SpannedToken {
+                    token: Token::EndMath,
+                    start: 3,
+                    end: 5,
+                },
+                SpannedToken {
+                    token: Token::Text(" tail".to_string()),
+                    start: 8,
+                    end: 13,
+                },
+            ]
+        );
+        assert_eq!(&src[1..3], r"\[");
+    }
+
+    /// The paren form behaves byte-for-byte like the bracket form.
+    #[test]
+    fn paren_inline_math_delimiters_carry_exact_spans() {
+        let src = r"x\(abc\) tail";
+        let spanned = tokenize_with_spans(src).tokens;
+        assert_eq!(
+            spanned,
+            vec![
+                SpannedToken {
+                    token: Token::Text("x".to_string()),
+                    start: 0,
+                    end: 1,
+                },
+                SpannedToken {
+                    token: Token::BeginMath,
+                    start: 1,
+                    end: 3,
+                },
+                SpannedToken {
+                    token: Token::EndMath,
+                    start: 3,
+                    end: 5,
+                },
+                SpannedToken {
+                    token: Token::Text(" tail".to_string()),
+                    start: 8,
+                    end: 13,
+                },
+            ]
+        );
+        assert_eq!(&src[1..3], r"\(");
+    }
+
+    /// A stray close delimiter (no matching open) still marks an `EndMath`
+    /// over its own two bytes instead of falling through as a control symbol.
+    #[test]
+    fn stray_control_math_closes_are_end_math_tokens() {
+        for (src, close) in [(r"x\] tail", "]"), (r"x\) tail", ")")] {
+            let spanned = tokenize_with_spans(src).tokens;
+            assert_eq!(
+                spanned,
+                vec![
+                    SpannedToken {
+                        token: Token::Text("x".to_string()),
+                        start: 0,
+                        end: 1,
+                    },
+                    SpannedToken {
+                        token: Token::EndMath,
+                        start: 1,
+                        end: 3,
+                    },
+                    SpannedToken {
+                        token: Token::Text(" tail".to_string()),
+                        start: 3,
+                        end: 8,
+                    },
+                ],
+                "stray close: {close}"
+            );
+            assert_eq!(src[1..3].to_string(), format!("\\{close}"));
+        }
+    }
+
+    /// `$$` display math: the begin span covers both dollar bytes and the end
+    /// span covers the closing pair, so a span multiplied by the delimiter
+    /// length cannot masquerade as the right boundary.
+    #[test]
+    fn display_dollar_delimiters_carry_exact_spans() {
+        let src = "x$$ab$$ y";
+        let spanned = tokenize_with_spans(src).tokens;
+        assert_eq!(
+            spanned,
+            vec![
+                SpannedToken {
+                    token: Token::Text("x".to_string()),
+                    start: 0,
+                    end: 1,
+                },
+                SpannedToken {
+                    token: Token::BeginMath,
+                    start: 1,
+                    end: 3,
+                },
+                SpannedToken {
+                    token: Token::EndMath,
+                    start: 5,
+                    end: 7,
+                },
+                SpannedToken {
+                    token: Token::Text(" y".to_string()),
+                    start: 7,
+                    end: 9,
+                },
+            ]
+        );
+        assert_eq!(&src[1..3], "$$");
+        assert_eq!(&src[5..7], "$$");
+    }
+
+    /// An unclosed `$` inside `\href` link text must be reported at its
+    /// absolute offset in the outer source, not at the sub-buffer offset.
+    #[test]
+    fn unclosed_math_inside_href_is_offset_to_the_outer_source() {
+        let src = r"\href{url}{$x}";
+        let tokenized = tokenize_with_spans(src);
+        assert_eq!(tokenized.unclosed_math, vec![11]);
+        assert_eq!(&src[11..12], "$");
+    }
+
+    /// `\verb` with a bracket delimiter: the delimiter is the first non-letter
+    /// after the name, so everything after it — brackets included — is the
+    /// verbatim body, never an option group.
+    #[test]
+    fn verb_with_bracket_delimiter_reads_the_rest_as_verbatim() {
+        let tokens = tokenize(r"\verb[abc]def");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "verb".to_string(),
+                args: vec!["abc]def".to_string()],
+            }]
+        );
+    }
+
+    /// `\lstinline` collects its option groups first, then reads the body up
+    /// to the verbatim delimiter.
+    #[test]
+    fn lstinline_collects_options_then_the_verbatim_body() {
+        let tokens = tokenize(r"\lstinline[opts]|x|");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Command {
+                    name: "lstinline".to_string(),
+                    args: vec!["opts".to_string(), "x".to_string()],
+                },
+                Token::Text("|".to_string()),
+            ]
+        );
+    }
 }

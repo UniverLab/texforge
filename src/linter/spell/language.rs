@@ -466,4 +466,58 @@ mod tests {
             findings
         );
     }
+
+    // --- the skip message's "expected path" must name the right backend ---
+
+    /// Spanish is backed by a Hunspell pair, so the hint names the `.dic`;
+    /// English keeps the plain wordlist, so the hint names the `.txt`.
+    #[test]
+    fn expected_dictionary_hint_names_the_dic_for_hunspell_and_the_txt_for_wordlists() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().unwrap();
+        let orig_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+
+        let file_name_of = |lang: &str| {
+            expected_dictionary_hint(lang).map(|p| p.file_name().unwrap().to_os_string())
+        };
+        let spanish = file_name_of("spanish");
+        let english = file_name_of("english");
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(
+            spanish,
+            Some(std::ffi::OsString::from("spanish.dic")),
+            "Hunspell-backed languages must hint at the .dic half of the pair"
+        );
+        assert_eq!(
+            english,
+            Some(std::ffi::OsString::from("english.txt")),
+            "wordlist languages must hint at the .txt wordlist"
+        );
+    }
+
+    /// A group that merely looks like `\usepackage[...]{babel}` — any other
+    /// command name — is not a declaration: the guard on the command name is
+    /// what keeps arbitrary `[spanish]{babel}` groups from steering the
+    /// document language.
+    #[test]
+    fn only_the_usepackage_command_declares_a_babel_language() {
+        let src = "\\mycmd[spanish]{babel}\n\\begin{document}\nHola\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(resolve_language(&files, None).language, "english");
+    }
+
+    /// The scan stops at `\begin{document}`: a `\usepackage` written in the
+    /// body is past the preamble and must not steer language resolution.
+    #[test]
+    fn babel_declaration_after_begin_document_is_ignored() {
+        let src = "\\begin{document}\nHola\n\\usepackage[spanish]{babel}\n\\end{document}";
+        let files = vec![("main.tex".to_string(), src.to_string())];
+        assert_eq!(resolve_language(&files, None).language, "english");
+    }
 }

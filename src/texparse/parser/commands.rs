@@ -9,7 +9,12 @@ use super::Parser;
 impl<'a> Parser<'a> {
     pub(super) fn read_command_name(&mut self) -> String {
         let start = self.pos;
-        while let Some(c) = self.peek() {
+        // Capped loop: command names are a prefix of the buffer (see
+        // `Parser::run` for why the bound is behaviour-neutral).
+        for _ in 0..self.src.len() {
+            let Some(c) = self.peek() else {
+                break;
+            };
             if is_command_char(c) {
                 self.bump();
             } else {
@@ -30,7 +35,12 @@ impl<'a> Parser<'a> {
     ) {
         let mut args = Vec::new();
         if name == "lstinline" {
-            while let Some(optional) = self.read_bracket_group() {
+            // Capped loop: each successful read consumes at least one byte
+            // (see `Parser::run` for why the bound is behaviour-neutral).
+            for _ in 0..self.src.len() {
+                let Some(optional) = self.read_bracket_group() else {
+                    break;
+                };
                 args.push(optional);
             }
         }
@@ -50,7 +60,12 @@ impl<'a> Parser<'a> {
             return;
         };
         let mut content = String::new();
-        while let Some(c) = self.peek() {
+        // Capped loop: the content is a prefix of the buffer (see
+        // `Parser::run` for why the bound is behaviour-neutral).
+        for _ in 0..self.src.len() {
+            let Some(c) = self.peek() else {
+                break;
+            };
             if c == delim || c == '\n' {
                 break;
             }
@@ -131,7 +146,12 @@ impl<'a> Parser<'a> {
     /// `\href{url}{text}`: the URL is a non-prose argument, the link text is prose.
     pub(super) fn handle_href(&mut self, start: usize, tokens: &mut Vec<SpannedToken>) {
         let mut args = Vec::new();
-        while let Some(optional) = self.read_bracket_group() {
+        // Capped loop: each successful read consumes at least one byte (see
+        // `Parser::run` for why the bound is behaviour-neutral).
+        for _ in 0..self.src.len() {
+            let Some(optional) = self.read_bracket_group() else {
+                break;
+            };
             args.push(optional);
         }
         if let Some(url) = self.read_braced_group() {
@@ -162,7 +182,12 @@ impl<'a> Parser<'a> {
         tokens: &mut Vec<SpannedToken>,
     ) {
         let mut args = Vec::new();
-        while let Some(optional) = self.read_bracket_group() {
+        // Capped loop: each successful read consumes at least one byte (see
+        // `Parser::run` for why the bound is behaviour-neutral).
+        for _ in 0..self.src.len() {
+            let Some(optional) = self.read_bracket_group() else {
+                break;
+            };
             args.push(optional);
         }
         self.push(
@@ -190,7 +215,9 @@ impl<'a> Parser<'a> {
         tokens: &mut Vec<SpannedToken>,
     ) {
         let mut args = Vec::new();
-        loop {
+        // Capped loop: each successful read consumes at least one byte (see
+        // `Parser::run` for why the bound is behaviour-neutral).
+        for _ in 0..self.src.len() {
             if let Some(optional) = self.read_bracket_group() {
                 args.push(optional);
                 continue;

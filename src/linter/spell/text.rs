@@ -20,29 +20,34 @@ pub(super) fn build_spell_text(
 ) -> (String, Vec<(usize, usize)>) {
     let mut out = String::new();
     let mut line_chunks: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0;
     let mut pending_text_skip: usize = 0;
+    let mut tokens_to_skip: usize = 0;
 
-    while i < tokens.len() {
-        match &tokens[i].token {
+    // The cursor is the iterator itself: accent macros that must swallow the
+    // following tokens express that as a bounded skip counter instead of
+    // arithmetic on an index.
+    for (i, spanned) in tokens.iter().enumerate() {
+        if tokens_to_skip > 0 {
+            tokens_to_skip -= 1;
+            continue;
+        }
+        match &spanned.token {
             Token::Text(t) => {
                 let skip = pending_text_skip;
                 pending_text_skip = 0;
-                let line = line_of(source, tokens[i].start);
+                let line = line_of(source, spanned.start);
                 let chunk = strip_empty_groups(&t[skip..]);
                 if !chunk.is_empty() {
                     line_chunks.push((out.len(), line));
                     out.push_str(&chunk);
                 }
-                i += 1;
             }
             Token::Command { name, args } if is_accent_command(name) => {
                 match try_resolve_accent(name, args, tokens, i) {
                     Some((composed, source_kind)) => {
-                        let line = line_of(source, tokens[i].start);
+                        let line = line_of(source, spanned.start);
                         line_chunks.push((out.len(), line));
                         out.push(composed);
-                        i += 1;
                         match source_kind {
                             AccentBaseSource::FromArgs => {}
                             AccentBaseSource::FromNextText { chars_to_skip } => {
@@ -52,14 +57,16 @@ pub(super) fn build_spell_text(
                                 extra_tokens_to_skip,
                                 chars_to_skip_in_last,
                             } => {
-                                i += extra_tokens_to_skip - 1;
+                                // The accent token itself is consumed by this
+                                // iteration; swallow the brace, the dotless
+                                // command and its closing brace after it.
+                                tokens_to_skip = extra_tokens_to_skip - 1;
                                 pending_text_skip = chars_to_skip_in_last;
                             }
                         }
                     }
                     None => {
                         out.push(' ');
-                        i += 1;
                         pending_text_skip = 0;
                     }
                 }
@@ -67,19 +74,16 @@ pub(super) fn build_spell_text(
             Token::Command { name, .. } if is_transparent_command(name) => {
                 // Emit nothing and do NOT push a separator: the characters on
                 // either side belong to the same word.
-                i += 1;
                 pending_text_skip = 0;
             }
             Token::Command { name, .. } if name == "i" || name == "j" => {
-                let line = line_of(source, tokens[i].start);
+                let line = line_of(source, spanned.start);
                 line_chunks.push((out.len(), line));
                 out.push(if name == "i" { 'i' } else { 'j' });
-                i += 1;
                 pending_text_skip = 0;
             }
             _ => {
                 out.push(' ');
-                i += 1;
                 pending_text_skip = 0;
             }
         }
@@ -218,5 +222,31 @@ mod tests {
             "leading/trailing/doubled empty groups must all be stripped: {:?}",
             findings
         );
+    }
+
+    // --- dotless \i/\j: they render their own letter, with no separator
+    // inserted between the surrounding text and them ---
+
+    fn spell_text(src: &str) -> String {
+        let tokenized = crate::texparse::tokenize_with_spans(src);
+        super::build_spell_text(&tokenized.tokens, src).0
+    }
+
+    #[test]
+    fn dotless_i_emits_its_letter_without_a_break() {
+        assert_eq!(spell_text(r"ag\i jt"), "agi jt");
+    }
+
+    #[test]
+    fn dotless_j_emits_its_letter_without_a_break() {
+        assert_eq!(spell_text(r"ag\j jt"), "agj jt");
+    }
+
+    /// `\'{\i}` composes to `í` and swallows exactly the brace, the dotless
+    /// command and the closing brace — the trailing text after `}` must
+    /// survive untouched.
+    #[test]
+    fn accented_dotless_i_skips_only_the_braced_command() {
+        assert_eq!(spell_text(r"\'{\i} ok"), "í ok");
     }
 }

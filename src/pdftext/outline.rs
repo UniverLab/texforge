@@ -244,7 +244,7 @@ pub fn page_breaks_from_outline(
     let numbered = compute_section_numbers(entries);
     let mut out = Vec::with_capacity(num_pages);
     let mut current: Option<(String, String)> = None;
-    let mut entry_idx = 0;
+    let mut pending = numbered.iter().peekable();
 
     for page_num in 1..=num_pages {
         // A page is attributed to the FIRST section that opens it, never the
@@ -254,13 +254,15 @@ pub fn page_breaks_from_outline(
         // 1.2, 2, 2.1, 2.2 and 2.3, and the answer is 1. Later entries on the
         // same page are still consumed, just not reported.
         let mut opened_here = false;
-        while entry_idx < numbered.len() && numbered[entry_idx].0 == page_num {
+        while let Some((page, num, title)) = pending.peek() {
+            if *page != page_num {
+                break;
+            }
             if !opened_here {
-                let (_, num, title) = &numbered[entry_idx];
                 current = Some((num.clone(), title.clone()));
                 opened_here = true;
             }
-            entry_idx += 1;
+            pending.next();
         }
         out.push(PdfPageBreak {
             page: page_num,
