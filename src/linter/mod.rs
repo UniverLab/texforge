@@ -153,6 +153,9 @@ fn listing_label_option(content: &str, block: &VerbatimBlock) -> Option<String> 
     let opts = opts.strip_prefix(&format!("\\begin{{{}}}", block.env))?;
     let (caption, label) = listing_caption_and_label(opts)?;
     caption?;
+    if label.is_empty() {
+        return None;
+    }
     Some(label)
 }
 
@@ -1270,6 +1273,21 @@ mod tests {
             has_error(&findings, "\\ref{lst:ghost}"),
             "foreign options do not define labels: {findings:?}"
         );
+    }
+
+    /// A captioned block without `label=` defines no label: the option
+    /// lookup must return `None` rather than an empty string, so the empty
+    /// label never pollutes the definition set.
+    #[test]
+    fn a_caption_without_a_label_defines_nothing() {
+        let src = "\\begin{code}[lang=python, caption={Hi}]\nx = 1\n\\end{code}\n";
+        for block in verbatim_blocks(src) {
+            assert_eq!(listing_label_option(src, &block), None);
+        }
+        let src = "\\begin{code}[lang=python, caption={Hi}, label={}]\nx\n\\end{code}\n";
+        for block in verbatim_blocks(src) {
+            assert_eq!(listing_label_option(src, &block), None);
+        }
     }
 
     /// Error-severity findings are detected independently of any deny-warnings flag
