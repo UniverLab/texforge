@@ -80,6 +80,14 @@ happens **after** the author's preamble, the chosen family wins over a mono
 package the author loaded earlier. Unknown values fail the build, naming the
 value and listing the six valid ones.
 
+**Caveat — `fontspec` preambles.** A preamble that loads `fontspec` (directly,
+or through an OpenType package such as `FiraMono`) switches the document to TU
+encoding, where the Type 1–based values (`inconsolata`, `dejavu-sans-mono`)
+have no font files: typewriter text then falls back to the document's serif
+font instead of the chosen family. In such documents pick one of the
+OpenType-backed values (`source-code-pro`, `plex-mono`, `fira-mono`), which
+apply in both encodings, or leave the key at `document`.
+
 ## Captions, labels and the list of listings
 
 A block with `caption=` gains a numbered caption line directly above the

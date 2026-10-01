@@ -2276,4 +2276,43 @@ mod tests {
             "Document font injects nothing:\n{out2}"
         );
     }
+
+    /// The explicit `font = "document"` value and an absent key produce
+    /// byte-identical rewrites — the same guarantee the golden snapshot pins
+    /// for the default, here compared directly against each other.
+    #[test]
+    fn explicit_document_font_is_byte_identical_to_the_default() {
+        let doc = "\\documentclass{article}\n\\begin{document}\n\
+                   \\section{Demo}\n\
+                   \\begin{code}[lang=python, numbers=true]\n\
+                   def fib(n):\n    return n\n\
+                   \\end{code}\n\
+                   Prose after the block.\n\\end{document}\n";
+
+        let absent = tempfile::tempdir().unwrap();
+        std::fs::write(absent.path().join("main.tex"), doc).unwrap();
+        run(absent.path(), "main.tex", Settings::default()).unwrap();
+
+        let explicit = tempfile::tempdir().unwrap();
+        std::fs::write(explicit.path().join("main.tex"), doc).unwrap();
+        let cfg = Settings {
+            font: ListingFont::Document,
+            ..Settings::default()
+        };
+        run(explicit.path(), "main.tex", cfg).unwrap();
+
+        let absent_bytes = std::fs::read(absent.path().join("main.tex")).unwrap();
+        let explicit_bytes = std::fs::read(explicit.path().join("main.tex")).unwrap();
+        // Sanity first: the pass really rewrote and injected, so the two
+        // files compared below are not both untouched copies of the source.
+        let absent_text = String::from_utf8(absent_bytes.clone()).unwrap();
+        assert!(
+            absent_text.contains("texforge code listings"),
+            "fixture must contain a rewritten block:\n{absent_text}"
+        );
+        assert_eq!(
+            absent_bytes, explicit_bytes,
+            "font = \"document\" must be byte-identical to an absent key"
+        );
+    }
 }

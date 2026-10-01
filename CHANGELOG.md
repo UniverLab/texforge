@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   greyscale, using bold keywords and italic comments instead of hue, and
   are the black-and-white-printing choice. Styles can be mixed in one
   document; `light` is unchanged byte for byte.
+- A monospace font for code listings: `[highlight] font = "…"`, one of
+  `document` (default — the preamble's own typewriter family, byte-identical
+  to before), `inconsolata`, `source-code-pro`, `dejavu-sans-mono`,
+  `plex-mono` or `fira-mono`. The matching package is injected inside the
+  generated preamble block, after the author's own preamble and guarded by
+  `\@ifpackageloaded` so a package the document already loads is not loaded
+  twice; only a build that rewrote at least one code block injects it, and an
+  unknown value fails the build listing the valid ones.
 
 ### Changed
 

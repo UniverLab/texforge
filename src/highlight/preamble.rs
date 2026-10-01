@@ -856,6 +856,10 @@ mod tests {
         assert!(ListingFont::parse("dejavu-sans-mono").is_ok());
         assert!(ListingFont::parse("plex-mono").is_ok());
         assert!(ListingFont::parse("fira-mono").is_ok());
-        assert!(ListingFont::parse("document").is_ok());
+        assert_eq!(
+            ListingFont::parse("document").unwrap(),
+            ListingFont::Document,
+            "`document` must resolve to the byte-identical default variant"
+        );
     }
 }

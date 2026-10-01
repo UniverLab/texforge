@@ -706,6 +706,13 @@ mod tests {
         project.config.highlight.as_mut().unwrap().font = None;
         let settings = resolve_highlight(&project).unwrap();
         assert_eq!(settings.font, ListingFont::Document);
+
+        // Explicit "document" → Document (the same variant the absent key
+        // resolves to, which is what makes its output byte-identical)
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = Some("document".to_string());
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Document);
     }
 
     /// Invalid font fails naming the value and all six valid names.
