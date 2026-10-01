@@ -1187,6 +1187,11 @@ mod tests {
     /// languages degrade without failing. Skips (never fails) without Tectonic.
     #[test]
     fn emitted_listings_compile_under_tectonic() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if crate::compiler::locate_tectonic().is_none() {
             eprintln!("skipping: tectonic not available in environment");
             return;
@@ -1241,6 +1246,11 @@ mod tests {
     /// asserted, on their respective pages.
     #[test]
     fn long_listing_breaks_across_pages() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if crate::compiler::locate_tectonic().is_none() {
             eprintln!("skipping: tectonic not available in environment");
             return;

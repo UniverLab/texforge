@@ -590,6 +590,11 @@ mod tests {
 
     #[test]
     fn reproducible_builds_are_byte_identical() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !tectonic_available() {
             eprintln!("skipping: tectonic not available in environment");
             return;
@@ -618,6 +623,11 @@ mod tests {
 
     #[test]
     fn explicit_epoch_builds_are_byte_identical() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !tectonic_available() {
             eprintln!("skipping: tectonic not available in environment");
             return;
@@ -646,6 +656,11 @@ mod tests {
 
     #[test]
     fn non_reproducible_build_still_succeeds() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !tectonic_available() {
             eprintln!("skipping: tectonic not available in environment");
             return;

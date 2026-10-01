@@ -976,6 +976,11 @@ mod tests {
     /// Skips (never fails) without Tectonic.
     #[test]
     fn overfull_inside_a_block_is_reported_as_main_tex_line() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if locate_tectonic().is_none() {
             eprintln!("skipping: tectonic not available in environment");
             return;
@@ -1105,6 +1110,11 @@ mod tests {
     /// injected preamble both move it). Skips without Tectonic.
     #[test]
     fn error_after_a_block_is_reported_as_the_source_line() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if locate_tectonic().is_none() {
             eprintln!("skipping: tectonic not available in environment");
             return;
