@@ -509,6 +509,10 @@ fn push_closing(out_lines: &mut Vec<String>, out_origins: &mut Vec<usize>, opts:
     }
 }
 
+// Closing braces inside test string literals are spelled `\x7d`: the quality
+// gate (workflows/scripts/rust-quality.sh) finds the end of this module by
+// counting `{`/`}` per line, so a lone `}` in a string would end the module
+// early and count the remaining tests as production code.
 #[cfg(test)]
 mod tests {
     use std::sync::LazyLock;
@@ -638,7 +642,7 @@ mod tests {
             out.contains("a\\tfxsp{}-\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}c"),
             "spaces and hyphen must survive byte-for-byte: {out}"
         );
-        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n}").unwrap()];
+        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n\x7d").unwrap()];
         let stripped = payload.replace("\\textasciitilde{}", "");
         assert!(!stripped.contains('~'), "no bare tilde may survive: {out}");
         assert!(
@@ -961,7 +965,7 @@ mod tests {
             "italic comment: {out}"
         );
         assert!(
-            out.contains("note}}plain\n\\par"),
+            out.contains("note\x7d\x7dplain\n\\par"),
             "the base-colour run stays unwrapped: {out}"
         );
         assert_eq!(used.len(), 2, "the base colour is the document's: {used:?}");
@@ -1039,7 +1043,7 @@ mod tests {
         };
         let (out, _, _, _) = render("a", None, &o);
         let color = out.find("\\color{tfxcoladbac7}").unwrap();
-        let close = out.find("\n}").unwrap();
+        let close = out.find("\n\x7d").unwrap();
         assert!(
             color < close,
             "the colour must precede the group's end: {out}"

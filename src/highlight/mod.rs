@@ -436,34 +436,36 @@ fn rewrite_file(
         src_line = end_line;
 
         cursor = body_abs + end + end_tag.len();
-
-        // Vertical rhythm: `\medskip` after every inline block, and
-        // `\noindent` for the paragraph that follows — unless the author
-        // left a blank line, in which case the normal paragraph indent
-        // applies.
-        let rest = &content[cursor..];
-        let after = rest
-            .strip_prefix("\r\n")
-            .or_else(|| rest.strip_prefix('\n'))
-            .unwrap_or(rest);
-        let followed_by_prose = after
-            .lines()
-            .next()
-            .is_some_and(|line| !line.trim().is_empty());
-        result.push('\n');
+        push_block_tail(&mut result, &content[cursor..], floated);
         origins.push(end_line);
-        // A floated block leaves the text flow: no vertical rhythm around it.
-        if !floated {
-            result.push_str("\\medskip");
-        }
-        if followed_by_prose {
-            result.push_str("\\noindent ");
-        }
     }
 
     push_text(&mut result, &mut origins, &content[cursor..], &mut src_line);
     state.origins.extend(origins);
     Ok(result)
+}
+
+/// Vertical rhythm after a block: a new line, then `\medskip` after every
+/// inline block, and `\noindent` for the paragraph that follows — unless the
+/// author left a blank line, in which case the normal paragraph indent
+/// applies. A floated block leaves the text flow: no vertical rhythm around
+/// it. The caller records the new line's origin.
+fn push_block_tail(result: &mut String, rest: &str, floated: bool) {
+    let after = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))
+        .unwrap_or(rest);
+    let followed_by_prose = after
+        .lines()
+        .next()
+        .is_some_and(|line| !line.trim().is_empty());
+    result.push('\n');
+    if !floated {
+        result.push_str("\\medskip");
+    }
+    if followed_by_prose {
+        result.push_str("\\noindent ");
+    }
 }
 
 /// Strip the raw block body's edge lines — one leading newline and a final
