@@ -226,11 +226,12 @@ With `numbers`, the gutter sits inside the frame: numbers right-aligned in
 the palette's comment colour, separated from the code by a 0.3pt rule in the
 border colour.
 
-Vertical rhythm is `\medskip` before and after every block. The paragraph
-right after a block is not indented — unless you left a blank line after
-`\end{code}`, in which case the normal paragraph indent applies. A block
-never starts at the very bottom of a page with fewer than two lines on it:
-the first two and the last two lines are glued together.
+Vertical rhythm is `\medskip` before and after every inline block; a floated
+one (`pos=` other than `H`) has left the text flow, so it adds none. The
+paragraph right after an inline block is not indented — unless you left a blank
+line after `\end{code}`, in which case the normal paragraph indent applies. A
+block never starts at the very bottom of a page with fewer than two lines on
+it: the first two and the last two lines are glued together.
 
 ## Behaviour notes
 

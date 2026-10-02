@@ -339,9 +339,10 @@ fn flush(run: Option<Run>, buf: &mut String, out: &mut String, used: &mut BTreeS
 /// Structure: `\par\medskip` for an inline block (`\par` for a floated one),
 /// then a group scoping `\tfxcodestyle` with one
 /// framed `\noindent` paragraph per source line separated by blank lines (so
-/// TeX may break the page between any two lines), then `\par` + `}`; the
-/// caller appends the trailing `\medskip` (and `\noindent` for the next
-/// paragraph) once it knows what follows the block.
+/// TeX may break the page between any two lines), then `\par` + `}`; an
+/// inline block gets the trailing `\medskip` appended by the caller (a
+/// floated one gets none — it has left the text flow), with the `\noindent`
+/// for the next paragraph, once the caller knows what follows the block.
 pub(crate) fn render_block(
     body: &str,
     spans: Option<&[Vec<Span>]>,
@@ -364,7 +365,7 @@ pub(crate) fn render_block(
     push_opening(&mut out_lines, &mut out_origins, opts);
     // The style's base foreground, inside the `{ … }` group: a dark frame
     // needs its light text colour spelled out, and the group keeps it off the
-    // caption above and the `\medskip` below.
+    // caption above and whatever other ink the block's surroundings carry.
     if let Some(base) = opts.base {
         used.insert(base);
         out_lines.push(format!("\\color{{{}}}", base.name()));
@@ -437,9 +438,9 @@ pub(crate) fn render_block(
     out_lines.join("\n")
 }
 
-/// Opening lines: `\par\medskip`, an optional float wrapper, the caption
-/// lines, then the style group. Caption/`\begin{figure}` lines map to the
-/// `\begin` line.
+/// Opening lines: `\par\medskip` for an inline block (`\par` for a floated
+/// one), an optional float wrapper, the caption lines, then the style
+/// group. Caption/`\begin{figure}` lines map to the `\begin` line.
 fn push_opening(out_lines: &mut Vec<String>, out_origins: &mut Vec<usize>, opts: &EmitOpts) {
     // A float leaves the text flow, so it carries no vertical rhythm of its
     // own; an inline block keeps its `\par\medskip`.

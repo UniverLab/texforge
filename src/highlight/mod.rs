@@ -437,9 +437,10 @@ fn rewrite_file(
 
         cursor = body_abs + end + end_tag.len();
 
-        // Vertical rhythm: `\medskip` after every block, and `\noindent` for
-        // the paragraph that follows — unless the author left a blank line,
-        // in which case the normal paragraph indent applies.
+        // Vertical rhythm: `\medskip` after every inline block, and
+        // `\noindent` for the paragraph that follows — unless the author
+        // left a blank line, in which case the normal paragraph indent
+        // applies.
         let rest = &content[cursor..];
         let after = rest
             .strip_prefix("\r\n")
