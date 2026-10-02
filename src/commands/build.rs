@@ -1,5 +1,6 @@
 //! `texforge build` command implementation.
 
+use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -12,6 +13,8 @@ use crate::commands::init::BANNER;
 use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::{Project, Reproducible};
+use crate::highlight;
+use crate::highlight::{HighlightStyle, HighlightTheme, ListingFont};
 use crate::raster::PdfDocument;
 use crate::utils::sanitize_filename;
 
@@ -55,6 +58,58 @@ fn resolve_default_style(project: &Project) -> Result<diagrams::style::DiagramSt
     }
 }
 
+/// Resolve `project.toml`'s `[highlight]` section into the code-listing
+/// pass's settings, mirroring [`resolve_default_style`]: an absent section
+/// keeps every default (github theme, light style, no `lstlisting` rewrite, no
+/// gutter), and an unrecognised theme, style, or font fails the build by name
+/// instead of silently falling back to a default.
+fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
+    let Some(section) = project.config.highlight.as_ref() else {
+        return Ok(highlight::Settings::default());
+    };
+    Ok(highlight::Settings {
+        theme: match section.theme.as_deref() {
+            Some(name) => HighlightTheme::parse(name)?,
+            None => HighlightTheme::default(),
+        },
+        style: match section.style.as_deref() {
+            Some(name) => HighlightStyle::parse(name)?,
+            None => HighlightStyle::default(),
+        },
+        by_lang: resolve_by_lang(&section.by_lang)?,
+        lstlisting: section.lstlisting.unwrap_or(false),
+        numbers: section.numbers.unwrap_or(false),
+        caption_name: section.caption_name.clone(),
+        list_name: section.list_name.clone(),
+        font: match section.font.as_deref() {
+            Some(name) => ListingFont::parse(name)?,
+            None => ListingFont::default(),
+        },
+        fallback_language: None,
+    })
+}
+
+/// Parse `[highlight.by_lang]`, normalising each key with the same
+/// [`highlight::language_key`] a block's `lang=` value goes through — that is
+/// what makes one entry match every alias of its language. An unknown style
+/// value fails the build naming the offending value.
+fn resolve_by_lang(table: &HashMap<String, String>) -> Result<HashMap<String, HighlightStyle>> {
+    let mut resolved = HashMap::with_capacity(table.len());
+    for (lang, style) in table {
+        resolved.insert(highlight::language_key(lang), HighlightStyle::parse(style)?);
+    }
+    Ok(resolved)
+}
+
+/// Like [`resolve_highlight`], but also fills `fallback_language` from the
+/// global `~/.texforge/config.toml` `defaults.language` — the same source
+/// the spell checker uses.
+fn resolve_highlight_settings(project: &Project) -> Result<highlight::Settings> {
+    let mut settings = resolve_highlight(project)?;
+    settings.fallback_language = crate::config::load().ok().and_then(|c| c.defaults.language);
+    Ok(settings)
+}
+
 /// Compile project to PDF using a temp directory, output named after the document title.
 pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     let project = Project::load()?;
@@ -67,6 +122,7 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     }
 
     let default_style = resolve_default_style(&project)?;
+    let highlight_cfg = resolve_highlight_settings(&project)?;
 
     let temp_dir = tempfile::tempdir()?;
     let build_dir = temp_dir.path();
@@ -78,11 +134,14 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
         build_dir,
         default_style,
     )?;
+    // After diagrams: the code pass rewrites what diagrams just copied, and
+    // its warning line numbers are build-copy coordinates (like Tectonic's).
+    let line_map = highlight::process(build_dir, &project.config.build.entry, highlight_cfg)?;
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    compiler::compile(build_dir, &entry_filename, verbose, epoch)?;
+    compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map)?;
 
     let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
     let pdf_dest = project.root.join(&pdf_name);
@@ -144,11 +203,11 @@ pub fn watch(
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(event) => {
-                let relevant = event.paths.iter().any(|p| {
-                    !p.starts_with(&build_dir)
-                        && p.extension().and_then(|e| e.to_str()) == Some("tex")
-                });
-                if relevant && last_build.elapsed() > cooldown {
+                if should_rebuild(
+                    is_relevant_watch_event(&event.paths, &build_dir),
+                    last_build.elapsed(),
+                    cooldown,
+                ) {
                     pending = true;
                     last_event = std::time::Instant::now();
                 }
@@ -173,6 +232,23 @@ pub fn watch(
     }
 
     Ok(())
+}
+
+/// Whether the watch loop rebuilds now: the event touched a source and the
+/// post-build cooldown has passed. Split from the loop so the two halves —
+/// *which* paths matter and *when* a rebuild may fire — are unit-testable;
+/// the loop itself only wires OS file events to the terminal.
+fn should_rebuild(relevant: bool, elapsed: Duration, cooldown: Duration) -> bool {
+    relevant && elapsed > cooldown
+}
+
+/// Whether a debounced watch event should trigger a rebuild: at least one
+/// changed path is a `.tex` source outside the temporary build directory
+/// (auxiliary, PDF and preview outputs must never retrigger the loop).
+fn is_relevant_watch_event(paths: &[PathBuf], build_dir: &Path) -> bool {
+    paths
+        .iter()
+        .any(|p| !p.starts_with(build_dir) && p.extension().and_then(|e| e.to_str()) == Some("tex"))
 }
 
 fn print_watch_header(title: &str, delay_secs: u64, preview: Option<&Path>) {
@@ -220,6 +296,10 @@ fn run_build(
         Ok(style) => style,
         Err(e) => return WatchResult::Err(e.to_string()),
     };
+    let highlight_cfg = match resolve_highlight_settings(project) {
+        Ok(cfg) => cfg,
+        Err(e) => return WatchResult::Err(e.to_string()),
+    };
     if let Err(e) = diagrams::process(
         &project.root,
         &project.config.build.entry,
@@ -228,12 +308,16 @@ fn run_build(
     ) {
         return WatchResult::Err(e.to_string());
     }
+    let line_map = match highlight::process(build_dir, &project.config.build.entry, highlight_cfg) {
+        Ok(map) => map,
+        Err(e) => return WatchResult::Err(e.to_string()),
+    };
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    match compiler::compile(build_dir, &entry_filename, verbose, epoch) {
-        Ok(()) => {
+    match compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map) {
+        Ok(_) => {
             let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
             let pdf_dest = project.root.join(&pdf_name);
             let pdf_src = build_dir.join(
@@ -385,6 +469,45 @@ mod tests {
         assert_eq!(resolve_epoch(None, None), None);
     }
 
+    #[test]
+    fn watch_event_for_tex_source_outside_build_dir_triggers_rebuild() {
+        let build_dir = Path::new("/tmp/texforge-build-xyz");
+        assert!(is_relevant_watch_event(
+            &[PathBuf::from("/proj/main.tex")],
+            build_dir
+        ));
+    }
+
+    #[test]
+    fn watch_event_for_aux_output_or_build_dir_path_is_ignored() {
+        let build_dir = PathBuf::from("/tmp/texforge-build-xyz");
+        assert!(!is_relevant_watch_event(
+            &[PathBuf::from("/proj/main.aux")],
+            &build_dir
+        ));
+        assert!(!is_relevant_watch_event(
+            &[PathBuf::from("/proj/main.pdf")],
+            &build_dir
+        ));
+        assert!(!is_relevant_watch_event(
+            &[build_dir.join("main.tex")],
+            &build_dir
+        ));
+        assert!(!is_relevant_watch_event(&[], &build_dir));
+    }
+
+    #[test]
+    fn rebuild_fires_only_for_a_source_after_the_cooldown() {
+        let cooldown = Duration::from_secs(2);
+        assert!(should_rebuild(true, Duration::from_secs(3), cooldown));
+        // The cooldown is strict: exactly at the boundary the previous
+        // build still owns the terminal.
+        assert!(!should_rebuild(true, Duration::from_secs(2), cooldown));
+        assert!(!should_rebuild(true, Duration::from_secs(1), cooldown));
+        assert!(!should_rebuild(false, Duration::from_secs(3), cooldown));
+        assert!(!should_rebuild(false, Duration::from_secs(0), cooldown));
+    }
+
     fn project_with_diagrams_style(style: Option<&str>) -> Project {
         Project {
             root: PathBuf::from("."),
@@ -402,6 +525,7 @@ mod tests {
                 diagrams: style.map(|s| crate::domain::project::DiagramsConfig {
                     style: Some(s.to_string()),
                 }),
+                highlight: None,
             },
         }
     }
@@ -431,6 +555,185 @@ mod tests {
         assert!(err.to_string().contains("editoral"));
     }
 
+    fn project_with_highlight(
+        theme: Option<&str>,
+        lstlisting: Option<bool>,
+        numbers: Option<bool>,
+        caption_name: Option<&str>,
+        list_name: Option<&str>,
+    ) -> Project {
+        let mut project = project_with_diagrams_style(None);
+        project.config.highlight = Some(crate::domain::project::HighlightConfig {
+            theme: theme.map(str::to_string),
+            lstlisting,
+            numbers,
+            caption_name: caption_name.map(str::to_string),
+            list_name: list_name.map(str::to_string),
+            ..Default::default()
+        });
+        project
+    }
+
+    /// A project whose `[highlight]` section carries the two style keys —
+    /// the document-wide `style` and a `[highlight.by_lang]` table.
+    fn project_with_highlight_styles(style: Option<&str>, by_lang: &[(&str, &str)]) -> Project {
+        let mut project = project_with_diagrams_style(None);
+        project.config.highlight = Some(crate::domain::project::HighlightConfig {
+            style: style.map(str::to_string),
+            by_lang: by_lang
+                .iter()
+                .map(|(lang, value)| ((*lang).to_string(), (*value).to_string()))
+                .collect(),
+            ..Default::default()
+        });
+        project
+    }
+
+    #[test]
+    fn highlight_defaults_when_the_section_is_absent() {
+        let project = project_with_diagrams_style(None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings, highlight::Settings::default());
+        assert_eq!(settings.theme, HighlightTheme::Github);
+        assert!(!settings.lstlisting);
+        assert!(!settings.numbers);
+    }
+
+    #[test]
+    fn highlight_section_is_honoured() {
+        let project = project_with_highlight(Some("one-light"), Some(true), Some(true), None, None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.theme, HighlightTheme::OneLight);
+        assert!(settings.lstlisting);
+        assert!(settings.numbers);
+    }
+
+    #[test]
+    fn partial_highlight_section_keeps_other_defaults() {
+        let project = project_with_highlight(None, Some(true), None, None, None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.theme, HighlightTheme::Github);
+        assert!(settings.lstlisting);
+        assert!(!settings.numbers);
+    }
+
+    #[test]
+    fn invalid_highlight_theme_fails_naming_valid_ones() {
+        let project = project_with_highlight(Some("dracula"), None, None, None, None);
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("dracula"), "{err}");
+        for name in ["github", "one-light"] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
+    }
+
+    #[test]
+    fn highlight_section_maps_caption_and_list_names() {
+        let project = project_with_highlight(None, None, None, Some("Snippet"), Some("Snippets"));
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.caption_name.as_deref(), Some("Snippet"));
+        assert_eq!(settings.list_name.as_deref(), Some("Snippets"));
+    }
+
+    #[test]
+    fn resolve_highlight_leaves_fallback_language_none() {
+        let project = project_with_highlight(None, None, None, Some("Snippet"), None);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.fallback_language, None);
+    }
+
+    #[test]
+    fn highlight_document_style_is_honoured_and_defaults_to_light() {
+        let project = project_with_highlight_styles(Some("dark-mono"), &[]);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.style, HighlightStyle::DarkMono);
+        assert!(settings.by_lang.is_empty());
+
+        let project = project_with_highlight_styles(None, &[]);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.style, HighlightStyle::Light);
+    }
+
+    /// The key goes through the same alias normalisation a block's `lang=`
+    /// value does, so `bash = "dark"` is one entry however it is spelled.
+    #[test]
+    fn by_lang_keys_are_normalised_to_the_syntax_name() {
+        let project =
+            project_with_highlight_styles(None, &[("Bash", "dark"), ("tex", "light-mono")]);
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.by_lang.get("bash"), Some(&HighlightStyle::Dark));
+        assert_eq!(
+            settings.by_lang.get("latex"),
+            Some(&HighlightStyle::LightMono)
+        );
+        assert_eq!(settings.by_lang.len(), 2);
+    }
+
+    #[test]
+    fn invalid_style_fails_naming_the_value_and_the_valid_ones() {
+        let project = project_with_highlight_styles(Some("neon"), &[]);
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("neon"), "{err}");
+        for name in ["light", "light-mono", "dark", "dark-mono"] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
+    }
+
+    #[test]
+    fn invalid_by_lang_value_fails_the_build() {
+        let project = project_with_highlight_styles(None, &[("bash", "solarized")]);
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("solarized"), "{err}");
+        assert!(err.contains("dark-mono"), "{err}");
+    }
+
+    /// Font parsing and defaults.
+    #[test]
+    fn highlight_font_parses_and_defaults_to_document() {
+        let mut project = project_with_highlight(Some("github"), None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = Some("inconsolata".to_string());
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Inconsolata);
+
+        // Absent section → Document
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight = None;
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Document);
+
+        // Present section, absent key → Document
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = None;
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Document);
+
+        // Explicit "document" → Document (the same variant the absent key
+        // resolves to, which is what makes its output byte-identical)
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = Some("document".to_string());
+        let settings = resolve_highlight(&project).unwrap();
+        assert_eq!(settings.font, ListingFont::Document);
+    }
+
+    /// Invalid font fails naming the value and all six valid names.
+    #[test]
+    fn invalid_highlight_font_fails_naming_valid_ones() {
+        let mut project = project_with_highlight(None, None, None, None, None);
+        project.config.highlight.as_mut().unwrap().font = Some("jetbrains-mono".to_string());
+        let err = resolve_highlight(&project).unwrap_err().to_string();
+        assert!(err.contains("jetbrains-mono"), "{err}");
+        for name in [
+            "document",
+            "inconsolata",
+            "source-code-pro",
+            "dejavu-sans-mono",
+            "plex-mono",
+            "fira-mono",
+        ] {
+            assert!(err.contains(name), "missing {name}: {err}");
+        }
+    }
+
     fn tectonic_available() -> bool {
         crate::compiler::locate_tectonic().is_some()
     }
@@ -448,40 +751,93 @@ mod tests {
 
     #[test]
     fn reproducible_builds_are_byte_identical() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !tectonic_available() {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = fixture();
-        compiler::compile(dir.path(), "main.tex", false, Some(compiler::DEFAULT_EPOCH)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(compiler::DEFAULT_EPOCH),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let first = std::fs::read(dir.path().join("main.pdf")).unwrap();
-        compiler::compile(dir.path(), "main.tex", false, Some(compiler::DEFAULT_EPOCH)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(compiler::DEFAULT_EPOCH),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let second = std::fs::read(dir.path().join("main.pdf")).unwrap();
         assert_eq!(first, second);
     }
 
     #[test]
     fn explicit_epoch_builds_are_byte_identical() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !tectonic_available() {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = fixture();
-        compiler::compile(dir.path(), "main.tex", false, Some(1700000000)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(1700000000),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let first = std::fs::read(dir.path().join("main.pdf")).unwrap();
-        compiler::compile(dir.path(), "main.tex", false, Some(1700000000)).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            Some(1700000000),
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         let second = std::fs::read(dir.path().join("main.pdf")).unwrap();
         assert_eq!(first, second);
     }
 
     #[test]
     fn non_reproducible_build_still_succeeds() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !tectonic_available() {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = fixture();
-        compiler::compile(dir.path(), "main.tex", false, None).unwrap();
+        compiler::compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
         assert!(dir.path().join("main.pdf").exists());
     }
 
@@ -538,6 +894,7 @@ mod tests {
             eprintln!("skipping: tectonic not available in environment");
             return;
         }
+        let _tectonic = crate::test_support::tectonic_lock();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("project.toml"),
@@ -563,6 +920,7 @@ mod tests {
                     reproducible: None,
                 },
                 diagrams: None,
+                highlight: None,
             },
         };
         let build_dir = dir.path().join(".texforge-build");

@@ -1,0 +1,26 @@
+[workspace]
+
+[package]
+name = "regen-syntaxes"
+version = "0.0.0"
+edition = "2021"
+description = "Regenerate texforge's curated syntect syntax dump (maintainer tool, not part of the build)"
+
+[dependencies]
+# Pinned exactly: the dump format carries a version marker, so this pin must
+# move together with the runtime `syntect = "5.3"` in the workspace Cargo.toml
+# (and the asset must be regenerated in the same commit series).
+syntect = { version = "=5.3.0", default-features = false, features = ["yaml-load", "dump-create", "regex-fancy", "regex-syntax"] }
+
+# Same YAML parser syntect itself uses — inherit.rs needs it to flatten
+# `extends:` (Sublime syntax inheritance) before syntect ever sees the file.
+# Tool-only dependency: it never reaches the shipped texforge binary.
+yaml-rust = "0.4"
+
+# The regex engine the shipped binary links (`regex-fancy`); used to verify
+# that every pattern in the dump compiles under it before the dump is written.
+fancy-regex = "0.16"
+
+[dev-dependencies]
+# inherit.rs's tests write small syntax fixtures to a temp dir.
+tempfile = "3"

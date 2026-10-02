@@ -9,7 +9,7 @@
 const INDENT: &str = "  ";
 
 /// Environments whose content must be passed through untouched.
-const VERBATIM_ENVS: &[&str] = &["verbatim", "lstlisting", "minted", "Verbatim"];
+const VERBATIM_ENVS: &[&str] = &["verbatim", "lstlisting", "minted", "Verbatim", "code"];
 
 /// Format LaTeX source code with consistent style.
 pub fn format(source: &str) -> String {
@@ -201,24 +201,9 @@ fn try_format_bib(source: &str) -> Option<String> {
             if i >= n {
                 return None; // unterminated entry
             }
-            let c = chars[i];
-            if in_quote {
-                if c == '"' {
-                    in_quote = false;
-                }
-            } else {
-                match c {
-                    '"' => in_quote = true,
-                    '{' => brace_depth += 1,
-                    '}' => {
-                        if open == '{' && brace_depth == 0 {
-                            break;
-                        }
-                        brace_depth -= 1;
-                    }
-                    ')' if open == '(' && brace_depth == 0 => break,
-                    _ => {}
-                }
+            let action = step_bib_scan(chars[i], open, &mut brace_depth, &mut in_quote);
+            if matches!(action, BibScanAction::CloseEntry) {
+                break;
             }
             i += 1;
         }
@@ -239,6 +224,50 @@ fn try_format_bib(source: &str) -> Option<String> {
     let mut out = blocks.join("\n\n");
     out.push('\n');
     Some(out)
+}
+
+/// What a single BibTeX entry-body character does to the scan.
+enum BibScanAction {
+    /// Keep consuming characters inside the current entry.
+    Consume,
+    /// The entry's closing delimiter was reached (do not consume it).
+    CloseEntry,
+}
+
+/// Advance the entry-body scan by one character, tracking brace depth and
+/// quote state. Returns [`BibScanAction::CloseEntry`] when `c` closes the
+/// entry opened with `open`; otherwise updates the state in place.
+fn step_bib_scan(c: char, open: char, brace_depth: &mut i32, in_quote: &mut bool) -> BibScanAction {
+    if *in_quote {
+        if c == '"' {
+            *in_quote = false;
+        }
+        return BibScanAction::Consume;
+    }
+    match c {
+        '"' => {
+            *in_quote = true;
+            BibScanAction::Consume
+        }
+        '{' => {
+            *brace_depth += 1;
+            BibScanAction::Consume
+        }
+        '}' => {
+            if open == '{' && *brace_depth == 0 {
+                return BibScanAction::CloseEntry;
+            }
+            *brace_depth -= 1;
+            BibScanAction::Consume
+        }
+        ')' => {
+            if open == '(' && *brace_depth == 0 {
+                return BibScanAction::CloseEntry;
+            }
+            BibScanAction::Consume
+        }
+        _ => BibScanAction::Consume,
+    }
 }
 
 fn parse_bib_body(kind: &str, body: &str) -> Option<BibEntry> {
@@ -482,6 +511,16 @@ mod tests {
     }
 
     #[test]
+    fn code_content_preserved() {
+        let src = "\\begin{code}[lang=python]\n    def f():\n        pass\n\\end{code}";
+        let out = format(src);
+        assert_eq!(
+            out,
+            "\\begin{code}[lang=python]\n    def f():\n        pass\n\\end{code}\n"
+        );
+    }
+
+    #[test]
     fn leading_dedent_end() {
         assert_eq!(leading_dedent("\\end{doc}"), 1);
     }
@@ -615,6 +654,38 @@ mod tests {
         let src = "@article(key, author={A. B.})";
         let out = format_bib(src);
         assert!(out.contains("@article"));
+    }
+
+    /// The paren-delimited scan really ran: the entry is reformatted
+    /// (normalized, aligned) instead of falling back to the raw source.
+    #[test]
+    fn bib_paren_delimiters_are_reformatted_not_passed_through() {
+        let src = "@article(key, author={A. B.})";
+        assert_eq!(format_bib(src), "@article{key,\n  author = {A. B.},\n}\n");
+    }
+
+    /// A quoted value may contain the entry's closing brace: the scan must
+    /// track quote state, not close the entry on the `}` inside `"..."`.
+    #[test]
+    fn bib_quoted_value_may_contain_the_closing_brace() {
+        let src = r#"@misc{k, title = "A } B"}"#;
+        assert_eq!(format_bib(src), "@misc{k,\n  title = \"A } B\",\n}\n");
+    }
+
+    /// `)` inside a braced value is text, not the entry's terminator —
+    /// for a `{`-delimited entry it must never close the scan.
+    #[test]
+    fn bib_parentheses_in_a_braced_value_do_not_close_the_entry() {
+        let src = "@misc{k, note = (x)}";
+        assert_eq!(format_bib(src), "@misc{k,\n  note = (x),\n}\n");
+    }
+
+    /// The mirror image for a `(`-delimited entry: a `)` nested inside
+    /// braces is still text — only a depth-zero `)` ends the scan.
+    #[test]
+    fn bib_paren_entry_ignores_a_paren_nested_in_braces() {
+        let src = "@article(key, note = {(x)})";
+        assert_eq!(format_bib(src), "@article{key,\n  note = {(x)},\n}\n");
     }
 
     #[test]

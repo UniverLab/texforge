@@ -298,7 +298,10 @@ fn binary_install_note() -> String {
         return "The texforge binary was not removed. Could not determine its location.".into();
     };
 
-    let is_cargo = crate::version_checker::current_exe_is_cargo_managed(&current_exe);
+    let is_cargo = crate::commands::update::is_cargo_installed(
+        &current_exe,
+        &crate::commands::update::cargo_bin_dir(),
+    );
 
     if is_cargo {
         format!(
@@ -504,5 +507,21 @@ mod tests {
 
         assert!(dir.exists());
         assert!(dir.join("spell-words").exists());
+    }
+
+    /// The uninstall summary must name the exact binary path the user is
+    /// told to remove — the running executable, never a placeholder.
+    #[test]
+    fn binary_install_note_names_the_running_binary() {
+        let note = binary_install_note();
+        let exe = std::env::current_exe().unwrap();
+        assert!(
+            note.contains("The texforge binary was NOT removed."),
+            "note: {note}"
+        );
+        assert!(
+            note.contains(&exe.display().to_string()),
+            "the note must name {exe:?}: {note}"
+        );
     }
 }

@@ -9,11 +9,15 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 
+use crate::texutil;
+
+mod fonts;
+mod preamble;
 pub mod style;
+use fonts::{shared_fontdb, shared_svg2pdf_fontdb};
 use style::DiagramStyle;
 
 /// Copy all .tex files to `build_dir`, rendering embedded diagrams in the copies.
@@ -34,6 +38,8 @@ pub fn process(
 
     // Process .tex files
     let tex_files = collect_tex_files(root, entry);
+    let mut replaced_any = false;
+    let mut uses_float_h = false;
     for src in &tex_files {
         let rel = src.strip_prefix(root).unwrap_or(src);
         let dest = build_dir.join(rel);
@@ -41,24 +47,58 @@ pub fn process(
             std::fs::create_dir_all(parent)?;
         }
         let content = std::fs::read_to_string(src)?;
-        let processed = render_diagrams(&content, &diagrams_dir, default_style)
-            .with_context(|| format!("Failed to render diagrams in {}", src.display()))?;
+        let (processed, file_uses_h) =
+            render_diagrams_facts(&content, &diagrams_dir, default_style)
+                .with_context(|| format!("Failed to render diagrams in {}", src.display()))?;
+        // Byte-compare: a replacement always changes the bytes (a
+        // `\begin{mermaid}` tag can never equal a `figure` environment),
+        // and a file without diagram blocks comes through untouched.
+        replaced_any |= processed != content;
+        uses_float_h |= file_uses_h;
         std::fs::write(&dest, processed)?;
     }
 
     // Mirror asset files so tectonic resolves relative paths
     crate::utils::mirror_assets(root, build_dir)?;
 
+    // The rewrite introduces `\includegraphics` (and `[H]` when a diagram
+    // opted into `pos=H`): if the author's preamble doesn't load the packages
+    // those need, add them to the build copy of the entry — the original
+    // sources are never written.
+    if replaced_any {
+        let pkgs = preamble::packages_to_insert(root, entry, uses_float_h);
+        if !pkgs.is_empty() {
+            preamble::insert_packages(&build_dir.join(entry), &pkgs)?;
+        }
+    }
+
     Ok(build_dir.join(entry))
 }
 
 /// Replace all `\begin{mermaid}[opts]...\end{mermaid}` with figure environments.
+///
+/// Test-only view of [`render_diagrams_facts`] that discards the `float`
+/// requirement report; production code keeps the report so `process` can
+/// satisfy the packages the rewrite introduced.
+#[cfg(test)]
 fn render_diagrams(
     content: &str,
     diagrams_dir: &Path,
     default_style: DiagramStyle,
 ) -> Result<String> {
-    let content = render_env(
+    render_diagrams_facts(content, diagrams_dir, default_style).map(|(text, _)| text)
+}
+
+/// Same as the (test-only) `render_diagrams`, also reporting whether any
+/// replaced figure was emitted with `[H]` — i.e. whether the rewritten file
+/// will need the `float` package. The three environments are chained and the
+/// report OR-ed.
+fn render_diagrams_facts(
+    content: &str,
+    diagrams_dir: &Path,
+    default_style: DiagramStyle,
+) -> Result<(String, bool)> {
+    let (content, mermaid_h) = render_env_facts(
         content,
         "mermaid",
         diagrams_dir,
@@ -68,7 +108,7 @@ fn render_diagrams(
             convert_svg_or_fallback("mermaid", &svg)
         },
     )?;
-    let content = render_env(
+    let (content, graphviz_h) = render_env_facts(
         &content,
         "graphviz",
         diagrams_dir,
@@ -78,11 +118,12 @@ fn render_diagrams(
             convert_svg_or_fallback("graphviz", &svg)
         },
     )?;
-    let content = render_env(&content, "d2", diagrams_dir, default_style, |src, sty| {
-        let svg = render_d2(src, sty)?;
-        convert_svg_or_fallback("d2", &svg)
-    })?;
-    Ok(content)
+    let (content, d2_h) =
+        render_env_facts(&content, "d2", diagrams_dir, default_style, |src, sty| {
+            let svg = render_d2(src, sty)?;
+            convert_svg_or_fallback("d2", &svg)
+        })?;
+    Ok((content, mermaid_h || graphviz_h || d2_h))
 }
 
 /// Render a Mermaid diagram, applying `style`'s theme and layout spacing.
@@ -93,10 +134,9 @@ fn render_mermaid_with_config(src: &str, sty: DiagramStyle) -> Result<String> {
 
 /// Generic environment renderer: replaces `\begin{env}[opts]...\end{env}` with figure.
 ///
-/// Rendered artefacts are named after a hash of the diagram source, so
-/// unchanged diagrams are reused across rebuilds (watch mode) instead of
-/// re-rendered. `render_fn` returns the encoded bytes and the extension
-/// (`"pdf"` on the vector path, `"png"` when it fell back to rasterizing).
+/// Test-only view of [`render_env_facts`] that discards the `float`
+/// requirement report (existing tests only care about the rewritten text).
+#[cfg(test)]
 pub(crate) fn render_env(
     content: &str,
     env: &str,
@@ -104,11 +144,30 @@ pub(crate) fn render_env(
     default_style: DiagramStyle,
     render_fn: impl Fn(&str, DiagramStyle) -> Result<(Vec<u8>, &'static str)>,
 ) -> Result<String> {
+    render_env_facts(content, env, diagrams_dir, default_style, render_fn).map(|(text, _)| text)
+}
+
+/// Generic environment renderer that also reports whether any replaced
+/// figure was emitted with `[H]` (an explicit `pos=H`) — i.e. whether the
+/// rewritten text needs the `float` package.
+///
+/// Rendered artefacts are named after a hash of the diagram source, so
+/// unchanged diagrams are reused across rebuilds (watch mode) instead of
+/// re-rendered. `render_fn` returns the encoded bytes and the extension
+/// (`"pdf"` on the vector path, `"png"` when it fell back to rasterizing).
+fn render_env_facts(
+    content: &str,
+    env: &str,
+    diagrams_dir: &Path,
+    default_style: DiagramStyle,
+    render_fn: impl Fn(&str, DiagramStyle) -> Result<(Vec<u8>, &'static str)>,
+) -> Result<(String, bool)> {
     let begin_tag = format!("\\begin{{{}}}", env);
     let end_tag = format!("\\end{{{}}}", env);
 
     let mut result = String::new();
     let mut remaining: &str = content;
+    let mut uses_float_h = false;
 
     while let Some(start) = remaining.find(&begin_tag) {
         result.push_str(&remaining[..start]);
@@ -120,6 +179,10 @@ pub(crate) fn render_env(
         let diagram_src = after_opts[..end].trim();
 
         validate_pos_option(&opts, env)?;
+        // Only an explicit `pos=H` reaches `[H]` in the figure: an omitted
+        // `pos` emits a plain `\begin{figure}` (build_figure_default_no_pos),
+        // so it needs no `float`.
+        uses_float_h |= opts.get("pos").map(String::as_str) == Some("H");
         let diagram_style = resolve_style(&opts, env, default_style)?;
 
         let base = format!("{}-{:016x}", env, content_hash(diagram_src, diagram_style));
@@ -139,7 +202,7 @@ pub(crate) fn render_env(
     }
 
     result.push_str(remaining);
-    Ok(result)
+    Ok((result, uses_float_h))
 }
 
 /// Look for an already-rendered artefact for `base`, vector form first.
@@ -183,9 +246,7 @@ fn resolve_style(
 
 /// Find the end tag position and validate it exists.
 fn find_end_tag(after_opts: &str, end_tag: &str, env: &str) -> Result<usize> {
-    after_opts
-        .find(end_tag)
-        .with_context(|| format!("\\begin{{{}}} without matching \\end{{{}}}", env, env))
+    texutil::find_end_tag(after_opts, end_tag, env)
 }
 
 /// Validate the pos option is one of the allowed values.
@@ -311,81 +372,12 @@ const KNOWN_OPTION_KEYS: &[&str] = &[
 
 /// Parse `[key=val, key2=val2]` into a map. Returns `(map, rest_of_str)`.
 ///
-/// A value may be wrapped in `{...}` — the LaTeX convention for "this may
-/// contain a comma" — in which case the comma inside no longer separates
-/// options; the outer braces are stripped from the stored value but nested
-/// braces are preserved. Brace depth is tracked in a single pass over the
-/// string, so an option is only split on a comma seen at depth zero.
-///
-/// An unrecognised key emits a warning (naming `env`) and is dropped rather
-/// than aborting the build; an unterminated `{` is a hard error, since there
-/// is no reasonable place to guess the value ended.
+/// Thin wrapper over [`crate::texutil::parse_opts`], which diagrams share with
+/// the code-listing pass (`crate::highlight`). The message label keeps the
+/// historical `"mermaid diagram: …"` wording; see [`crate::texutil::parse_opts`]
+/// for the brace-handling rules.
 pub(crate) fn parse_opts<'a>(s: &'a str, env: &str) -> Result<(HashMap<String, String>, &'a str)> {
-    let s = s.trim_start_matches('\n').trim_start_matches('\r');
-    if !s.starts_with('[') {
-        return Ok((HashMap::new(), s));
-    }
-    let after = &s[1..];
-
-    let mut depth = 0i32;
-    let mut part_start = 0usize;
-    let mut parts: Vec<&str> = Vec::new();
-    let mut end_idx = None;
-    for (i, c) in after.char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => depth -= 1,
-            ',' if depth == 0 => {
-                parts.push(&after[part_start..i]);
-                part_start = i + 1;
-            }
-            ']' if depth == 0 => {
-                parts.push(&after[part_start..i]);
-                end_idx = Some(i);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    let Some(end_idx) = end_idx else {
-        if depth > 0 {
-            let unterminated = &after[part_start..];
-            let option = unterminated
-                .split_once('=')
-                .map_or(unterminated, |(k, _)| k)
-                .trim();
-            anyhow::bail!(
-                "{env} diagram: unterminated '{{' in option '{option}' — every {{ needs a matching }}"
-            );
-        }
-        return Ok((HashMap::new(), s));
-    };
-    let rest = &after[end_idx + 1..];
-
-    let mut map = HashMap::new();
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let Some((k, v)) = part.split_once('=') else {
-            eprintln!("warning: {env} diagram: unknown option '{part}' ignored");
-            continue;
-        };
-        let k = k.trim();
-        let v = v.trim();
-        if !KNOWN_OPTION_KEYS.contains(&k) {
-            eprintln!("warning: {env} diagram: unknown option '{k}' ignored");
-            continue;
-        }
-        let value = v
-            .strip_prefix('{')
-            .and_then(|v| v.strip_suffix('}'))
-            .unwrap_or(v);
-        map.insert(k.to_string(), value.to_string());
-    }
-    Ok((map, rest))
+    texutil::parse_opts(s, &format!("{env} diagram"), KNOWN_OPTION_KEYS)
 }
 
 /// Collect .tex files reachable from entry via \input.
@@ -434,114 +426,6 @@ fn resolve_tex(root: &Path, input: &str) -> PathBuf {
     }
 }
 
-/// Shared font database — building it scans system font directories (very slow
-/// on WSL, where /mnt/c/Windows/Fonts goes through the 9P filesystem), so it is
-/// built once and reused for every diagram.
-fn shared_fontdb() -> Arc<resvg::usvg::fontdb::Database> {
-    static FONTDB: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
-    FONTDB.get_or_init(|| Arc::new(build_fontdb())).clone()
-}
-
-/// Build a font database with system fonts and platform-specific fallbacks.
-fn build_fontdb() -> resvg::usvg::fontdb::Database {
-    use resvg::usvg::fontdb::Database;
-
-    let mut db = Database::new();
-    load_system_and_platform_fonts(&mut db);
-    load_fallback_font_directories(&mut db);
-    configure_font_families(&mut db);
-
-    db
-}
-
-/// Load system fonts and platform-specific fonts (Windows/WSL).
-fn load_system_and_platform_fonts(db: &mut resvg::usvg::fontdb::Database) {
-    db.load_system_fonts();
-
-    // On WSL / Windows, also load the Windows font directory
-    let win_fonts = std::path::Path::new("/mnt/c/Windows/Fonts");
-    if win_fonts.is_dir() {
-        db.load_fonts_dir(win_fonts);
-    }
-}
-
-/// Load fallback font directories if no fonts were found.
-fn load_fallback_font_directories(db: &mut resvg::usvg::fontdb::Database) {
-    // If the DB still has no fonts at all, try common directories explicitly.
-    if db.is_empty() {
-        for dir in ["/usr/share/fonts", "/usr/local/share/fonts"] {
-            let p = std::path::Path::new(dir);
-            if p.is_dir() {
-                db.load_fonts_dir(p);
-            }
-        }
-    }
-}
-
-/// Configure font families based on available fonts.
-fn configure_font_families(db: &mut resvg::usvg::fontdb::Database) {
-    // Collect the set of available family names once (avoids borrow conflicts).
-    let available: std::collections::HashSet<String> = db
-        .faces()
-        .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
-        .collect();
-
-    // Map generic CSS families to the first concrete font we find in the DB.
-    configure_sans_serif_family(db, &available);
-    configure_serif_family(db, &available);
-    configure_monospace_family(db, &available);
-}
-
-/// Configure sans-serif font family.
-///
-/// D2 diagrams reference embedded font-family names that never resolve directly,
-/// so their text relies entirely on this sans-serif fallback. If none of the
-/// preferred fonts exist, fall back to any available family so text never
-/// silently disappears on minimal systems.
-fn configure_sans_serif_family(
-    db: &mut resvg::usvg::fontdb::Database,
-    available: &std::collections::HashSet<String>,
-) {
-    let sans = ["Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"];
-    if let Some(f) = sans.iter().find(|n| available.contains(**n)) {
-        db.set_sans_serif_family(*f);
-    } else if let Some(any) = available.iter().next() {
-        db.set_sans_serif_family(any.clone());
-    }
-}
-
-/// Configure serif font family.
-fn configure_serif_family(
-    db: &mut resvg::usvg::fontdb::Database,
-    available: &std::collections::HashSet<String>,
-) {
-    let serif = [
-        "Times New Roman",
-        "DejaVu Serif",
-        "Liberation Serif",
-        "Noto Serif",
-    ];
-    if let Some(f) = serif.iter().find(|n| available.contains(**n)) {
-        db.set_serif_family(*f);
-    }
-}
-
-/// Configure monospace font family.
-fn configure_monospace_family(
-    db: &mut resvg::usvg::fontdb::Database,
-    available: &std::collections::HashSet<String>,
-) {
-    let mono = [
-        "Courier New",
-        "DejaVu Sans Mono",
-        "Liberation Mono",
-        "Noto Sans Mono",
-    ];
-    if let Some(f) = mono.iter().find(|n| available.contains(**n)) {
-        db.set_monospace_family(*f);
-    }
-}
-
 /// Rasterization scale for SVG → PNG. Mermaid SVGs are sized in CSS pixels
 /// (~96 dpi); 3x yields ~300 dpi when the figure is included at \linewidth,
 /// which is print quality.
@@ -551,12 +435,12 @@ const RASTER_SCALE: f32 = 3.0;
 /// selectable text) rather than rasterizing it.
 ///
 /// Takes the SVG as a string rather than a pre-parsed `usvg::Tree`: `svg2pdf`
-/// depends on `usvg ^0.45` while the rest of texforge is on `usvg 0.46`, and
+/// depends on `usvg ^0.45` while the rest of texforge is on `usvg 0.48`, and
 /// those are distinct incompatible types. Parsing here, with svg2pdf's own
 /// bundled usvg, avoids needing to bridge the two.
 fn svg_to_pdf(svg: &str) -> Result<Vec<u8>> {
     let options = svg2pdf::usvg::Options {
-        fontdb: shared_fontdb(),
+        fontdb: shared_svg2pdf_fontdb(),
         shape_rendering: svg2pdf::usvg::ShapeRendering::GeometricPrecision,
         text_rendering: svg2pdf::usvg::TextRendering::OptimizeLegibility,
         ..Default::default()
@@ -652,6 +536,21 @@ mod tests {
             pdf.starts_with(b"%PDF-"),
             "expected PDF magic bytes, got: {:?}",
             &pdf[..pdf.len().min(20)]
+        );
+    }
+
+    /// Text in a converted diagram must actually be typeset: the shared
+    /// `fontdb` is what lets `svg2pdf` find a face and embed it. Dropping it
+    /// from the options renders the same `<text>` node with no font at all
+    /// (a 1.5 kB PDF with no `/FontFile`), silently losing every label.
+    #[test]
+    fn svg_to_pdf_embeds_a_font_for_text_from_the_shared_fontdb() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50"><text x="10" y="30">Hello</text></svg>"#;
+        let pdf = svg_to_pdf(svg).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(
+            text.contains("FontFile"),
+            "expected an embedded font program for the <text> node"
         );
     }
 
@@ -1281,5 +1180,123 @@ mod tests {
         opts.insert("pos".to_string(), "t".to_string());
         let fig = build_figure_environment(&opts, "mermaid", "d1.png").unwrap();
         assert!(fig.contains("\\begin{figure}[t]"));
+    }
+
+    // ── FR4: the diagram pass satisfies its own package dependencies ───────
+
+    /// Run the full [`process`] over a one-file project and return the
+    /// rewritten temp entry (never the source, which stays byte-identical).
+    fn process_fixture(source: &str) -> String {
+        let root = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("main.tex"), source).unwrap();
+        process(root.path(), "main.tex", build.path(), DiagramStyle::Default).unwrap();
+        std::fs::read_to_string(build.path().join("main.tex")).unwrap()
+    }
+
+    /// The physical line immediately before the `\begin{document}` anchor.
+    fn line_before_anchor(out: &str) -> &str {
+        let anchor = out.find("\\begin{document}").expect("anchor present");
+        out[..anchor]
+            .trim_end_matches('\n')
+            .rsplit('\n')
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn process_inserts_exactly_one_graphicx_for_a_mermaid_document() {
+        let out = process_fixture(
+            "\\documentclass{article}\n\\usepackage{booktabs}\n\\begin{document}\n\
+             \\begin{mermaid}[style=editorial, caption={Flow}]\nflowchart LR\n  A --> B\n\\end{mermaid}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(
+            out.matches("\\usepackage{graphicx}").count(),
+            1,
+            "exactly one inserted graphicx line:\n{out}"
+        );
+        let inserted = out.find("\\usepackage{graphicx}").unwrap();
+        let anchor = out.find("\\begin{document}").unwrap();
+        assert!(inserted < anchor, "insertion must precede the anchor");
+        assert_eq!(line_before_anchor(&out), "\\usepackage{graphicx}");
+        // The rewrite itself still happened.
+        assert!(out.contains("\\includegraphics"), "{out}");
+    }
+
+    #[test]
+    fn process_inserts_nothing_when_the_preamble_loads_amsmath_graphicx() {
+        let out = process_fixture(
+            "\\documentclass{article}\n\\usepackage{amsmath,graphicx}\n\\begin{document}\n\
+             \\begin{graphviz}[caption={Flow}]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert!(out.contains("\\includegraphics"), "rewritten:\n{out}");
+        // Assert on the exact insertion string: the fixture's own comma
+        // list contains "graphicx" but is not `\usepackage{graphicx}`.
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 0, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn process_inserts_nothing_without_a_diagram() {
+        let source =
+            "\\documentclass{article}\n\\usepackage{booktabs}\n\\begin{document}\nHi.\n\\end{document}\n";
+        let out = process_fixture(source);
+        assert_eq!(out, source, "build copy must be byte-identical");
+    }
+
+    #[test]
+    fn process_inserts_float_for_pos_h_when_missing() {
+        let out = process_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=H, caption={Flow}]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 1, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 1, "{out}");
+        let anchor = out.find("\\begin{document}").unwrap();
+        assert!(out.find("\\usepackage{float}").unwrap() < anchor, "{out}");
+        assert_eq!(line_before_anchor(&out), "\\usepackage{float}");
+    }
+
+    #[test]
+    fn process_skips_float_when_the_preamble_loads_it_or_pos_is_not_h() {
+        // (a) `float` already loaded (with options — a blind duplicate would
+        // clash) → no inserted line, graphicx still added.
+        let out = process_fixture(
+            "\\documentclass{article}\n\\usepackage[table]{float}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=H]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 1, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 0, "{out}");
+
+        // (b) no `[H]` figure → float is never needed (the D1 negative pin).
+        let out = process_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=t]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        );
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 1, "{out}");
+        assert_eq!(out.matches("\\usepackage{float}").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn process_detects_graphicx_in_an_input_preamble_file() {
+        let root = tempfile::tempdir().unwrap();
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("main.tex"),
+            "\\documentclass{article}\n\\input{pre}\n\\begin{document}\n\
+             \\begin{graphviz}[pos=t]\ndigraph G { A -> B }\n\\end{graphviz}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("pre.tex"), "\\usepackage{graphicx}\n").unwrap();
+        process(root.path(), "main.tex", build.path(), DiagramStyle::Default).unwrap();
+        let out = std::fs::read_to_string(build.path().join("main.tex")).unwrap();
+        assert!(out.contains("\\includegraphics"), "rewritten:\n{out}");
+        assert_eq!(out.matches("\\usepackage{graphicx}").count(), 0, "{out}");
     }
 }

@@ -436,6 +436,7 @@ mod tests {
     #[test]
     fn report_project_no_project_toml() {
         let tmp = tempfile::tempdir().unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         report_project();
@@ -450,6 +451,7 @@ mod tests {
             "[document]\ntitle = \"T\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
         )
         .unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         report_project();
@@ -460,6 +462,7 @@ mod tests {
     fn report_project_invalid_project_toml() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("project.toml"), "not valid {{{ toml").unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         report_project();

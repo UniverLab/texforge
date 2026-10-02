@@ -9,6 +9,9 @@ order: 5
 `texforge build` intercepts embedded diagram environments before
 compilation and replaces them with rendered figures. Your original `.tex`
 files are never modified — rendering happens in the `build/` copies.
+If your preamble doesn't load them already, texforge adds `graphicx`
+(and `float` for `pos=H`) to the build copy whenever a document uses
+diagrams.
 
 All three renderers are pure Rust: no browser, no Node.js, no `dot` binary
 required.
@@ -22,7 +25,7 @@ build still succeeds.
 ## Mermaid
 
 ```latex
-% Default: width=\linewidth, pos=H, no caption
+% Default: width=\linewidth, floats like any figure, no caption
 \begin{mermaid}
 flowchart LR
   A[Input] --> B[Process] --> C[Output]
@@ -51,13 +54,18 @@ digraph G {
 
 | Option | Default | Description |
 |---|---|---|
-| `width` | `\linewidth` | Image width |
-| `pos` | `H` | Figure placement (`H`, `t`, `b`, `h`, `p`) |
+| `width` | `\linewidth` | Image width (ignored when `scale` is set) |
+| `height` | _(none)_ | Image height (ignored when `scale` is set) |
+| `scale` | _(none)_ | Scale factor — overrides `width`/`height` when set |
+| `keepaspectratio` | _(off)_ | Keep the aspect ratio; only meaningful with both `width` and `height` |
+| `pos` | _(none — floats)_ | Figure placement (`H`, `t`, `b`, `h`, `p`); omit it to let LaTeX place the figure like any other image, `H` keeps it exactly where it is written |
 | `caption` | _(none)_ | Figure caption |
+| `label` | _(none)_ | `\label{…}` placed after the caption, for `\ref` |
 | `style` | `default` | Editorial style preset — see below |
 
-When a `caption` is given the diagram is wrapped in a `figure` environment
-at the requested position; without it the image is embedded inline.
+Every diagram becomes a `figure`. Without `pos` it floats like any other
+image; `pos=H` keeps it exactly where it is written; `caption` adds a
+numbered caption and `label` a `\ref` target.
 
 If an option value contains a comma, wrap it in braces — the same
 convention LaTeX packages already use for this:
@@ -135,3 +143,5 @@ express part of a preset.
   per-edge only. Node fill/border colour and edge colour carry over, but a
   document-wide background is not expressible, and neither is a
   monospaced label face (`technical`'s font rule has no effect here).
+
+See also: highlight source code with the [`code` environment](listings.md) — native syntax highlighting with no `listings`/`minted` setup.

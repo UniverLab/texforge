@@ -10,17 +10,21 @@ mod config;
 mod diagrams;
 mod domain;
 mod formatter;
+mod highlight;
 mod linter;
 mod manifest;
 mod pdftext;
 mod placeholders;
 mod raster;
 mod templates;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod test_sync;
 mod texparse;
 mod texutil;
 mod utils;
 mod version;
-mod version_checker;
 mod wordcount;
 
 use anyhow::Result;

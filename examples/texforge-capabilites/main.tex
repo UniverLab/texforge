@@ -251,6 +251,9 @@
   sobrescribe ese valor por defecto.
 
   % -------------------------------------------------------
+  \input{sections/body}
+
+  % -------------------------------------------------------
   \section{Matemáticas}\label{sec:matematicas}
 
   \subsection{Ecuaciones en línea}
@@ -296,45 +299,6 @@
   La sección~\ref{sec:matematicas} muestra el uso de referencias cruzadas,
   mientras que la sección~\ref{sec:diagramas} describe los formatos de
   diagramas disponibles.
-
-  % -------------------------------------------------------
-  \section{Listados de Código}\label{sec:codigo}
-
-  \subsection{Python}
-
-  \begin{lstlisting}[language=Python, caption={Ejemplo de función en Python}]
-import numpy as np
-
-def integrar_gauss(n_puntos=1000):
-    """Aproxima la integral de Gauss por cuadratura."""
-    x = np.linspace(-10, 10, n_puntos)
-    dx = x[1] - x[0]
-    y = np.exp(-x**2)
-    return np.sum(y) * dx
-
-if __name__ == "__main__":
-    resultado = integrar_gauss()
-    print(f"Integral ≈ {resultado:.6f}")
-  \end{lstlisting}
-
-  \subsection{LaTeX}
-
-  \begin{lstlisting}[language={[LaTeX]TeX}, caption={Estructura básica de Texforge}]
-\documentclass{article}
-\usepackage{graphicx}
-
-\begin{document}
-\maketitle
-
-\begin{mermaid}
-flowchart LR
-  A --> B --> C
-\end{mermaid}
-
-\bibliographystyle{plain}
-\bibliography{refs}
-\end{document}
-  \end{lstlisting}
 
   % -------------------------------------------------------
   \section{Tablas}\label{sec:tablas}
