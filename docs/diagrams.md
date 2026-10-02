@@ -25,7 +25,7 @@ build still succeeds.
 ## Mermaid
 
 ```latex
-% Default: width=\linewidth, pos=H, no caption
+% Default: width=\linewidth, floats like any figure, no caption
 \begin{mermaid}
 flowchart LR
   A[Input] --> B[Process] --> C[Output]
@@ -58,13 +58,14 @@ digraph G {
 | `height` | _(none)_ | Image height (ignored when `scale` is set) |
 | `scale` | _(none)_ | Scale factor — overrides `width`/`height` when set |
 | `keepaspectratio` | _(off)_ | Keep the aspect ratio; only meaningful with both `width` and `height` |
-| `pos` | `H` | Figure placement (`H`, `t`, `b`, `h`, `p`) |
+| `pos` | _(none — floats)_ | Figure placement (`H`, `t`, `b`, `h`, `p`); omit it to let LaTeX place the figure like any other image, `H` keeps it exactly where it is written |
 | `caption` | _(none)_ | Figure caption |
 | `label` | _(none)_ | `\label{…}` placed after the caption, for `\ref` |
 | `style` | `default` | Editorial style preset — see below |
 
-When a `caption` is given the diagram is wrapped in a `figure` environment
-at the requested position; without it the image is embedded inline.
+Every diagram becomes a `figure`. Without `pos` it floats like any other
+image; `pos=H` keeps it exactly where it is written; `caption` adds a
+numbered caption and `label` a `\ref` target.
 
 If an option value contains a comma, wrap it in braces — the same
 convention LaTeX packages already use for this:
