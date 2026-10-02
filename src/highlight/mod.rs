@@ -370,8 +370,9 @@ fn rewrite_file(
         // drifts.
         let body_abs = start + begin_tag.len() + (after_begin.len() - after_opts.len());
         let raw_body = &after_opts[..end];
-        // Line of the body's first source character: one past the newline
-        // `strip_one_newline` will eat, or the same line for an inline body.
+        // Line of the body's first source character: one past the leading
+        // newline `strip_block_edges` will drop, or the same line for an
+        // inline body.
         let stripped_newline = if raw_body.starts_with("\r\n") {
             2
         } else if raw_body.starts_with('\n') {
@@ -381,7 +382,7 @@ fn rewrite_file(
         };
         let body_line = 1 + content[..body_abs + stripped_newline].matches('\n').count();
 
-        let body = strip_one_newline(raw_body).replace('\r', "");
+        let body = strip_block_edges(raw_body).replace('\r', "");
         let block_numbers = numbers_for(env, &opts, default_numbers);
         if block_numbers {
             *state.has_gutter = true;
@@ -459,16 +460,31 @@ fn rewrite_file(
     Ok(result)
 }
 
-/// Strip exactly one leading newline and one trailing newline (either `\n`
-/// or `\r\n`) from the raw block body — and nothing else: real code
-/// indentation and interior blank lines survive (unlike diagrams' `trim()`).
-fn strip_one_newline(body: &str) -> &str {
-    let body = body
-        .strip_prefix("\r\n")
+/// Strip the raw block body's edge lines — one leading newline and a final
+/// line that holds only spaces or tabs, together with the newline before it —
+/// and nothing else: real code indentation and interior blank lines survive
+/// (unlike diagrams' `trim()`).
+///
+/// The block scanner leaves the `\end{code}` tag's indentation in the raw
+/// body, so a body typically ends `\n  ` (newline plus the end tag's two
+/// spaces); a raw body that ends in `\n` followed by zero or more spaces or
+/// tabs is cut back to that newline. Trailing spaces on a real code line (no
+/// newline after them) are kept, because there is no final whitespace-only
+/// *line* to drop.
+fn strip_block_edges(body: &str) -> &str {
+    let body = match body.rfind('\n') {
+        Some(newline) if body[newline + 1..].bytes().all(|b| b == b' ' || b == b'\t') => {
+            let end = if body[..newline].ends_with('\r') {
+                newline - 1
+            } else {
+                newline
+            };
+            &body[..end]
+        }
+        _ => body,
+    };
+    body.strip_prefix("\r\n")
         .or_else(|| body.strip_prefix('\n'))
-        .unwrap_or(body);
-    body.strip_suffix("\r\n")
-        .or_else(|| body.strip_suffix('\n'))
         .unwrap_or(body)
 }
 
@@ -1875,6 +1891,105 @@ mod tests {
             map.get("main.tex", medskip),
             Some(("main.tex", 5)),
             "the line after the block ends on source line 5"
+        );
+    }
+
+    /// `strip_block_edges` drops a final whitespace-only line together with
+    /// the newline before it — the `\end{code}` tag's indentation the scanner
+    /// leaves in the raw body — while keeping code indentation and the
+    /// author's interior blank lines.
+    #[test]
+    fn strip_block_edges_drops_a_trailing_whitespace_only_line() {
+        assert_eq!(strip_block_edges("\nx\n  "), "x");
+        assert_eq!(strip_block_edges("\nx\n\t"), "x");
+        assert_eq!(strip_block_edges("\nx\n"), "x");
+        assert_eq!(strip_block_edges("\r\nx\r\n  "), "x");
+        assert_eq!(
+            strip_block_edges("\nx\n\n  "),
+            "x\n",
+            "an interior blank line the author wrote survives"
+        );
+        assert_eq!(
+            strip_block_edges("\n  x\n  "),
+            "  x",
+            "code indentation survives; only the whitespace-only tail goes"
+        );
+    }
+
+    /// Regression: an indented `\end{code}` used to leave the tag's
+    /// indentation in the highlighted body, rendering one extra, empty,
+    /// numbered line. A flush and a two-space-indented block with the same
+    /// source lines must emit the same listing — gutter lines 1 and 2 only.
+    #[test]
+    fn indented_end_tag_emits_no_extra_numbered_line() {
+        let flush = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, numbers=true]\na = 1\nb = 2\n\\end{code}\n\
+             \\end{document}\n",
+        );
+        let indented = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, numbers=true]\na = 1\nb = 2\n  \\end{code}\n\
+             \\end{document}\n",
+        );
+        run(flush.path(), "main.tex", Settings::default()).unwrap();
+        run(indented.path(), "main.tex", Settings::default()).unwrap();
+        let flush_out = std::fs::read_to_string(flush.path().join("main.tex")).unwrap();
+        let indented_out = std::fs::read_to_string(indented.path().join("main.tex")).unwrap();
+
+        for (name, out) in [("flush", &flush_out), ("indented", &indented_out)] {
+            assert!(
+                out.contains("\\hbox to 2em{\\hss 1}"),
+                "{name} line 1: {out}"
+            );
+            assert!(
+                out.contains("\\hbox to 2em{\\hss 2}"),
+                "{name} line 2: {out}"
+            );
+            assert!(
+                !out.contains("\\hbox to 2em{\\hss 3}"),
+                "{name}: an indented \\end{{code}} must not add a third, empty numbered line:\n{out}"
+            );
+        }
+        assert_eq!(
+            flush_out, indented_out,
+            "the indentation of \\end{{code}} must not change the emitted listing"
+        );
+    }
+
+    /// The line map stays correct when `\end{code}` is indented: the echoed
+    /// code line and the closing `\medskip` still map to their original
+    /// source lines (5 and 6).
+    #[test]
+    fn line_map_is_stable_for_an_indented_end_tag() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}\na = 1\nb = 2\n  \\end{code}\n\\end{document}\n",
+        );
+        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+
+        let build_line = rewritten
+            .lines()
+            .position(|line| line.contains("b\\tfxsp{}=\\tfxsp{}2"))
+            .expect("the second code line must be in the build copy")
+            + 1;
+        assert_eq!(
+            map.get("main.tex", build_line),
+            Some(("main.tex", 5)),
+            "`b = 2` is source line 5"
+        );
+
+        let lines: Vec<&str> = rewritten.lines().collect();
+        let medskip = lines
+            .iter()
+            .rposition(|line| line.contains("\\medskip"))
+            .expect("rewritten block must emit \\medskip")
+            + 1;
+        assert_eq!(
+            map.get("main.tex", medskip),
+            Some(("main.tex", 6)),
+            "the indented \\end{{code}} still ends the block on source line 6"
         );
     }
 

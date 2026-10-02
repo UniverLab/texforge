@@ -615,10 +615,10 @@ mod tests {
     }
 
     /// Spaces must never reach the engine as a bare `~`: under spanish
-    /// `babel` a `~` followed by `}` (a `\textcolor` boundary, very common)
-    /// aborts with "extra }", and one followed by `-` (as in `n - 1`) with
-    /// "Bad character code (-1)". `\tfxsp{}` is the same glue without ever
-    /// emitting a `~` token.
+    /// `babel` a `~` at the `{...}` boundary of a `\textcolor` group (very
+    /// common) aborts with "extra }" (TeX never saw its matching `{`), and
+    /// one followed by `-` (as in `n - 1`) with "Bad character code (-1)".
+    /// `\tfxsp{}` is the same glue without ever emitting a `~` token.
     #[test]
     fn spaces_never_emit_a_bare_tilde() {
         let (out, _, _, _) = render("a - b # c\n", None, &opts("main.tex", 3, false));
@@ -626,7 +626,7 @@ mod tests {
             out.contains("a\\tfxsp{}-\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}c"),
             "spaces and hyphen must survive byte-for-byte: {out}"
         );
-        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n}").unwrap()];
+        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n\x7d").unwrap()];
         let stripped = payload.replace("\\textasciitilde{}", "");
         assert!(!stripped.contains('~'), "no bare tilde may survive: {out}");
         assert!(
@@ -949,7 +949,7 @@ mod tests {
             "italic comment: {out}"
         );
         assert!(
-            out.contains("note}}plain\n\\par"),
+            out.contains("note\x7d\x7dplain\n\\par"),
             "the base-colour run stays unwrapped: {out}"
         );
         assert_eq!(used.len(), 2, "the base colour is the document's: {used:?}");
@@ -1027,7 +1027,7 @@ mod tests {
         };
         let (out, _, _, _) = render("a", None, &o);
         let color = out.find("\\color{tfxcoladbac7}").unwrap();
-        let close = out.find("\n}").unwrap();
+        let close = out.find("\n\x7d").unwrap();
         assert!(
             color < close,
             "the colour must precede the group's end: {out}"
