@@ -409,18 +409,20 @@ fn rewrite_file(
         if resolved.has_caption {
             *state.has_caption = true;
         }
+        let emit_opts = resolved.emit_opts(
+            rel,
+            first_line,
+            body_line,
+            end_line,
+            block_numbers,
+            &block_style,
+        );
+        let floated = emit_opts.float.is_some();
         let mut block_origins = Vec::new();
         let rendered = emit::render_block(
             &body,
             spans.as_deref(),
-            &resolved.emit_opts(
-                rel,
-                first_line,
-                body_line,
-                end_line,
-                block_numbers,
-                &block_style,
-            ),
+            &emit_opts,
             state.colors,
             state.warnings,
             &mut block_origins,
@@ -449,7 +451,10 @@ fn rewrite_file(
             .is_some_and(|line| !line.trim().is_empty());
         result.push('\n');
         origins.push(end_line);
-        result.push_str("\\medskip");
+        // A floated block leaves the text flow: no vertical rhythm around it.
+        if !floated {
+            result.push_str("\\medskip");
+        }
         if followed_by_prose {
             result.push_str("\\noindent ");
         }
@@ -1590,6 +1595,29 @@ mod tests {
         );
     }
 
+    /// A floated block leaves the text flow: its figure opens with `\par` (no
+    /// `\medskip` before it) and no `\medskip` sits between `\end{figure}` and
+    /// the prose that follows.
+    #[test]
+    fn floated_block_leaves_no_medskip_directly_after_the_figure() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, pos=t]\nx = 1\n\\end{code}\nProse.\n\\end{document}\n",
+        );
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\end{figure}\n\\noindent \nProse."),
+            "the prose follows the float with no vertical rhythm: {out}"
+        );
+        let end = out.find("\\end{figure}").unwrap();
+        let prose = out[end..].find("Prose.").unwrap() + end;
+        assert!(
+            !out[end..prose].contains("\\medskip"),
+            "no \\medskip may sit between the figure and the prose: {out}"
+        );
+    }
+
     /// FR5 — every output line of a rewritten file maps back to the source
     /// line the pass received.
     #[test]
@@ -2044,7 +2072,10 @@ mod tests {
         run(dir.path(), "main.tex", Settings::default()).unwrap();
         let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
         assert!(!out.contains("figure"), "{out}");
-        assert!(out.contains("\\vadjust{\\penalty10000}"), "{out}");
+        assert!(
+            out.contains("\\vadjust{\\penalty10000\\kern\\medskipamount}"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -2119,7 +2150,10 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("\\tfxlistingname~\\thetfxlisting:"), "{out}");
-        assert!(out.contains("\\vadjust{\\penalty10000}\\par"), "{out}");
+        assert!(
+            out.contains("\\vadjust{\\penalty10000\\kern\\medskipamount}\\par"),
+            "{out}"
+        );
         assert!(out.contains("\\addcontentsline{lol}{listing}"), "{out}");
         assert!(out.contains("\\listoflistings"), "{out}");
         assert!(out.contains("\\newcounter{tfxlisting}"), "{out}");

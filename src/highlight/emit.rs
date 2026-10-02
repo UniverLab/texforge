@@ -336,7 +336,8 @@ fn flush(run: Option<Run>, buf: &mut String, out: &mut String, used: &mut BTreeS
 /// style group when the style needs one — `None` leaves the light styles
 /// exactly as they were.
 ///
-/// Structure: `\par\medskip`, then a group scoping `\tfxcodestyle` with one
+/// Structure: `\par\medskip` for an inline block (`\par` for a floated one),
+/// then a group scoping `\tfxcodestyle` with one
 /// framed `\noindent` paragraph per source line separated by blank lines (so
 /// TeX may break the page between any two lines), then `\par` + `}`; the
 /// caller appends the trailing `\medskip` (and `\noindent` for the next
@@ -440,7 +441,14 @@ pub(crate) fn render_block(
 /// lines, then the style group. Caption/`\begin{figure}` lines map to the
 /// `\begin` line.
 fn push_opening(out_lines: &mut Vec<String>, out_origins: &mut Vec<usize>, opts: &EmitOpts) {
-    out_lines.push("\\par\\medskip".to_string());
+    // A float leaves the text flow, so it carries no vertical rhythm of its
+    // own; an inline block keeps its `\par\medskip`.
+    let opening = if opts.float.is_some() {
+        "\\par"
+    } else {
+        "\\par\\medskip"
+    };
+    out_lines.push(opening.to_string());
     out_origins.push(opts.first_line);
     if let Some(pos) = opts.float {
         out_lines.push(format!("\\begin{{figure}}[{pos}]"));
@@ -473,9 +481,12 @@ fn render_caption_lines(
         // Inline: forbid a page break right after the caption line so it can
         // never be orphaned from the frame's first line. `\penalty10000` is
         // LaTeX's `\nobreak` value (`\@M`) — TeX's *forced* break is `-10000`.
-        // In a float the caption and the frame already share one box.
-        Some(_) => String::new(),
-        None => "\\vadjust{\\penalty10000}".to_string(),
+        // The `\kern\medskipamount` that follows pushes the frame down so its
+        // first tint line no longer reaches back over the caption. The penalty
+        // must stay first: a break after a kern that follows a penalty is not
+        // legal. In a float the caption and the frame already share one box.
+        Some(_) => "\\vadjust{\\kern\\medskipamount}".to_string(),
+        None => "\\vadjust{\\penalty10000\\kern\\medskipamount}".to_string(),
     };
     out_lines.push(format!(
         "\\noindent{{\\normalfont\\textbf{{\\tfxlistingname~\\thetfxlisting:}}~{}}}{}\\par",
@@ -626,7 +637,7 @@ mod tests {
             out.contains("a\\tfxsp{}-\\tfxsp{}b\\tfxsp{}\\#\\tfxsp{}c"),
             "spaces and hyphen must survive byte-for-byte: {out}"
         );
-        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n\x7d").unwrap()];
+        let payload = &out[out.find("\\kern4pt").unwrap()..out.find("\\par\n}").unwrap()];
         let stripped = payload.replace("\\textasciitilde{}", "");
         assert!(!stripped.contains('~'), "no bare tilde may survive: {out}");
         assert!(
@@ -949,7 +960,7 @@ mod tests {
             "italic comment: {out}"
         );
         assert!(
-            out.contains("note\x7d\x7dplain\n\\par"),
+            out.contains("note}}plain\n\\par"),
             "the base-colour run stays unwrapped: {out}"
         );
         assert_eq!(used.len(), 2, "the base colour is the document's: {used:?}");
@@ -1027,7 +1038,7 @@ mod tests {
         };
         let (out, _, _, _) = render("a", None, &o);
         let color = out.find("\\color{tfxcoladbac7}").unwrap();
-        let close = out.find("\n\x7d").unwrap();
+        let close = out.find("\n}").unwrap();
         assert!(
             color < close,
             "the colour must precede the group's end: {out}"
@@ -1090,7 +1101,10 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("\\tfxlistingname~\\thetfxlisting:"), "{out}");
-        assert!(out.contains("\\vadjust{\\penalty10000}\\par"), "{out}");
+        assert!(
+            out.contains("\\vadjust{\\penalty10000\\kern\\medskipamount}\\par"),
+            "{out}"
+        );
         assert!(out.contains("\\addcontentsline{lol}{listing}"), "{out}");
         let caption = out.find("\\refstepcounter").unwrap();
         let frame = out.find("\\tfxcodestyle").unwrap();
@@ -1107,6 +1121,22 @@ mod tests {
         let caption = out.find("\\refstepcounter").unwrap();
         let end = out.find("\\end{figure}").unwrap();
         assert!(begin < caption && caption < end, "{out}");
+    }
+
+    /// A floated block lives in its own figure box: the caption glue carries
+    /// no page-break penalty (caption and frame already share one box), only
+    /// the `\kern\medskipamount`, and the block opens with `\par`, not
+    /// `\par\medskip`.
+    #[test]
+    fn float_caption_glues_without_a_penalty_and_opens_with_par() {
+        let o = caption_opts("main.tex", 5, "Hello", None, Some("t"), None);
+        let (out, _, _, _) = render("x = 1", None, &o);
+        assert!(
+            out.contains("\\vadjust{\\kern\\medskipamount}\\par"),
+            "{out}"
+        );
+        assert!(!out.contains("\\par\\medskip"), "{out}");
+        assert_eq!(out.lines().next(), Some("\\par"), "{out}");
     }
 
     /// `pos=` floats a listing whether or not it is captioned: the placement
@@ -1129,7 +1159,10 @@ mod tests {
         let o = caption_opts("main.tex", 5, "Hi", None, None, None);
         let (out, _, _, _) = render("x", None, &o);
         assert!(!out.contains("figure"), "{out}");
-        assert!(out.contains("\\vadjust{\\penalty10000}"), "{out}");
+        assert!(
+            out.contains("\\vadjust{\\penalty10000\\kern\\medskipamount}"),
+            "{out}"
+        );
     }
 
     #[test]
