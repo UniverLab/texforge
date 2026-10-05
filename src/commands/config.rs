@@ -201,15 +201,31 @@ pub fn wizard() -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Runs `f` with `HOME` and `XDG_CONFIG_HOME` both pointing at the same
+    /// fresh tempdir, holding [`crate::test_sync::ENV_LOCK`] for the whole
+    /// span. The lock is what makes the roundtrips below deterministic: both
+    /// variables live in the process environment while Rust runs tests on
+    /// parallel threads, so two overlapping tests would swap them out from
+    /// under each other and read each other's temp directory. Pointing
+    /// `HOME` at the tempdir too is what makes them *hermetic* — if
+    /// `config_file_path` ever stops honouring `XDG_CONFIG_HOME`, the write
+    /// lands under the tempdir instead of the developer's real
+    /// `~/.texforge/config.toml`. Both variables are restored by
+    /// [`crate::test_sync::EnvGuard`]'s `Drop`, so restoration also happens
+    /// when `f` panics. A poisoned lock is recovered with `into_inner`: the
+    /// failure itself is reported by the panicking test.
     fn with_temp_config(f: impl FnOnce()) {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::var("XDG_CONFIG_HOME").ok();
+        // Declared after the lock: locals drop in reverse declaration order,
+        // so the environment is restored while ENV_LOCK is still held,
+        // before the next test may swap environment variables.
+        let _restore = crate::test_sync::EnvGuard::capture(&["HOME", "XDG_CONFIG_HOME"]);
+        std::env::set_var("HOME", tmp.path());
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         f();
-        match orig {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
     }
 
     #[test]
@@ -304,5 +320,59 @@ mod tests {
             set("name", "Second").unwrap();
             get("name").unwrap();
         });
+    }
+
+    /// Inside `with_temp_config` every config path must live under the temp
+    /// directory — whatever `config_file_path` does, the real home is
+    /// unreachable.
+    #[test]
+    fn config_writes_never_reach_real_home() {
+        let real_home = std::env::var_os("HOME");
+        with_temp_config(|| {
+            let path = config::config_file_path().unwrap();
+            let temp_home = std::env::var_os("HOME").expect("with_temp_config sets HOME");
+            assert!(
+                path.starts_with(&temp_home),
+                "config_file_path must stay inside the temp HOME: {path:?}"
+            );
+            if let Some(real) = real_home {
+                assert!(
+                    !path.starts_with(&real),
+                    "config_file_path must never point into the real home: {path:?}"
+                );
+            }
+        });
+    }
+
+    /// With only `HOME` set (to a tempdir) and `XDG_CONFIG_HOME` removed, the
+    /// fallback branch must write under `<tempdir>/.texforge/` — never the
+    /// real `~/.texforge`. This covers the branch a regression that skips the
+    /// XDG lookup would take, which is exactly how a test once wrote into the
+    /// developer's real config.
+    #[test]
+    fn save_falls_back_under_temp_home_when_xdg_is_unset() {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().unwrap();
+        let _restore = crate::test_sync::EnvGuard::capture(&["HOME", "XDG_CONFIG_HOME"]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let mut cfg = config::Config::default();
+        cfg.user.email = Some("isolation@test.com".to_string());
+        config::save(&cfg).unwrap();
+
+        let expected = tmp.path().join(".texforge").join("config.toml");
+        assert_eq!(config::config_file_path().unwrap(), expected);
+        assert!(
+            expected.exists(),
+            "config::save must write under the temp HOME"
+        );
+        let body = std::fs::read_to_string(&expected).unwrap();
+        assert!(
+            body.contains("isolation@test.com"),
+            "the file under the temp HOME must carry what was saved"
+        );
     }
 }

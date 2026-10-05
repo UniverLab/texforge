@@ -1,5 +1,6 @@
 //! Project configuration and metadata.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -12,6 +13,43 @@ pub struct ProjectConfig {
     pub build: BuildConfig,
     #[serde(default)]
     pub diagrams: Option<DiagramsConfig>,
+    #[serde(default)]
+    pub highlight: Option<HighlightConfig>,
+}
+
+/// `[highlight]` section of `project.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HighlightConfig {
+    /// Syntax-highlighting palette family (`github`, `one-light`).
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Document-wide listing style (`light`, `light-mono`, `dark`,
+    /// `dark-mono`). A block's `style=` or a `[highlight.by_lang]` entry wins.
+    #[serde(default)]
+    pub style: Option<String>,
+    /// Per-language styles, keyed by language name or alias
+    /// (`[highlight.by_lang] bash = "dark"`).
+    #[serde(default)]
+    pub by_lang: HashMap<String, String>,
+    /// Rewrite `\begin{lstlisting}` blocks too (off by default: without the
+    /// opt-in, `listings` users keep real `listings.sty` behaviour).
+    #[serde(default)]
+    pub lstlisting: Option<bool>,
+    /// Number every line of every block unless the block says otherwise.
+    #[serde(default)]
+    pub numbers: Option<bool>,
+    /// Override the language's listing name (`Listing` / `Listado`).
+    #[serde(default)]
+    pub caption_name: Option<String>,
+    /// Override the language's list-of-listings heading.
+    #[serde(default)]
+    pub list_name: Option<String>,
+    /// Typewriter family for code blocks, from the monospace families the
+    /// tectonic bundle ships. `document` (the default) keeps the preamble's
+    /// own `\ttfamily` (Latin Modern Mono in the bundled templates).
+    /// Unrecognised values fail the build by name.
+    #[serde(default)]
+    pub font: Option<String>,
 }
 
 /// `[diagrams]` section of `project.toml`.
@@ -129,6 +167,7 @@ entry = "main.tex"
                 reproducible: None,
             },
             diagrams: None,
+            highlight: None,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: ProjectConfig = toml::from_str(&toml_str).unwrap();
@@ -150,6 +189,7 @@ entry = "main.tex"
                 reproducible: None,
             },
             diagrams: None,
+            highlight: None,
         };
         let cloned = config.clone();
         let debug_str = format!("{:?}", config);
@@ -160,6 +200,7 @@ entry = "main.tex"
     #[test]
     fn project_load_no_project_toml_errors() {
         let tmp = tempfile::tempdir().unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = Project::load();
@@ -176,6 +217,7 @@ entry = "main.tex"
             "[document]\ntitle = \"T\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
         )
         .unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = Project::load();
@@ -189,6 +231,7 @@ entry = "main.tex"
     fn project_load_invalid_toml_errors() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("project.toml"), "not valid {{{ toml").unwrap();
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
         let result = Project::load();
@@ -279,6 +322,7 @@ entry = "main.tex"
                 reproducible: Some(Reproducible::Epoch(1700000000)),
             },
             diagrams: None,
+            highlight: None,
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let parsed: ProjectConfig = toml::from_str(&serialized).unwrap();
@@ -322,5 +366,119 @@ entry = "main.tex"
 "#;
         let config: ProjectConfig = toml::from_str(toml_str).unwrap();
         assert!(config.diagrams.is_none());
+    }
+
+    #[test]
+    fn project_config_highlight_full_section() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+theme = "one-light"
+style = "dark-mono"
+lstlisting = true
+numbers = true
+
+[highlight.by_lang]
+bash = "dark"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.theme.as_deref(), Some("one-light"));
+        assert_eq!(highlight.style.as_deref(), Some("dark-mono"));
+        assert_eq!(highlight.lstlisting, Some(true));
+        assert_eq!(highlight.numbers, Some(true));
+        assert_eq!(
+            highlight.by_lang.get("bash").map(String::as_str),
+            Some("dark"),
+            "the per-language table parses as written"
+        );
+    }
+
+    /// Neither style key is required: a `[highlight]` section without them
+    /// still resolves, and an absent table is empty rather than missing.
+    #[test]
+    fn project_config_highlight_styles_default_to_absent() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+theme = "github"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.style, None);
+        assert_eq!(highlight.font, None);
+        assert!(
+            highlight.by_lang.is_empty(),
+            "an absent table is empty, not an error"
+        );
+    }
+
+    #[test]
+    fn project_config_highlight_absent_is_none() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.highlight.is_none());
+    }
+
+    #[test]
+    fn project_config_highlight_partial_keeps_nones() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+theme = "github"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.theme.as_deref(), Some("github"));
+        assert_eq!(highlight.lstlisting, None);
+        assert_eq!(highlight.numbers, None);
+    }
+
+    #[test]
+    fn project_config_highlight_font_parses() {
+        let toml_str = r#"
+[document]
+title = "T"
+author = "A"
+template = "general"
+
+[build]
+entry = "main.tex"
+
+[highlight]
+font = "inconsolata"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let highlight = config.highlight.expect("highlight section");
+        assert_eq!(highlight.font.as_deref(), Some("inconsolata"));
     }
 }

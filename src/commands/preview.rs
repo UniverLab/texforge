@@ -139,6 +139,7 @@ mod tests {
                     reproducible: None,
                 },
                 diagrams: None,
+                highlight: None,
             },
         };
         (dir, project)
@@ -222,6 +223,7 @@ mod tests {
                     reproducible: None,
                 },
                 diagrams: None,
+                highlight: None,
             },
         };
         let err = run(&project, None, 1.0, None).unwrap_err();

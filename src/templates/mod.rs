@@ -251,7 +251,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn set_download_override<F>(f: F)
+pub(crate) fn set_download_override<F>(f: F)
 where
     F: Fn(&str) -> std::result::Result<HashMap<String, Vec<u8>>, anyhow::Error> + 'static,
 {
@@ -259,7 +259,7 @@ where
 }
 
 #[cfg(test)]
-fn clear_download_override() {
+pub(crate) fn clear_download_override() {
     TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = None);
 }
 
@@ -367,6 +367,17 @@ mod tests {
 
     fn ensure_rustls() {
         let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    /// The tests below read the HOME-dependent real templates dir across
+    /// several steps (create → resolve → remove). Hold
+    /// [`crate::test_sync::ENV_LOCK`] for the whole span so a parallel test
+    /// swapping `HOME` cannot send one step to a different directory than
+    /// the others (e.g. `not cached` or a `NotFound` on cleanup).
+    fn templates_dir_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]
@@ -498,6 +509,7 @@ mod tests {
 
     #[test]
     fn remove_cached_removes_existing() {
+        let _env = templates_dir_lock();
         // Create a temp template in the real templates dir, then remove it
         let templates_dir = crate::utils::templates_dir().unwrap();
         let test_dir = templates_dir.join("__test_remove_temp__");
@@ -558,6 +570,7 @@ mod tests {
 
     #[test]
     fn fresh_cache_served_without_network() {
+        let _env = templates_dir_lock();
         let templates_dir = crate::utils::templates_dir().unwrap();
         let test_name = "__test_fresh_cache__";
         let test_dir = templates_dir.join(test_name);
@@ -574,6 +587,7 @@ mod tests {
 
     #[test]
     fn stale_cache_falls_back_when_refresh_fails() {
+        let _env = templates_dir_lock();
         let templates_dir = crate::utils::templates_dir().unwrap();
         let test_name = "__test_stale_fallback__";
         let test_dir = templates_dir.join(test_name);
@@ -596,6 +610,7 @@ mod tests {
 
     #[test]
     fn cache_without_meta_is_treated_as_stale() {
+        let _env = templates_dir_lock();
         let templates_dir = crate::utils::templates_dir().unwrap();
         let test_name = "__test_no_meta_stale__";
         let test_dir = templates_dir.join(test_name);
@@ -648,6 +663,7 @@ mod tests {
 
     #[test]
     fn stale_cache_refresh_returns_fresh_content() {
+        let _env = templates_dir_lock();
         let templates_dir = crate::utils::templates_dir().unwrap();
         let test_name = "__test_stale_refresh__";
         let test_dir = templates_dir.join(test_name);
@@ -681,6 +697,7 @@ mod tests {
 
     #[test]
     fn refresh_bypasses_ttl_on_fresh_entry() {
+        let _env = templates_dir_lock();
         let templates_dir = crate::utils::templates_dir().unwrap();
         let test_name = "__test_refresh_bypass_ttl__";
         let test_dir = templates_dir.join(test_name);

@@ -1,0 +1,55 @@
+# Default cargo-deny policy for UniverLab crates (used by scripts/rust-quality.sh
+# when a crate ships no deny.toml of its own). A crate that needs an exception
+# copies this file to its root and edits it there — the exception then lives
+# next to the code that needs it, reviewed in that repo's PRs.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities fail. Unmaintained/unsound notices fail too, for crates
+# anywhere in the tree: a dead dependency is a decision to take, not to ignore.
+version = 2
+yanked = "deny"
+unmaintained = "all"
+ignore = [
+  { id = "RUSTSEC-2025-0141", reason = "bincode via syntect, no maintained release; revisit when syntect moves off it" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser via resvg/usvg, no maintained release; revisit when resvg/usvg moves off it" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz via resvg/usvg, no maintained release; revisit when resvg/usvg moves off it" },
+]
+
+[licenses]
+version = 2
+# Permissive licenses compatible with shipping MIT/Apache binaries.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "MPL-2.0",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+# The allow-list is lab-wide; a crate that uses only some of it is fine.
+unused-allowed-license = "allow"
+
+[bans]
+# Duplicate versions are reported, not failed: most come from upstream and a
+# gate a crate cannot fix on its own teaches people to ignore gates.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

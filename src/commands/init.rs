@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use inquire::{Confirm, Select, Text};
 
 use crate::commands::new as new_cmd;
+use crate::commands::update;
 use crate::templates;
-use crate::version_checker;
 
 pub(crate) const BANNER: &str = r#"
  ███████████          █████ █████ ███████████                                     
@@ -160,65 +160,46 @@ fn find_file_by(
         })
 }
 
-/// Check if a newer stable version is available and prompt user
+/// Passive release notice: read-only, at most once a day, and silent when
+/// the network is unavailable. It never downloads on its own — the update
+/// path that owns downloading is `texforge update`.
 fn check_for_updates() -> Result<()> {
-    // Query GitHub API for latest stable release
-    match version_checker::check_for_updates("UniverLab", "texforge") {
-        Ok(result) => {
-            if result.update_available {
-                if let Some(latest) = &result.latest_stable {
-                    println!(
-                        "\n  ℹ A new version of texforge is available: {} → {}",
-                        result.local_version, latest
-                    );
+    if !update::should_check() {
+        return Ok(());
+    }
+    // Stamp the attempt even when the lookup fails, so a disconnected
+    // machine does not retry on every `texforge init`.
+    update::record_check();
 
-                    let choice = Confirm::new("  Update now?")
-                        .with_default(false)
-                        .prompt()
-                        .unwrap_or(false);
+    let Some(latest) = update::fetch_latest_stable_silent() else {
+        return Ok(());
+    };
+    let local = update::get_local_version()?;
+    println!("\n  ℹ A new version of texforge is available: {local} → {latest}");
 
-                    if choice {
-                        println!("\n  ⬇ Downloading texforge {}...", latest);
-                        match download_and_install(latest) {
-                            Ok(_) => {
-                                println!("  ✓ Update complete! Please restart texforge.\n");
-                                std::process::exit(0);
-                            }
-                            Err(e) => {
-                                eprintln!("  ✗ Update failed: {}", e);
-                                println!("  Manual update: https://github.com/UniverLab/texforge/releases\n");
-                            }
-                        }
-                    } else {
-                        println!("  (Update skipped)\n");
-                    }
-                }
-            }
+    let choice = Confirm::new("  Update now?")
+        .with_default(false)
+        .prompt()
+        .unwrap_or(false);
+    if !choice {
+        println!("  (Update skipped)\n");
+        return Ok(());
+    }
+
+    println!("\n  ⬇ Downloading texforge {latest}...");
+    match update::install_after_confirm(&latest) {
+        Ok(true) => {
+            println!("  ✓ Update complete! Please restart texforge.\n");
+            std::process::exit(0);
         }
-        Err(e) => {
-            // Silently fail if we can't check for updates (offline, API error, etc)
-            // Don't interrupt the user's workflow
-            eprintln!("  (Could not check for updates: {})", e);
+        // Cargo-managed install: `install_after_confirm` already printed
+        // the `cargo install --force texforge` guidance.
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("  ✗ Update failed: {}", error);
+            println!("  Manual update: https://github.com/UniverLab/texforge/releases\n");
         }
     }
 
     Ok(())
-}
-
-/// Download and install a new binary by replacing the file currently
-/// running (`std::env::current_exe()`) — never a hardcoded install
-/// directory. If that file is a `cargo install`, refuse to touch it: cargo
-/// keeps its own metadata about what it manages there, and this is a clean
-/// exit, not a failure.
-fn download_and_install(version: &crate::version::SemVer) -> Result<()> {
-    let current_exe =
-        std::env::current_exe().context("failed to resolve the running binary's path")?;
-
-    if version_checker::current_exe_is_cargo_managed(&current_exe) {
-        println!("\n  texforge was installed with cargo.");
-        println!("  Run: cargo install --force texforge\n");
-        std::process::exit(0);
-    }
-
-    version_checker::download_and_replace("UniverLab", "texforge", version, &current_exe)
 }
