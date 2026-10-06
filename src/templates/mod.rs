@@ -263,9 +263,14 @@ pub(crate) fn clear_download_override() {
     TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = None);
 }
 
-/// List template names available in the remote registry.
+/// List template names available in the remote registry: the templates its
+/// `registry.toml` declares. Listing the repo's directories instead would
+/// offer anything that lives there (a `scripts/` folder) as a template.
 pub fn list_remote() -> Result<Vec<String>> {
-    let url = format!("https://api.github.com/repos/{}/contents", REGISTRY_REPO);
+    let url = format!(
+        "https://raw.githubusercontent.com/{}/main/registry.toml",
+        REGISTRY_REPO
+    );
 
     let response = reqwest::blocking::Client::new()
         .get(&url)
@@ -277,19 +282,24 @@ pub fn list_remote() -> Result<Vec<String>> {
         anyhow::bail!("Registry returned HTTP {}", response.status());
     }
 
+    parse_registry_names(&response.text()?)
+}
+
+/// Template names declared in a `registry.toml` (`[[templates]]` entries,
+/// each with a `nombre`), sorted.
+fn parse_registry_names(text: &str) -> Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Registry {
+        #[serde(default)]
+        templates: Vec<Entry>,
+    }
     #[derive(serde::Deserialize)]
     struct Entry {
-        name: String,
-        #[serde(rename = "type")]
-        kind: String,
+        nombre: String,
     }
 
-    let entries: Vec<Entry> = response.json()?;
-    let mut names: Vec<String> = entries
-        .into_iter()
-        .filter(|e| e.kind == "dir")
-        .map(|e| e.name)
-        .collect();
+    let registry: Registry = toml::from_str(text).context("Invalid registry.toml")?;
+    let mut names: Vec<String> = registry.templates.into_iter().map(|t| t.nombre).collect();
     names.sort();
     Ok(names)
 }
@@ -478,6 +488,32 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = load_dir_recursive(tmp.path()).unwrap();
         assert!(result.files.is_empty());
+    }
+
+    #[test]
+    fn parse_registry_names_lists_declared_templates_sorted() {
+        let text = r#"
+[[templates]]
+nombre = "taller"
+descripcion = "Workshop deliverable"
+version = "0.2.0"
+
+[[templates]]
+nombre = "cv"
+descripcion = "One-page résumé"
+version = "0.1.0"
+"#;
+        assert_eq!(parse_registry_names(text).unwrap(), ["cv", "taller"]);
+    }
+
+    #[test]
+    fn parse_registry_names_rejects_invalid_toml() {
+        assert!(parse_registry_names("[[templates]\nnombre =").is_err());
+    }
+
+    #[test]
+    fn parse_registry_names_empty_registry_is_empty() {
+        assert!(parse_registry_names("").unwrap().is_empty());
     }
 
     #[test]
