@@ -27,14 +27,19 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
 
     let resolved = templates::resolve(template_name)?;
 
+    // Create the project directory before resolving placeholders: the author
+    // fallback runs `git config --get user.name` in the target directory and
+    // git needs a real path to start from.
+    std::fs::create_dir_all(project_dir)?;
+
     // Resolve any placeholders the template declares (defaults, project/user
     // config). Missing values are left as-is rather than failing generation.
     // The project name doubles as the document title unless overridden.
     let mut cli_args = HashMap::new();
     cli_args.insert("title".to_string(), name.to_string());
-    let values = resolve_placeholder_values(&resolved.files, cli_args);
+    let values = resolve_placeholder_values(&resolved.files, cli_args, project_dir);
 
-    // Create project directory and write all template files
+    // Write all template files into the (now existing) project directory
     for (rel_path, content) in &resolved.files {
         // Skip template.toml — it's metadata, not a project file
         if rel_path == "template.toml" {
@@ -84,10 +89,12 @@ bibliography = "bib/references.bib"
 
 /// Resolve placeholder values from a template's manifest, if present.
 /// Returns an empty map for templates without a (valid) `template.toml` or
-/// without declared placeholders.
+/// without declared placeholders. `project_dir` is where the git identity
+/// fallback (`git config --get user.name`) runs.
 fn resolve_placeholder_values(
     files: &HashMap<String, Vec<u8>>,
     cli_args: HashMap<String, String>,
+    project_dir: &Path,
 ) -> HashMap<String, String> {
     let mut values = HashMap::new();
 
@@ -101,7 +108,7 @@ fn resolve_placeholder_values(
         return values;
     };
 
-    let resolver = PlaceholderResolver::new(cli_args);
+    let resolver = PlaceholderResolver::new_in(cli_args, project_dir);
     for ph in &manifest.placeholders {
         if let Ok(Some(value)) = resolver.resolve(ph) {
             values.insert(ph.name.clone(), value);
@@ -110,14 +117,16 @@ fn resolve_placeholder_values(
     values
 }
 
-/// Replace `{{name}}` tokens with resolved values. Unresolved tokens are left
-/// untouched (lenient — never fails generation).
+/// Replace `{{name}}` tokens with resolved values. Unresolved non-identity
+/// tokens are left untouched (lenient — never fails generation); any
+/// remaining `{{user.*}}` / `{{institution.*}}` token is cleared to the
+/// empty string so no raw identity placeholder reaches a generated file.
 fn apply_substitutions(content: &str, values: &HashMap<String, String>) -> String {
     let mut out = content.to_string();
     for (key, value) in values {
         out = out.replace(&format!("{{{{{}}}}}", key), value);
     }
-    out
+    crate::placeholders::clear_unresolved_identities(&out)
 }
 
 /// Validate project name: no empty, no path traversal, no special chars.
@@ -263,7 +272,7 @@ mod tests {
     fn resolve_placeholder_values_empty_files() {
         let files = HashMap::new();
         let cli_args = HashMap::new();
-        let result = resolve_placeholder_values(&files, cli_args);
+        let result = resolve_placeholder_values(&files, cli_args, Path::new("."));
         assert!(result.is_empty());
     }
 
@@ -272,7 +281,7 @@ mod tests {
         let mut files = HashMap::new();
         files.insert("template.toml".to_string(), b"not valid {{{ toml".to_vec());
         let cli_args = HashMap::new();
-        let result = resolve_placeholder_values(&files, cli_args);
+        let result = resolve_placeholder_values(&files, cli_args, Path::new("."));
         assert!(result.is_empty());
     }
 
@@ -281,7 +290,7 @@ mod tests {
         let mut files = HashMap::new();
         files.insert("template.toml".to_string(), vec![0xFF, 0xFE]);
         let cli_args = HashMap::new();
-        let result = resolve_placeholder_values(&files, cli_args);
+        let result = resolve_placeholder_values(&files, cli_args, Path::new("."));
         assert!(result.is_empty());
     }
 
@@ -303,5 +312,127 @@ mod tests {
     #[test]
     fn name_with_single_char_is_ok() {
         assert!(validate_project_name("a").is_ok());
+    }
+
+    /// Runs `git` with `args` inside `dir`, asserting it succeeds.
+    fn run_git(args: &[&str], dir: &Path) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Generates `demo` from the embedded general template under a fully
+    /// isolated environment and hands the project directory to `body`.
+    ///
+    /// - `HOME` / `XDG_CONFIG_HOME` point at a fresh tempdir: empty texforge
+    ///   config and empty template cache, nothing from the developer's real
+    ///   `~/.texforge`.
+    /// - `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` point at an empty file, so
+    ///   the developer's real git identity cannot leak in.
+    /// - With `Some(name)`, the tempdir becomes a git repo whose local
+    ///   `user.name` is that value.
+    /// - The download override makes the network step of
+    ///   `templates::resolve("general")` fail deterministically, so the
+    ///   embedded template is used even when the sandbox has network.
+    ///
+    /// Lock order stays ENV then CWD, matching the rest of the suite.
+    fn with_generated_project(git_name: Option<&str>, body: impl FnOnce(&Path)) {
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let empty_git_config = root.path().join("empty.gitconfig");
+        std::fs::write(&empty_git_config, "").unwrap();
+        // Declared after the lock: locals drop in reverse declaration order,
+        // so the environment is restored while ENV_LOCK is still held.
+        let _restore = crate::test_sync::EnvGuard::capture(&[
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ]);
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", &home);
+        std::env::set_var("GIT_CONFIG_GLOBAL", &empty_git_config);
+        std::env::set_var("GIT_CONFIG_SYSTEM", &empty_git_config);
+
+        if let Some(git_name) = git_name {
+            run_git(&["init"], root.path());
+            run_git(&["config", "user.name", git_name], root.path());
+        }
+
+        let _cwd = crate::test_sync::CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(root.path()).unwrap();
+        crate::templates::set_download_override(|_| {
+            Err(anyhow::anyhow!("network disabled in tests"))
+        });
+        let result = execute("demo", Some("general"));
+        crate::templates::clear_download_override();
+        std::env::set_current_dir(orig).unwrap();
+
+        result.unwrap();
+        body(&root.path().join("demo"));
+    }
+
+    #[test]
+    fn generated_general_project_inputs_body_without_inputenc() {
+        with_generated_project(None, |project| {
+            let main = std::fs::read_to_string(project.join("main.tex")).unwrap();
+            assert!(
+                main.contains("\\input{sections/body}"),
+                "main.tex must \\input the body file:\n{main}"
+            );
+            assert!(
+                !main.contains("inputenc"),
+                "main.tex must not load inputenc:\n{main}"
+            );
+            let body = std::fs::read_to_string(project.join("sections/body.tex")).unwrap();
+            assert!(
+                body.contains("\\section{Introduction}"),
+                "body.tex must carry the moved skeleton:\n{body}"
+            );
+        });
+    }
+
+    #[test]
+    fn author_falls_back_to_repo_local_git_user_name() {
+        with_generated_project(Some("Ada Lovelace"), |project| {
+            let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+            assert!(
+                manifest.contains("author = \"Ada Lovelace\""),
+                "project.toml must pick up the git identity:\n{manifest}"
+            );
+        });
+    }
+
+    #[test]
+    fn no_generated_file_contains_raw_placeholders_without_identity() {
+        with_generated_project(None, |project| {
+            for entry in walkdir::WalkDir::new(project) {
+                let entry = entry.unwrap();
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let text = std::fs::read_to_string(entry.path()).unwrap();
+                assert!(
+                    !text.contains("{{"),
+                    "{} contains a raw placeholder:\n{text}",
+                    entry.path().display()
+                );
+            }
+        });
     }
 }

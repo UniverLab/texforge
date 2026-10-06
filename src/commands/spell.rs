@@ -271,6 +271,7 @@ entry = "main.tex"
     /// the original working directory. `Project::load()` reads
     /// `std::env::current_dir()`, so scope commands need a real cwd change.
     fn with_cwd<T>(root: &Path, body: impl FnOnce() -> T) -> T {
+        let _cwd = crate::test_sync::CWD_LOCK.lock().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(root).unwrap();
         let result = body();
@@ -278,7 +279,14 @@ entry = "main.tex"
         result
     }
 
+    /// Points `HOME` at `home` for the duration of `body`. Holds
+    /// [`crate::test_sync::ENV_LOCK`] — the environment is process-global
+    /// while tests run on parallel threads — and is always called *around*
+    /// `with_cwd`, never inside it, so the lock order stays ENV then CWD.
     fn with_home<T>(home: &Path, body: impl FnOnce() -> T) -> T {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let orig_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home);
         let result = body();

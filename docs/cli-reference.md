@@ -1,7 +1,7 @@
 ---
 title: CLI Reference
 description: Every texforge command and flag.
-order: 9
+order: 10
 ---
 
 # CLI Reference
@@ -92,6 +92,30 @@ Default scope is global (`~/.texforge/spell-words`). Both scopes are unioned at 
 | Command | Description |
 |---|---|
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, and project |
+
+## Maintenance
+
+| Command | Description |
+|---|---|
+| `texforge update` | Update to the latest stable release (always asks first; the prompt's default is **NO**) |
+| `texforge update --check` | Read-only check: exit `1` if an update is available, `0` if up to date, `2` if the check could not be completed |
+| `texforge update --yes` | Install the update without asking |
+
+`texforge update` fetches the latest stable GitHub release (drafts and prereleases excluded), downloads the asset for your platform, verifies its SHA256 checksum when the release ships one, and replaces the binary that is running — atomically, in place. It never updates silently.
+
+- A `cargo install` binary is refused: cargo owns that file, so run `cargo install --force texforge` instead (exits `0`), printing `installed with cargo — run: cargo install --force texforge`.
+- A network, API, or parse failure prints its cause as one line on stderr and exits `2` — for `--check` and plain `update` alike — so a script never reads an outage as a new release. Failures after a successful check (download, checksum, permissions) exit `1`.
+- `--check` never prompts, never downloads, and never touches local paths.
+
+Exit codes of `texforge update [--check]`:
+
+| Code | Meaning |
+|---|---|
+| `0` | Up to date (or update installed / declined / cargo-managed refusal) |
+| `1` | `--check`: an update **is available**; in plain `update`, a failure after a successful check (download, checksum, permissions) |
+| `2` | The release check **could not be completed** (network, DNS, TLS, HTTP ≥ 400, unparsable response); the cause is the single line printed on stderr. Applies to `--check` and plain `update` alike. |
+
+The version arrow line prints versions without the `v` prefix: `texforge 0.0.1 → 0.9.0`.
 
 ## Uninstall
 

@@ -25,6 +25,8 @@ collapses that into a single workflow:
   renderers are included or fetched on demand.
 - **Diagrams as first-class citizens** — write Mermaid or Graphviz blocks
   directly in your `.tex` files; they render and embed during build.
+- **Code listings** — highlight source blocks with the `code` environment;
+  pure-Rust, no `listings`/`minted` setup.
 - **Guided workflows** — start a new project or migrate an existing one
   with `texforge init`.
 - **Template registry** — install, manage and validate templates, with a
@@ -40,6 +42,7 @@ collapses that into a single workflow:
 - [Quick Start](quickstart.md) — from zero to PDF in two commands.
 - [Building](building.md) — `build`, watch mode and the runtime directory.
 - [Diagrams](diagrams.md) — Mermaid and Graphviz environments.
+- [Code listings](listings.md) — syntax-highlighted `code` blocks.
 - [Templates](templates.md) — using the template registry.
 - [Configuration](configuration.md) — global config and `project.toml`.
 - [Linting & Formatting](linting-and-formatting.md) — `check` and `fmt`.

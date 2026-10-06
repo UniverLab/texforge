@@ -13,6 +13,8 @@ use crate::config;
 use crate::manifest::Placeholder;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Placeholder resolver with precedence chain
 pub struct PlaceholderResolver {
@@ -22,11 +24,20 @@ pub struct PlaceholderResolver {
     project_config: HashMap<String, String>,
     /// Values from user config (loaded from ~/.texforge/config.toml)
     user_config: Option<config::Config>,
+    /// Directory the `git config --get …` identity fallback runs in — the
+    /// target project directory for `texforge new`.
+    target_dir: PathBuf,
 }
 
 impl PlaceholderResolver {
-    /// Create a new resolver
+    /// Create a new resolver (the git fallback runs in the current directory)
     pub fn new(cli_args: HashMap<String, String>) -> Self {
+        let dir = std::env::current_dir().unwrap_or_default();
+        Self::new_in(cli_args, &dir)
+    }
+
+    /// Create a resolver whose git identity fallback runs inside `dir`
+    pub fn new_in(cli_args: HashMap<String, String>, dir: &Path) -> Self {
         let user_config = config::load().ok();
         let project_config = load_project_config().unwrap_or_default();
 
@@ -34,6 +45,7 @@ impl PlaceholderResolver {
             cli_args,
             project_config,
             user_config,
+            target_dir: dir.to_path_buf(),
         }
     }
 
@@ -105,49 +117,72 @@ impl PlaceholderResolver {
         Ok(result)
     }
 
-    /// Resolve {{user.name}} style interpolations in defaults
+    /// Resolve `{{user.name}}`-style interpolations in defaults.
+    ///
+    /// A value missing from the texforge config falls back to
+    /// `git config --get …` in the target directory, and finally to the
+    /// empty string, so no raw `{{user.*}}` / `{{institution.*}}` token
+    /// survives into a generated file.
     fn resolve_interpolations(&self, text: &str) -> Result<String> {
         let mut result = text.to_string();
 
         // {{user.name}}
-        if let Some(cfg) = &self.user_config {
-            if let Some(name) = &cfg.user.name {
-                result = result.replace("{{user.name}}", name);
-            }
+        if result.contains("{{user.name}}") {
+            let name = self
+                .user_config
+                .as_ref()
+                .and_then(|cfg| cfg.user.name.clone())
+                .filter(|value| !value.is_empty())
+                .or_else(|| git_config_value(&self.target_dir, "user.name"))
+                .unwrap_or_default();
+            result = result.replace("{{user.name}}", &name);
         }
 
         // {{user.email}}
-        if let Some(cfg) = &self.user_config {
-            if let Some(email) = &cfg.user.email {
-                result = result.replace("{{user.email}}", email);
-            }
+        if result.contains("{{user.email}}") {
+            let email = self
+                .user_config
+                .as_ref()
+                .and_then(|cfg| cfg.user.email.clone())
+                .filter(|value| !value.is_empty())
+                .or_else(|| git_config_value(&self.target_dir, "user.email"))
+                .unwrap_or_default();
+            result = result.replace("{{user.email}}", &email);
         }
 
-        // {{institution.name}}
-        if let Some(cfg) = &self.user_config {
-            if let Some(name) = &cfg.institution.name {
-                result = result.replace("{{institution.name}}", name);
-            }
+        // {{institution.name}} — config only, no git fallback
+        if result.contains("{{institution.name}}") {
+            let name = self
+                .user_config
+                .as_ref()
+                .and_then(|cfg| cfg.institution.name.clone())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_default();
+            result = result.replace("{{institution.name}}", &name);
         }
 
-        Ok(result)
+        Ok(clear_unresolved_identities(&result))
     }
 
     /// Extract value from user config by placeholder name (convention: section.key)
+    ///
+    /// Identity fields count as resolved only when non-empty: an empty config
+    /// entry must keep falling through to the git fallback / empty-string
+    /// rule of [`Self::resolve_interpolations`], not short-circuit it.
     fn resolve_from_user_config(&self, cfg: &config::Config, placeholder: &str) -> Option<String> {
         // Try direct match in each section
-        if let Some(name) = &cfg.user.name {
+        if let Some(name) = non_empty(&cfg.user.name) {
             if placeholder == "author" || placeholder == "user.name" {
                 return Some(name.clone());
             }
         }
-        if let Some(email) = &cfg.user.email {
+        if let Some(email) = non_empty(&cfg.user.email) {
             if placeholder == "email" || placeholder == "user.email" {
                 return Some(email.clone());
             }
         }
 
-        if let Some(name) = &cfg.institution.name {
+        if let Some(name) = non_empty(&cfg.institution.name) {
             if placeholder == "institution" || placeholder == "institution.name" {
                 return Some(name.clone());
             }
@@ -166,6 +201,59 @@ impl PlaceholderResolver {
 
         None
     }
+}
+
+/// `Some` only when the config value carries content — an empty identity
+/// entry is treated as "not set" everywhere in the resolution chain.
+fn non_empty(value: &Option<String>) -> Option<&String> {
+    value.as_ref().filter(|v| !v.is_empty())
+}
+
+/// `git config --get <key>` run in `dir`. Returns `None` when git is not
+/// installed, the command fails (including "key not found"), or the value is
+/// empty. The environment is passed through unchanged so callers keep
+/// honouring `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM`.
+fn git_config_value(dir: &Path, key: &str) -> Option<String> {
+    let output = Command::new("git")
+        .arg("config")
+        .arg("--get")
+        .arg(key)
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// Replace every remaining `{{user.…}}` / `{{institution.…}}` token with the
+/// empty string; any other `{{…}}` token is left untouched. Shared with
+/// `crate::commands::new` so generated files never carry raw identity
+/// placeholders through two different code paths.
+pub(crate) fn clear_unresolved_identities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..start]);
+        let inner = &after[..end];
+        if !inner.starts_with("user.") && !inner.starts_with("institution.") {
+            out.push_str(&rest[start..start + 2 + end + 2]);
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Load project-level config from ./.texforge/config.toml
@@ -234,6 +322,7 @@ mod tests {
             cli_args,
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let ph = make_placeholder("title", true);
@@ -247,6 +336,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let mut ph = make_placeholder("title", true);
@@ -262,6 +352,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let mut values = HashMap::new();
@@ -280,6 +371,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let values = HashMap::new();
@@ -298,6 +390,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config,
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let ph = make_placeholder("title", true);
@@ -311,6 +404,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let mut ph = make_placeholder("title", false);
@@ -326,6 +420,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let ph = make_placeholder("title", false);
@@ -339,6 +434,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let mut required = make_placeholder("title", true);
@@ -360,6 +456,7 @@ mod tests {
             cli_args,
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let ph_a = make_placeholder("a", true);
@@ -376,6 +473,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let values = HashMap::new();
@@ -434,6 +532,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result = resolver.resolve_interpolations("{{user.name}}").unwrap();
@@ -449,6 +548,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result = resolver.resolve_interpolations("{{user.email}}").unwrap();
@@ -464,6 +564,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result = resolver
@@ -478,10 +579,73 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
+        // No config and no usable target directory for the git fallback:
+        // the token resolves to the empty string, never stays raw.
         let result = resolver.resolve_interpolations("{{user.name}}").unwrap();
-        assert_eq!(result, "{{user.name}}");
+        assert_eq!(result, "");
+    }
+
+    /// Without a texforge config and without any git identity (global and
+    /// system config pointed at an empty file, inside the env lock), identity
+    /// interpolations resolve to the empty string — and a mixed string keeps
+    /// its non-identity text.
+    #[test]
+    fn test_resolve_interpolation_no_config_no_git_identity() {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().unwrap();
+        let empty_git_config = tmp.path().join("empty.gitconfig");
+        std::fs::write(&empty_git_config, "").unwrap();
+        // Declared after the lock: locals drop in reverse declaration order,
+        // so the environment is restored while ENV_LOCK is still held.
+        let _restore = crate::test_sync::EnvGuard::capture(&[
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        std::env::set_var("GIT_CONFIG_GLOBAL", &empty_git_config);
+        std::env::set_var("GIT_CONFIG_SYSTEM", &empty_git_config);
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+            target_dir: tmp.path().to_path_buf(),
+        };
+
+        let name = resolver.resolve_interpolations("{{user.name}}").unwrap();
+        assert_eq!(name, "");
+        let email = resolver.resolve_interpolations("{{user.email}}").unwrap();
+        assert_eq!(email, "");
+        let mixed = resolver
+            .resolve_interpolations("{{user.name}} @ {{institution.name}}")
+            .unwrap();
+        assert_eq!(mixed, " @ ");
+    }
+
+    #[test]
+    fn test_clear_unresolved_identities_only_touches_identity_tokens() {
+        assert_eq!(
+            clear_unresolved_identities("hi {{user.name}} / {{institution.name}}"),
+            "hi  / "
+        );
+        // Non-identity tokens survive for the strict `substitute` path.
+        assert_eq!(
+            clear_unresolved_identities("\\title{{{title}}} {{language}}"),
+            "\\title{{{title}}} {{language}}"
+        );
+        // An unterminated token is left as-is instead of eating the tail.
+        assert_eq!(
+            clear_unresolved_identities("a {{user.name"),
+            "a {{user.name"
+        );
     }
 
     #[test]
@@ -493,6 +657,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result =
@@ -509,6 +674,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result =
@@ -525,6 +691,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result = resolver
@@ -541,6 +708,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result = resolver
@@ -557,11 +725,65 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result =
             resolver.resolve_from_user_config(resolver.user_config.as_ref().unwrap(), "language");
         assert_eq!(result, Some("spanish".to_string()));
+    }
+
+    /// An identity field explicitly set to `""` in the config is treated as
+    /// unset, so the precedence chain keeps falling through (to the git
+    /// fallback / empty-string rule) instead of short-circuiting on "".
+    #[test]
+    fn test_resolve_from_user_config_empty_identity_falls_through() {
+        let mut user_config = config::Config::default();
+        user_config.user.name = Some(String::new());
+        user_config.user.email = Some(String::new());
+        user_config.institution.name = Some(String::new());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+            target_dir: PathBuf::new(),
+        };
+
+        let cfg = resolver.user_config.as_ref().unwrap();
+        assert_eq!(resolver.resolve_from_user_config(cfg, "author"), None);
+        assert_eq!(resolver.resolve_from_user_config(cfg, "email"), None);
+        assert_eq!(resolver.resolve_from_user_config(cfg, "institution"), None);
+    }
+
+    /// End-to-end shape of the same rule: an empty config identity does not
+    /// short-circuit `resolve()` — the chain keeps going to the template
+    /// default. With the `{{user.name}}` default of the general template the
+    /// git fallback runs next (it cannot with this unit test's empty target
+    /// dir) and the result is the empty string; a literal default wins over
+    /// the empty config entry instead of being masked by it.
+    #[test]
+    fn test_empty_config_identity_falls_through_to_default() {
+        let mut user_config = config::Config::default();
+        user_config.user.name = Some(String::new());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: Some(user_config),
+            target_dir: PathBuf::new(),
+        };
+
+        let mut ph = make_placeholder("author", true);
+        ph.default = Some("{{user.name}}".to_string());
+        assert_eq!(resolver.resolve(&ph).unwrap(), Some(String::new()));
+
+        let mut ph_literal = make_placeholder("author", true);
+        ph_literal.default = Some("Fallback Author".to_string());
+        assert_eq!(
+            resolver.resolve(&ph_literal).unwrap(),
+            Some("Fallback Author".to_string())
+        );
     }
 
     #[test]
@@ -572,6 +794,7 @@ mod tests {
             cli_args: HashMap::new(),
             project_config: HashMap::new(),
             user_config: Some(user_config),
+            target_dir: PathBuf::new(),
         };
 
         let result = resolver
@@ -590,6 +813,7 @@ mod tests {
             cli_args,
             project_config,
             user_config: None,
+            target_dir: PathBuf::new(),
         };
 
         let ph = make_placeholder("title", true);

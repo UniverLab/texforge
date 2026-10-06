@@ -1,7 +1,7 @@
 ---
 title: Linting & Formatting
 description: Static analysis with texforge check and canonical style with texforge fmt.
-order: 8
+order: 9
 ---
 
 # Linting & Formatting

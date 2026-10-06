@@ -15,3 +15,4 @@ pub mod spell;
 pub mod stats;
 pub mod template;
 pub mod uninstall;
+pub mod update;

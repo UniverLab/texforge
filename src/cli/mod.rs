@@ -113,6 +113,21 @@ enum Commands {
     },
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
+    /// Update texforge to the latest stable release (always asks first)
+    ///
+    /// Exit codes: 0 = up to date (or update installed / declined /
+    /// cargo-managed refusal), 1 = an update is available (--check mode),
+    /// 2 = the update check could not be completed (network, DNS, TLS,
+    /// HTTP ≥ 400, or an unparsable response; the cause is printed on
+    /// stderr).
+    Update {
+        /// Only report whether an update is available (exit 0 = up to date, 1 = update available, 2 = check failed)
+        #[arg(long)]
+        check: bool,
+        /// Install the update without asking (the prompt defaults to NO)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Remove everything texforge manages under ~/.texforge
     Uninstall {
         /// Skip the confirmation prompt
@@ -279,6 +294,19 @@ impl Cli {
                 commands::spell::execute(action)
             }
             Commands::Doctor => commands::doctor::execute(),
+            Commands::Update { check, yes } => {
+                // `update` reports status through exit codes — 0 up to date,
+                // 1 update available (`--check`), 2 the check itself could not
+                // be completed (cause already on stderr) — so a non-zero code
+                // is a result, not an error to be wrapped in anyhow and printed
+                // as a failure. Exit explicitly instead; a check error never
+                // becomes a bare anyhow failure.
+                let code = commands::update::run_update(check, yes)?;
+                if let Some(code) = update_exit_code(check, code) {
+                    std::process::exit(code);
+                }
+                Ok(())
+            }
             Commands::Uninstall {
                 yes,
                 dry_run,
@@ -292,6 +320,18 @@ impl Cli {
                 (None, Some(_)) => anyhow::bail!("Cannot set value without a key"),
             },
         }
+    }
+}
+
+/// The exit decision for `texforge update`: `--check` always exits — `0`
+/// means up to date, `1` means an update is available, `2` the check itself
+/// failed — while a plain `update` exits only when its code is non-zero
+/// (failures after a successful check), so `0` falls through to `Ok(())`.
+fn update_exit_code(check: bool, code: i32) -> Option<i32> {
+    if check || code != 0 {
+        Some(code)
+    } else {
+        None
     }
 }
 
@@ -335,5 +375,69 @@ mod tests {
     fn spell_add_accepts_local_alone() {
         let result = Cli::try_parse_from(["texforge", "spell", "add", "docker", "--local"]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn update_with_no_flags_parses() {
+        let cli = Cli::try_parse_from(["texforge", "update"]).unwrap();
+        match cli.command {
+            Commands::Update { check, yes } => {
+                assert!(!check);
+                assert!(!yes);
+            }
+            _ => panic!("`texforge update` must parse into Commands::Update"),
+        }
+    }
+
+    #[test]
+    fn update_check_parses() {
+        let cli = Cli::try_parse_from(["texforge", "update", "--check"]).unwrap();
+        match cli.command {
+            Commands::Update { check, yes } => {
+                assert!(check);
+                assert!(!yes);
+            }
+            _ => panic!("`texforge update --check` must parse into Commands::Update"),
+        }
+    }
+
+    #[test]
+    fn update_yes_parses() {
+        let cli = Cli::try_parse_from(["texforge", "update", "--yes"]).unwrap();
+        match cli.command {
+            Commands::Update { check, yes } => {
+                assert!(!check);
+                assert!(yes);
+            }
+            _ => panic!("`texforge update --yes` must parse into Commands::Update"),
+        }
+    }
+
+    /// `Cli::execute` must really dispatch: an invalid project name fails
+    /// inside `texforge new` long before anything touches the disk.
+    #[test]
+    fn execute_dispatches_to_the_command_and_surfaces_its_error() {
+        let cli = Cli::try_parse_from(["texforge", "new", "bad name"]).unwrap();
+        let error = cli.execute().unwrap_err();
+        assert!(
+            error.to_string().contains("cannot contain spaces"),
+            "expected the `new` validation error, got: {error}"
+        );
+    }
+
+    /// The `texforge update` exit contract: `--check` always exits with its
+    /// status code; a plain update exits only for a non-zero code.
+    #[test]
+    fn update_exit_code_follows_the_documented_contract() {
+        assert_eq!(update_exit_code(true, 0), Some(0), "--check up to date");
+        assert_eq!(
+            update_exit_code(true, 1),
+            Some(1),
+            "--check update available"
+        );
+        assert_eq!(update_exit_code(true, 2), Some(2), "--check failed");
+        assert_eq!(update_exit_code(false, 0), None, "plain update, done");
+        assert_eq!(update_exit_code(false, 1), Some(1), "install phase failed");
+        assert_eq!(update_exit_code(false, 2), Some(2), "check failed");
     }
 }
