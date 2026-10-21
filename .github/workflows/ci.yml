@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+  # release.yml calls it to run CI again on main, where merged PRs meet.
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   rust-ci:
