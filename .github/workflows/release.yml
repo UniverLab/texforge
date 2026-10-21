@@ -1,20 +1,25 @@
 name: Release
 
+# Trunk-based release (decision 10eadef1), run by hand on main: CI on main,
+# then UniverLab/workflows rust-release-manual.yml checks the version bump,
+# builds the binaries, publishes to crates.io through Trusted Publishing in
+# the `production` environment (admin approval, main only) and creates the
+# tag and GitHub release last. crates.io trusts this file name (release.yml)
+# and that environment.
 on:
-  pull_request:
-    branches: [main]
-    types: [closed]
-    paths: [Cargo.toml]
   workflow_dispatch:
 
 permissions:
   contents: write
-  actions: read # reuse the release binaries the PR to main already built
+  id-token: write
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   release:
-    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
-    uses: UniverLab/workflows/.github/workflows/rust-release.yml@main
+    needs: ci
+    uses: UniverLab/workflows/.github/workflows/rust-release-manual.yml@main
     with:
       binary-name: texforge
-    secrets: inherit
