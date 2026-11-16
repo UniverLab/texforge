@@ -131,3 +131,7 @@ template = "general"
 entry = "main.tex"
 bibliography = "refs.bib"
 ```
+
+Any other problem in `project.toml` (an unknown table or key, bad syntax)
+fails the same way: the error names the file, and the line and column when
+the position is known.
