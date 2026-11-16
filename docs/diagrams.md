@@ -50,6 +50,27 @@ digraph G {
 \end{graphviz}
 ```
 
+## Accents and special characters
+
+A diagram renderer does not read LaTeX, but the block sits in a `.tex` file,
+so the usual LaTeX accents are still accepted: texforge translates them to
+the corresponding UTF-8 character before rendering.
+
+```latex
+\begin{mermaid}
+flowchart LR
+  A["M\'etodos"] --> B["Evaluaci\'on"] --> C["\~nand\'u"]
+\end{mermaid}
+```
+
+`\'e`, `\'{e}` and `{\'e}` all render as `é` and share a single cached image,
+so whichever escape style the document already uses works unchanged. `\-` is
+dropped, and `\&`, `\%` and `\_` become the literal characters. Braced letter
+forms (`\c{c}`, `\v{s}`, `\~{n}`) are translated too. Any other backslash is
+left untouched — a Graphviz `\n` line break still starts a new line.
+`texforge check` does not flag these escapes: they are normal in the
+surrounding LaTeX.
+
 ## Options
 
 | Option | Default | Description |
