@@ -2,6 +2,7 @@
 
 mod engine;
 mod glyphs;
+mod paths;
 pub(crate) mod spell;
 
 pub use spell::{
@@ -371,6 +372,9 @@ fn check_input_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in texutil::extract_commands(line, "input") {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         let input_path = texutil::resolve_tex_path(root, arg);
         if !input_path.exists() {
             errors.push(LintFinding {
@@ -393,6 +397,9 @@ fn check_includegraphics_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in texutil::extract_commands(line, "includegraphics") {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         let img_path = root.join(arg);
         if !img_path.exists() {
             errors.push(LintFinding {
@@ -515,6 +522,9 @@ fn check_lstinputlisting_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in texutil::extract_commands(line, "lstinputlisting") {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         if !root.join(arg).exists() {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -536,6 +546,9 @@ fn check_inputminted_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_inputminted_files(line) {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         if !root.join(arg).exists() {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -901,6 +914,88 @@ mod tests {
         let (dir, entry) = setup("\\inputminted{python}{code.py}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(has_error(&errors, "code.py"));
+    }
+
+    /// A `#1` in a path argument is a macro parameter: the value only exists
+    /// when the macro runs, so the linter must not report the file missing.
+    #[test]
+    fn input_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\input{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\input{capturas/fig}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn includegraphics_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\includegraphics{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\includegraphics{capturas/fig.png}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig.png"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn lstinputlisting_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\lstinputlisting{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\lstinputlisting{capturas/fig.py}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig.py"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn inputminted_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\inputminted{python}{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\inputminted{python}{capturas/fig.py}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig.py"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    /// The predicate accepts `#` only before a digit 1-9, never a bare `#`,
+    /// `#0` or a letter — those are ordinary text, not macro parameters.
+    #[test]
+    fn macro_parameter_predicate_is_hash_digit_only() {
+        for arg in ["#1", "#9", "capturas/#1"] {
+            assert!(paths::has_macro_parameter(arg), "{arg} holds a parameter");
+        }
+        for arg in ["capturas/fig", "#", "#0", "#a"] {
+            assert!(!paths::has_macro_parameter(arg), "{arg} holds no parameter");
+        }
     }
 
     #[test]

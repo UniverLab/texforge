@@ -19,6 +19,10 @@ Runs static analysis without compiling, including spell-check:
 | `\begin{env}` / `\end{env}` | no unclosed environments |
 | Spelling | prose against language-specific dictionaries |
 
+File-existence checks skip any path that holds a macro parameter (`#1`..`#9`): in
+`\newcommand{\fig}[1]{\includegraphics{capturas/#1}}` the argument is only a real
+path once the macro runs, so it is not reported missing.
+
 Errors come with file, line and a suggestion:
 
 ```
