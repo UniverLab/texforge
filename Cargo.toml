@@ -59,7 +59,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Archive extraction (GitHub tarballs + tectonic zip on Windows)
 flate2 = "1.1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # SHA256 verification of release assets for `texforge update`
 # (already in the lock transitively — no new heavy dependency)

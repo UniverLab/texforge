@@ -58,3 +58,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `cargo install` binary is refused with `cargo install --force texforge`
   guidance instead of being overwritten; `texforge uninstall` now reads the
   same cargo-install detection.
+- The pinned Tectonic used for automatic installs is now 0.17.0.

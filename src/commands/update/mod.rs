@@ -661,9 +661,12 @@ fn extract_binary_from_zip(bytes: &[u8], bin_name: &str, dest: &Path) -> Result<
         let mut entry = archive
             .by_index(index)
             .context("failed to read zip archive entry")?;
-        let name = entry.name();
-        let leaf = name.rsplit('/').next().unwrap_or(name);
-        if leaf != bin_name {
+        let is_match = {
+            let name = entry.name()?;
+            let leaf = name.rsplit('/').next().unwrap_or(name.as_ref());
+            leaf == bin_name
+        };
+        if !is_match {
             continue;
         }
         let mut file =
