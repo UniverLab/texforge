@@ -73,6 +73,10 @@ Applies opinionated formatting inspired by `rustfmt`:
 - Consistent indentation (2 spaces) inside environments
 - Collapsed multiple blank lines
 - Aligned `\begin{}` / `\end{}` blocks
+- Comments ignored when computing indentation: a `%` starts a comment unless
+  escaped as `\%`, so a commented-out `\begin{abstract}` or a comment that
+  mentions `\begin{document}` changes no depth. Comment-only lines keep the
+  indentation of the code around them
 
 One canonical output regardless of input style — git diffs stay clean.
 

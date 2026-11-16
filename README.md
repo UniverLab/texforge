@@ -334,6 +334,7 @@ ERROR [main.tex:23]
 - Consistent indentation (2 spaces) inside environments
 - Collapsed multiple blank lines
 - Aligned `\begin{}`/`\end{}` blocks
+- Commented-out `\begin`/`\end` (after an unescaped `%`) never change indentation
 
 One canonical output regardless of input style. Git diffs stay clean.
 
