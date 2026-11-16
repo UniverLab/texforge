@@ -88,3 +88,46 @@ entry = "main.tex"
 | `highlight.font` | Optional: typewriter family for code blocks (`document`, `inconsolata`, `source-code-pro`, `dejavu-sans-mono`, `plex-mono`, `fira-mono`; see [Code listings](listings.md)). |
 | `highlight.caption_name` | Optional: override the language-resolved listing name (`Listing` / `Listado`). |
 | `highlight.list_name` | Optional: override the language-resolved list-of-listings heading. |
+
+## Projects from before 0.9
+
+Projects created before 0.9 used Spanish key names. Those keys are **not**
+accepted — there is no alias, no deprecation warning and no `migrate`
+command. Loading such a project fails with an error naming each key to
+rename and the file it came from; texforge never edits `project.toml` for
+you.
+
+| Before 0.9 | Current |
+|---|---|
+| `[documento]` | `[document]` |
+| `titulo` | `title` |
+| `autor` | `author` |
+| `[compilacion]` | `[build]` |
+| `bibliografia` | `bibliography` |
+
+`template` and `entry` kept their names. Renaming the keys by hand is the
+whole fix. Before:
+
+```toml
+[documento]
+titulo = "My Thesis"
+autor = "Ada Lovelace"
+template = "general"
+
+[compilacion]
+entry = "main.tex"
+bibliografia = "refs.bib"
+```
+
+After:
+
+```toml
+[document]
+title = "My Thesis"
+author = "Ada Lovelace"
+template = "general"
+
+[build]
+entry = "main.tex"
+bibliography = "refs.bib"
+```
