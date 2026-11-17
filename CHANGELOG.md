@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twice; only a build that rewrote at least one code block injects it, and an
   unknown value fails the build listing the valid ones.
 
+- `texforge template add <folder>` installs a template from a local directory
+  (`--force` replaces an existing one); a local template is never refreshed
+  from the network. Registry downloads no longer count against GitHub's
+  unauthenticated API limit, and a refused request now says so — including
+  the `Retry-After`/`x-ratelimit-reset` values — instead of only "not found".
+
 ### Changed
 
 - The release check used by `texforge init` moved into the updater so both

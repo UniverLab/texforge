@@ -210,8 +210,14 @@ enum TemplateAction {
         #[arg(long)]
         local: bool,
     },
-    /// Add a template from URL or registry
-    Add { source: String },
+    /// Add a template from the registry or from a local folder
+    Add {
+        /// Registry template name, or a path to a template folder
+        source: String,
+        /// Replace a template that is already installed
+        #[arg(long)]
+        force: bool,
+    },
     /// Remove a template
     Remove { name: String },
     /// Validate template compatibility
@@ -264,7 +270,7 @@ impl Cli {
             }
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
-                TemplateAction::Add { source } => commands::template::add(&source),
+                TemplateAction::Add { source, force } => commands::template::add(&source, force),
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
                 TemplateAction::Refresh { name } => commands::template::refresh(name.as_deref()),

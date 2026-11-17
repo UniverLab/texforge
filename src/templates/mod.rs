@@ -8,7 +8,37 @@ use anyhow::{Context, Result};
 
 use crate::utils;
 
+mod http;
+mod local;
+mod safety;
+
+pub(crate) use local::{install_from_dir, is_plain_name};
+
+/// True when the installed template `name` came from a local folder.
+pub(crate) fn installed_from_local(name: &str) -> Result<bool> {
+    Ok(is_local_install(&utils::templates_dir()?.join(name)))
+}
+
+/// Drop the local-source marker of `name`, so a registry download that
+/// replaces it takes part in refreshes again.
+pub(crate) fn clear_local_marker(name: &str) -> Result<()> {
+    let marker = utils::templates_dir()?.join(name).join(LOCAL_SOURCE_MARKER);
+    if marker.exists() {
+        std::fs::remove_file(marker)?;
+    }
+    Ok(())
+}
+
 const REGISTRY_REPO: &str = "UniverLab/texforge-templates";
+
+/// The codeload endpoint serves repository archives as files; unlike
+/// `api.github.com` it has no 60-requests-per-hour cap for anonymous callers.
+const TARBALL_URL: &str =
+    "https://codeload.github.com/UniverLab/texforge-templates/tar.gz/refs/heads/main";
+
+/// Marks a template directory installed from a local folder. Such a template
+/// is never refreshed from the network.
+pub(crate) const LOCAL_SOURCE_MARKER: &str = ".local_source";
 
 /// How long a cached template is considered fresh before `resolve` attempts a
 /// background refresh. Twenty-four hours is a defensible default: templates
@@ -38,8 +68,15 @@ pub struct ResolvedTemplate {
     pub files: HashMap<String, Vec<u8>>,
 }
 
-/// Resolve a template by name: fresh cache → refresh stale cache → download → embedded fallback.
+/// Resolve a template by name: local install → fresh cache → refresh stale
+/// cache → download → embedded fallback.
 pub fn resolve(name: &str) -> Result<ResolvedTemplate> {
+    // 0. A template installed from a local folder is used exactly as it is.
+    let dir = utils::templates_dir()?.join(name);
+    if is_local_install(&dir) {
+        return load_dir_recursive(&dir);
+    }
+
     // 1. Check local cache
     if let Ok((t, fetched_at)) = load_from_cache_with_meta(name) {
         if !is_stale(fetched_at) {
@@ -59,20 +96,23 @@ pub fn resolve(name: &str) -> Result<ResolvedTemplate> {
     }
 
     // 2. Try downloading from GitHub
-    if let Ok(t) = download(name) {
-        return Ok(t);
+    match download(name) {
+        Ok(t) => Ok(t),
+        // 3. Fallback to embedded (only "general")
+        Err(_) if name == "general" => Ok(embedded_general()),
+        Err(e) => anyhow::bail!(
+            "Template '{}' could not be downloaded: {}. Run 'texforge template add {}' to retry.",
+            name,
+            e,
+            name
+        ),
     }
+}
 
-    // 3. Fallback to embedded (only "general")
-    if name == "general" {
-        return Ok(embedded_general());
-    }
-
-    anyhow::bail!(
-        "Template '{}' not found. Run 'texforge template add {}' first.",
-        name,
-        name
-    );
+/// True when `dir` holds the [`LOCAL_SOURCE_MARKER`], i.e. it was installed
+/// from a local folder and must never be refreshed from the network.
+fn is_local_install(dir: &Path) -> bool {
+    dir.join(LOCAL_SOURCE_MARKER).is_file()
 }
 
 fn is_stale(fetched_at: Option<u64>) -> bool {
@@ -144,7 +184,7 @@ fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
                 .strip_prefix(base)?
                 .to_string_lossy()
                 .to_string();
-            if rel == CACHE_META_FILE {
+            if rel == CACHE_META_FILE || rel == LOCAL_SOURCE_MARKER {
                 continue;
             }
             let content = std::fs::read(entry.path())?;
@@ -175,19 +215,16 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
         }
     }
 
-    let url = format!(
-        "https://api.github.com/repos/{}/tarball/main",
-        REGISTRY_REPO
-    );
+    let url = TARBALL_URL;
 
     let response = reqwest::blocking::Client::new()
-        .get(&url)
+        .get(url)
         .header("User-Agent", "texforge")
         .send()
         .context("Failed to connect to template registry")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Registry returned HTTP {}", response.status());
+        bail_on_status(&response)?;
     }
 
     let bytes = response.bytes()?;
@@ -211,7 +248,8 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
         let Some(rel) = after_root.strip_prefix(&prefix) else {
             continue;
         };
-        if rel.is_empty() || entry.header().entry_type().is_dir() {
+        let entry_type = entry.header().entry_type();
+        if rel.is_empty() || !entry_type.is_file() || !safety::is_safe_relative(rel) {
             continue;
         }
 
@@ -238,6 +276,25 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
     write_cache_meta(&cache_dir)?;
 
     Ok(ResolvedTemplate { files })
+}
+
+fn read_header<'a>(response: &'a reqwest::blocking::Response, name: &str) -> Option<&'a str> {
+    response.headers().get(name)?.to_str().ok()
+}
+
+/// Fail for a non-success registry response, explaining a refusal (403/429,
+/// usually a rate limit) when the headers say so.
+fn bail_on_status(response: &reqwest::blocking::Response) -> Result<()> {
+    let status = response.status();
+    let refusal = http::refusal_message(
+        status.as_u16(),
+        read_header(response, "retry-after"),
+        read_header(response, "x-ratelimit-reset"),
+    );
+    match refusal {
+        Some(message) => anyhow::bail!("{message}"),
+        None => anyhow::bail!("Registry returned HTTP {status}"),
+    }
 }
 
 #[cfg(test)]
@@ -279,7 +336,7 @@ pub fn list_remote() -> Result<Vec<String>> {
         .context("Failed to connect to template registry")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Registry returned HTTP {}", response.status());
+        bail_on_status(&response)?;
     }
 
     parse_registry_names(&response.text()?)
@@ -336,6 +393,9 @@ pub fn remove_cached(name: &str) -> Result<PathBuf> {
 /// If the download fails and a cached copy exists, the cache is kept.
 pub fn refresh(name: &str) -> Result<()> {
     let dir = utils::templates_dir()?.join(name);
+    if is_local_install(&dir) {
+        return Ok(());
+    }
     let had_cache = dir.is_dir();
     match download(name) {
         Ok(_) => Ok(()),
@@ -359,6 +419,9 @@ pub fn refresh_all() -> Result<()> {
         return Ok(());
     }
     for name in &names {
+        if is_local_install(&utils::templates_dir()?.join(name)) {
+            continue;
+        }
         print!("Refreshing '{}'... ", name);
         match download(name.as_str()) {
             Ok(_) => println!("done"),
@@ -454,16 +517,132 @@ mod tests {
         assert_eq!(t.files.len(), 4);
     }
 
+    /// Run `f` with `HOME` and `XDG_CONFIG_HOME` pointing at a fresh tempdir,
+    /// holding [`crate::test_sync::ENV_LOCK`] so no other test sees the swap.
+    /// Keeps the real `~/.texforge` template store untouched.
+    fn with_temp_home(f: impl FnOnce(&std::path::Path)) {
+        let _env = templates_dir_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let _restore = crate::test_sync::EnvGuard::capture(&["HOME", "XDG_CONFIG_HOME"]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        f(tmp.path());
+    }
+
     #[test]
     fn resolve_unknown_template_errors() {
-        ensure_rustls();
-        let result = resolve("nonexistent-template-xyz-123");
-        assert!(result.is_err());
-        // Verify the error message mentions the template name
-        if let Err(e) = result {
-            let msg = format!("{}", e);
-            assert!(msg.contains("not found"));
-        }
+        with_temp_home(|_home| {
+            set_download_override(|_name| {
+                Err(anyhow::anyhow!("Template 'x' not found in registry"))
+            });
+            let result = resolve("nonexistent-template-xyz-123");
+            clear_download_override();
+            // The message mentions the template name and the underlying cause
+            let msg = result.err().expect("resolve must fail").to_string();
+            assert!(msg.contains("not found"), "{msg}");
+            assert!(msg.contains("nonexistent-template-xyz-123"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn resolve_error_keeps_the_download_cause() {
+        with_temp_home(|_home| {
+            set_download_override(|_name| {
+                Err(anyhow::anyhow!(
+                    "The template registry refused the request (HTTP 403)"
+                ))
+            });
+            let result = resolve("nonexistent-template-xyz-456");
+            clear_download_override();
+            let msg = result.err().expect("resolve must fail").to_string();
+            assert_eq!(
+                msg,
+                "Template 'nonexistent-template-xyz-456' could not be downloaded: \
+                 The template registry refused the request (HTTP 403). \
+                 Run 'texforge template add nonexistent-template-xyz-456' to retry."
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_general_falls_back_to_embedded_on_download_error() {
+        with_temp_home(|_home| {
+            set_download_override(|_name| Err(anyhow::anyhow!("network is down")));
+            let result = resolve("general");
+            clear_download_override();
+            let files = result.unwrap().files;
+            assert!(files.contains_key("main.tex"), "embedded fallback used");
+        });
+    }
+
+    #[test]
+    fn resolve_returns_a_local_install_without_downloading() {
+        with_temp_home(|_home| {
+            let test_dir = crate::utils::templates_dir().unwrap().join("lab-report");
+            std::fs::create_dir_all(&test_dir).unwrap();
+            std::fs::write(test_dir.join("main.tex"), "local-content").unwrap();
+            std::fs::write(test_dir.join(LOCAL_SOURCE_MARKER), "").unwrap();
+
+            set_download_override(|_name| Err(anyhow::anyhow!("download must not happen")));
+            let result = resolve("lab-report");
+            clear_download_override();
+
+            let files = result.unwrap().files;
+            assert_eq!(files.get("main.tex").unwrap(), b"local-content");
+            assert!(!files.contains_key(LOCAL_SOURCE_MARKER));
+        });
+    }
+
+    #[test]
+    fn refresh_skips_a_local_install() {
+        with_temp_home(|_home| {
+            let test_dir = crate::utils::templates_dir().unwrap().join("lab-report");
+            std::fs::create_dir_all(&test_dir).unwrap();
+            std::fs::write(test_dir.join("main.tex"), "local-content").unwrap();
+            std::fs::write(test_dir.join(LOCAL_SOURCE_MARKER), "").unwrap();
+
+            set_download_override(|name| {
+                let mut files = HashMap::new();
+                files.insert("main.tex".into(), b"network-content".to_vec());
+                files.insert(format!("from-{name}.tex"), Vec::new());
+                Ok(files)
+            });
+            refresh("lab-report").unwrap();
+            assert_eq!(
+                std::fs::read(test_dir.join("main.tex")).unwrap(),
+                b"local-content"
+            );
+
+            refresh_all().unwrap();
+            assert_eq!(
+                std::fs::read(test_dir.join("main.tex")).unwrap(),
+                b"local-content"
+            );
+            assert!(!test_dir.join("from-lab-report.tex").exists());
+            clear_download_override();
+        });
+    }
+
+    #[test]
+    fn download_url_is_the_codeload_archive() {
+        assert_eq!(
+            TARBALL_URL,
+            "https://codeload.github.com/UniverLab/texforge-templates/tar.gz/refs/heads/main"
+        );
+        assert!(TARBALL_URL.starts_with("https://codeload.github.com/"));
+        assert!(!TARBALL_URL.contains("api.github.com"));
+    }
+
+    #[test]
+    fn load_dir_recursive_skips_the_local_source_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("main.tex"), "content").unwrap();
+        fs::write(tmp.path().join(LOCAL_SOURCE_MARKER), "").unwrap();
+
+        let result = load_dir_recursive(tmp.path()).unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert!(!result.files.contains_key(LOCAL_SOURCE_MARKER));
+        assert_eq!(result.files.len(), 1);
     }
 
     #[test]
