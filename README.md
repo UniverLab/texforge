@@ -175,6 +175,7 @@ texforge init
 |---|---|
 | `texforge new <name>` | Create new project from template |
 | `texforge new <name> -t <template>` | Create with specific template |
+| `texforge new <name> --values <file>` | Fill template placeholders from a `.toml`, `.yaml` or `.yml` file |
 | `texforge init` | Interactive wizard — new project or migrate existing |
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |

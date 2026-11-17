@@ -82,8 +82,8 @@ texforge new contract-2026 -t contract --values client.toml
 
 The format follows the extension: `.toml` parses as TOML, `.yaml` and `.yml`
 as YAML. Any other extension is an error. Every value must be a string, an
-integer, a float or a boolean — a nested table, an array or a null is
-rejected with the offending key.
+integer, a float or a boolean — a nested table, an array, a null or a TOML
+datetime is rejected with the offending key.
 
 Values resolve in this order, the first one that exists winning:
 
