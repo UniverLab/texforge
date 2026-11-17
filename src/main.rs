@@ -3,6 +3,7 @@
 //! A command-line tool that compiles LaTeX documents to PDF without requiring
 //! TeX Live, `MiKTeX`, or any external LaTeX distribution.
 
+mod banner;
 mod cli;
 mod commands;
 mod compiler;

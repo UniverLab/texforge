@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The startup banner now picks a large or compact font from the terminal width, and prints nothing when stdout is not a TTY.
 - `texforge new --values <FILE>` fills the placeholders a template declares
   from a flat TOML (`.toml`) or YAML (`.yaml`, `.yml`) table: strings,
   integers, floats and booleans, with file values winning over the project

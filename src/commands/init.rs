@@ -9,23 +9,9 @@ use crate::commands::new as new_cmd;
 use crate::commands::update;
 use crate::templates;
 
-pub(crate) const BANNER: &str = r#"
- ███████████          █████ █████ ███████████                                     
-░█░░░███░░░█         ░░███ ░░███ ░░███░░░░░░█                                     
-░   ░███  ░   ██████  ░░███ ███   ░███   █ ░   ██████  ████████   ███████  ██████ 
-    ░███     ███░░███  ░░█████    ░███████    ███░░███░░███░░███ ███░░███ ███░░███
-    ░███    ░███████    ███░███   ░███░░░█   ░███ ░███ ░███ ░░░ ░███ ░███░███████ 
-    ░███    ░███░░░    ███ ░░███  ░███  ░    ░███ ░███ ░███     ░███ ░███░███░░░  
-    █████   ░░██████  █████ █████ █████      ░░██████  █████    ░░███████░░██████ 
-   ░░░░░     ░░░░░░  ░░░░░ ░░░░░ ░░░░░        ░░░░░░  ░░░░░      ░░░░░███ ░░░░░░  
-                                                                 ███ ░███         
-                                                                ░░██████          
-                                                                 ░░░░░░           
-"#;
-
 /// Interactive wizard: migrate existing project or scaffold a new one.
 pub fn execute() -> Result<()> {
-    println!("{BANNER}");
+    crate::banner::print();
 
     // Check for version updates
     check_for_updates()?;

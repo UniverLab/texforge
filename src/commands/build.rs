@@ -9,7 +9,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use notify::{RecursiveMode, Watcher};
 
-use crate::commands::init::BANNER;
 use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::{Project, Reproducible};
@@ -176,7 +175,7 @@ pub fn watch(
     let preview_path =
         live_preview.map(|opts| resolve_preview_path(&project.root, opts.out.as_deref()));
 
-    print_watch_header(
+    let status_row = print_watch_header(
         &project.config.document.title,
         delay_secs,
         preview_path.as_deref(),
@@ -187,7 +186,7 @@ pub fn watch(
 
     let started = std::time::Instant::now();
     let result = run_build_with_preview(&project, &build_dir, verbose, epoch, live_preview);
-    redraw_status(&result, 1, started);
+    redraw_status(&result, 1, started, status_row);
 
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |res| {
@@ -223,7 +222,7 @@ pub fn watch(
 
         if last_tick.elapsed() >= Duration::from_secs(1) {
             last_tick = std::time::Instant::now();
-            redraw_status(&last_result, build_count, started);
+            redraw_status(&last_result, build_count, started, status_row);
         }
 
         if pending && last_event.elapsed() >= debounce {
@@ -232,7 +231,7 @@ pub fn watch(
             last_result =
                 run_build_with_preview(&project, &build_dir, verbose, epoch, live_preview);
             last_build = std::time::Instant::now();
-            redraw_status(&last_result, build_count, started);
+            redraw_status(&last_result, build_count, started, status_row);
         }
     }
 
@@ -256,17 +255,25 @@ fn is_relevant_watch_event(paths: &[PathBuf], build_dir: &Path) -> bool {
         .any(|p| !p.starts_with(build_dir) && p.extension().and_then(|e| e.to_str()) == Some("tex"))
 }
 
-fn print_watch_header(title: &str, delay_secs: u64, preview: Option<&Path>) {
+/// Draw the banner and title, and return the screen row the status block is
+/// drawn on: one below the title, whichever font the banner picked.
+fn print_watch_header(title: &str, delay_secs: u64, preview: Option<&Path>) -> usize {
     print!("\x1B[2J\x1B[H");
-    println!("{BANNER}");
+    let status_row = crate::banner::print() + 2;
     println!("  {title} — watching  ({delay_secs}s debounce  Ctrl+C to stop)");
     if let Some(path) = preview {
         println!("  live preview → {}", path.display());
     }
+    status_row
 }
 
-fn redraw_status(result: &WatchResult, build_count: u32, started: std::time::Instant) {
-    print!("\x1B[15;0H\x1B[J");
+fn redraw_status(
+    result: &WatchResult,
+    build_count: u32,
+    started: std::time::Instant,
+    status_row: usize,
+) {
+    print!("\x1B[{status_row};0H\x1B[J");
     let e = started.elapsed().as_secs();
     let session = format!("{:02}:{:02}:{:02}", e / 3600, (e % 3600) / 60, e % 60);
     println!();

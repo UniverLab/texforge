@@ -23,20 +23,6 @@ const AVAILABLE_LANGUAGES: &[&str] = &[
     "japanese",
 ];
 
-const BANNER: &str = r#"
- ███████████          █████ █████ ███████████                                     
-░█░░░███░░░█         ░░███ ░░███ ░░███░░░░░░█                                     
-░   ░███  ░   ██████  ░░███ ███   ░███   █ ░   ██████  ████████   ███████  ██████ 
-    ░███     ███░░███  ░░█████    ░███████    ███░░███░░███░░███ ███░░███ ███░░███
-    ░███    ░███████    ███░███   ░███░░░█   ░███ ░███ ░███ ░░░ ░███ ░███░███████ 
-    ░███    ░███░░░    ███ ░░███  ░███  ░    ░███ ░███ ░███     ░███ ░███░███░░░  
-    █████   ░░██████  █████ █████ █████      ░░██████  █████    ░░███████░░██████ 
-   ░░░░░     ░░░░░░  ░░░░░ ░░░░░ ░░░░░        ░░░░░░  ░░░░░      ░░░░░███ ░░░░░░  
-                                                                 ███ ░███         
-                                                                ░░██████          
-                                                                 ░░░░░░           
-"#;
-
 /// Get a config value by key (e.g., "name", "email", "institution", "language")
 pub fn get(key: &str) -> Result<()> {
     let config = config::load()?;
@@ -150,7 +136,7 @@ pub fn list() -> Result<()> {
 
 /// Interactive configuration wizard - asks for all 4 main fields
 pub fn wizard() -> Result<()> {
-    println!("{BANNER}");
+    crate::banner::print();
     println!("Configuration Wizard\n");
     println!("Fill in your details to be used as placeholders in templates:\n");
 
