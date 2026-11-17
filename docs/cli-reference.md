@@ -633,10 +633,14 @@ texforge update [--check] [--yes]
 | `--yes` | none (switch): install the update without asking | off (asks first) |
 
 `texforge update` fetches the latest stable GitHub release (drafts and
-prereleases excluded), downloads the asset for your platform, verifies its
-SHA256 checksum when the release ships one, and replaces the running binary
-— atomically, in place. It never updates silently. `--check` never prompts,
-never downloads, and never touches local paths.
+prereleases excluded), downloads the asset for your platform, verifies the
+minisign signature of the release's `SHA256SUMS.txt` (public key
+`RWRDOZx1ameWKtWCHDVp3YmIsBiJszM2U4SJbCMkZ8/iSkW9Pi1yWzDD`) before trusting
+its checksums, and replaces the running binary
+— atomically, in place. A 1.x release with no sums file, no signature file,
+or a bad signature is refused before anything is installed; 0.x releases
+predate signing and stay lenient. It never updates silently. `--check` never
+prompts, never downloads, and never touches local paths.
 
 - A `cargo install` binary is refused: cargo owns that file, so run `cargo install --force texforge` instead (exits `0`).
 - `--check` exits `1` when an update is available, `0` when up to date, `2` when the check could not be completed.

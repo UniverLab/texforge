@@ -56,14 +56,28 @@ texforge update --check    # exit 1 if an update is available, 0 if up to date, 
 texforge update --yes      # install without asking
 ```
 
-`texforge update` downloads the release asset for your platform, verifies its
-SHA256 checksum when the release ships one, and replaces the binary that is
+`texforge update` downloads the release asset for your platform, verifies the
+minisign signature of the release's `SHA256SUMS.txt` before trusting its
+checksums, and replaces the binary that is
 running (typically `~/.local/bin/texforge` for installer installs) atomically
 and in place. It never updates silently: you are always asked first, and
 declining leaves everything untouched. If the network or the GitHub API is
 unavailable, the command exits `2` with the cause on stderr — a failed check
 never reads as "you are up to date" and never reads as an update being
 available.
+
+From version 1.0.0 every release signs `SHA256SUMS.txt` with minisign
+(`SHA256SUMS.txt.minisig`, public key
+`RWRDOZx1ameWKtWCHDVp3YmIsBiJszM2U4SJbCMkZ8/iSkW9Pi1yWzDD`). A 1.x release
+with no sums file, no signature file, or a bad signature is refused before
+anything is installed; 0.x releases predate signing and stay lenient.
+
+The quick installer (`scripts/install.sh`) performs the same signature check
+and needs the `minisign` tool on `PATH` for 1.x releases — install it with
+`apt install minisign` or `brew install minisign`, or set `SKIP_SIGNATURE=1`
+to skip the signature check (the SHA256 comparison still runs against the
+downloaded sums). The Windows installer (`scripts/install.ps1`) has no
+minisign tool available, so Windows installs are checked by SHA256 only.
 
 `texforge init` still shows a passive notice (at most once a day) when a
 newer release exists; that notice never downloads unless you answer yes.
