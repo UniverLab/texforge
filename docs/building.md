@@ -18,7 +18,10 @@ Compiles the project to `<title>.pdf` in the project root:
    project root.
 
 On the first run texforge downloads the Tectonic binary into
-`~/.texforge/bin/` automatically.
+`~/.texforge/bin/` automatically. On the next build (or `texforge doctor`)
+an outdated managed copy is updated to the supported version automatically;
+when the Tectonic that runs is older than the supported version — for
+example one earlier in `PATH` — the build warns about it and continues.
 
 ## Reproducible builds
 

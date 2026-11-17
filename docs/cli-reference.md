@@ -572,7 +572,9 @@ Exit codes: see the table.
 ### texforge doctor
 
 Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, and
-project state).
+project state). Like a build, `doctor` updates an outdated managed Tectonic
+to the supported version, and warns when the Tectonic in `PATH` is older
+than the supported one.
 
 ```
 texforge doctor

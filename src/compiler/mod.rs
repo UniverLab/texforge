@@ -1,5 +1,7 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
+pub(crate) mod tectonic_version;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
@@ -364,9 +366,31 @@ fn print_warnings(warnings: &[CompileWarning], verbose: bool) {
     }
 }
 
+/// Refresh the managed Tectonic copy when it is older than the pinned
+/// version. A missing home directory is `Absent`, never a new error —
+/// `doctor` must not newly fail because of the refresh.
+pub(crate) fn refresh_managed_tectonic() -> tectonic_version::Refresh {
+    tectonic_managed_path()
+        .map(|m| {
+            tectonic_version::refresh_managed_if_outdated(&m, TECTONIC_VERSION, &install_tectonic)
+        })
+        .unwrap_or(tectonic_version::Refresh::Absent)
+}
+
 /// Find the tectonic binary in PATH or known locations, auto-installing if needed.
 fn find_tectonic() -> Result<std::path::PathBuf> {
+    refresh_managed_tectonic();
     if let Some(path) = locate_tectonic() {
+        if let Some(version) = tectonic_version::query_tectonic_version(&path) {
+            if tectonic_version::is_older(&version, TECTONIC_VERSION) {
+                eprintln!(
+                    "warning: Tectonic {} at {} is older than the {} that texforge supports; BibTeX fixes are missing. Remove it from PATH or run 'texforge doctor'.",
+                    version,
+                    path.display(),
+                    TECTONIC_VERSION
+                );
+            }
+        }
         return Ok(path);
     }
     eprintln!("Tectonic not found. Installing automatically...");
@@ -415,7 +439,7 @@ const TECTONIC_BIN: &str = "tectonic.exe";
 #[cfg(not(windows))]
 const TECTONIC_BIN: &str = "tectonic";
 
-const TECTONIC_VERSION: &str = "0.17.0";
+pub(crate) const TECTONIC_VERSION: &str = "0.17.0";
 
 fn tectonic_download_url(target: &str) -> String {
     let filename = if target.contains("windows") {
