@@ -1,0 +1,69 @@
+# Frozen 1.0 command surface for texforge.
+# One line per command path and long flag, sorted (BTreeSet order).
+# `tests/cli_surface.rs` walks the compiled binary's `--help` output and
+# fails when it drifts from these rows. To change the surface deliberately,
+# update this file AND docs/cli-reference.md together.
+# Lines starting with `#` are ignored. No positionals, no `help`,
+# no `--help`/`--version` rows.
+command build
+command check
+command clean
+command config
+command doctor
+command fmt
+command init
+command new
+command outline
+command pdf
+command pdf check
+command pdf info
+command pdf pages
+command pdf text
+command preview
+command skill
+command spell
+command spell add
+command spell list
+command spell remove
+command stats
+command template
+command template add
+command template list
+command template refresh
+command template remove
+command template validate
+command uninstall
+command update
+flag build --delay value
+flag build --preview bool
+flag build --preview-out value
+flag build --preview-page value
+flag build --reproducible optional
+flag build --verbose bool
+flag build --watch bool
+flag check --deny-warnings bool
+flag fmt --check bool
+flag new --template value
+flag new --values value
+flag outline --json bool
+flag pdf text --raw bool
+flag preview --out value
+flag preview --page value
+flag preview --scale value
+flag skill --list bool
+flag skill --references bool
+flag spell add --global bool
+flag spell add --local bool
+flag spell list --global bool
+flag spell list --local bool
+flag spell remove --global bool
+flag spell remove --local bool
+flag stats --by value
+flag stats --json bool
+flag template add --force bool
+flag template list --local bool
+flag uninstall --dry-run bool
+flag uninstall --include-spell-words bool
+flag uninstall --yes bool
+flag update --check bool
+flag update --yes bool

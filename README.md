@@ -11,7 +11,7 @@
 
 Texforge is a unified LaTeX workspace — one tool for writing, rendering diagrams (Mermaid, Graphviz), and building PDFs. Set it up once and stay focused on your document.
 
-**[univerlab.org/texforge](https://univerlab.org/texforge)** — the project page: what it does and why it exists. Command-level documentation lives in [`docs/`](docs/).
+**[univerlab.org/texforge](https://univerlab.org/texforge)** — the project page: what it does and why it exists. Command-level documentation lives in [`docs/`](docs/), starting with the [CLI reference](docs/cli-reference.md). From 1.0 the command surface follows semantic versioning.
 
 ---
 

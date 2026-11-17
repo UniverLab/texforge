@@ -25,7 +25,7 @@ enum Commands {
     New {
         /// Project name
         name: String,
-        /// Template name (default: basic)
+        /// Template name (default: general)
         #[arg(short, long)]
         template: Option<String>,
         /// Fill template placeholders from a .toml, .yaml or .yml file
