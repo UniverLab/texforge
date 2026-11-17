@@ -16,7 +16,7 @@ ignore = [
   { id = "RUSTSEC-2025-0141", reason = "bincode via syntect, no maintained release; revisit when syntect moves off it" },
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser via resvg/usvg, no maintained release; revisit when resvg/usvg moves off it" },
   { id = "RUSTSEC-2026-0206", reason = "rustybuzz via resvg/usvg, no maintained release; revisit when resvg/usvg moves off it" },
-  { id = "RUSTSEC-2026-0543", reason = "chrono via lopdf/pdf-extract, unmaintained with no safe upgrade; revisit when lopdf moves off it" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (informational, not a vulnerability) and reaches texforge only through lopdf/pdf-extract; no safe upgrade exists; migrate off chrono when lopdf and pdf-extract do" },
 ]
 
 [licenses]
