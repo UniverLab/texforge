@@ -194,6 +194,9 @@ texforge init
 | `texforge stats` | Count words by section (or by file with `--by file`) |
 | `texforge preview` | Rasterize PDF to PNG pages |
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, project |
+| `texforge skill` | Print the agent skill embedded in the binary |
+| `texforge skill --references` | Also print the bundled reference files |
+| `texforge skill --list` | List the bundled reference file names, one per line |
 | `texforge update` | Update to the latest release (always asks first; default answer is NO) |
 | `texforge update --check` | Check for a newer release: exit 1 if available, 0 if up to date, 2 if the check could not be completed |
 | `texforge update --yes` | Install the update without asking |
