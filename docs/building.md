@@ -56,7 +56,10 @@ texforge build --watch --delay 5  # custom debounce delay in seconds
 ```
 
 The terminal shows a live session timer, build count and the result of the
-last build. Press `Ctrl+C` to stop.
+last build. Press `Ctrl+C` to stop. The header banner follows the terminal
+width — the large font at 82 columns or wider, the compact one below that.
+When stdout is not a TTY no banner is printed. See the
+[CLI reference](cli-reference.md#startup-banner).
 
 ## Cleaning
 

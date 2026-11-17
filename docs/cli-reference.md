@@ -28,6 +28,17 @@ table" because the codes are shared, not per-command.
 | `1` | Lint finding or build failure. `check` found an error (or any finding with `--deny-warnings`); `fmt --check` found a file that needs formatting; `build` failed (missing entry, engine error); `update --check` found an available update; an update install-phase failure after a successful check. |
 | `2` | Usage or network. A clap usage error (unknown command, bad flag value, missing argument); or `update` / `update --check` could not complete the release check (network, DNS, TLS, HTTP ≥ 400, unparsable response — the cause is the single line on stderr). |
 
+## Startup banner
+
+`texforge init`, the `texforge config` wizard and `texforge build --watch`
+draw the texforge banner above their prompt or header. The font follows the
+terminal width at the moment it is printed: the large font when the terminal
+is at least 82 columns wide — the width of its widest line — and a compact
+four-line font otherwise. A banner line is never wrapped or cut.
+
+Nothing is printed when stdout is not a TTY (redirected, piped or captured),
+and the `--json` commands (`stats`, `outline`) never draw the banner.
+
 ## Project lifecycle
 
 ### texforge new
