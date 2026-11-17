@@ -4,6 +4,16 @@ use anyhow::Result;
 
 use crate::templates;
 
+fn installed_lines(cached: &[String]) -> Vec<String> {
+    let mut lines = vec!["general (built-in)".to_string()];
+    for name in cached {
+        if name.as_str() != "general" {
+            lines.push(name.clone());
+        }
+    }
+    lines
+}
+
 /// List available templates. By default also queries the remote registry;
 /// pass `include_remote = false` (via `--local`) to list only installed ones.
 pub fn list(include_remote: bool) -> Result<()> {
@@ -11,9 +21,8 @@ pub fn list(include_remote: bool) -> Result<()> {
     let installed: std::collections::HashSet<&str> = cached.iter().map(String::as_str).collect();
 
     println!("Installed:");
-    println!("  - general (built-in)");
-    for name in &cached {
-        println!("  - {}", name);
+    for line in installed_lines(&cached) {
+        println!("  - {}", line);
     }
 
     if include_remote {
@@ -292,6 +301,33 @@ mod tests {
         let cached = templates::list_cached().unwrap();
         // Should be a Vec (possibly empty)
         let _ = cached;
+    }
+
+    #[test]
+    fn installed_lines_prints_general_once() {
+        let cached = vec!["general".to_string(), "mine".to_string()];
+        assert_eq!(
+            installed_lines(&cached),
+            vec!["general (built-in)".to_string(), "mine".to_string()]
+        );
+    }
+
+    #[test]
+    fn installed_lines_without_cache_lists_only_general() {
+        let cached: Vec<String> = vec![];
+        assert_eq!(
+            installed_lines(&cached),
+            vec!["general (built-in)".to_string()]
+        );
+    }
+
+    #[test]
+    fn installed_lines_keeps_other_names_that_start_with_general() {
+        let cached = vec!["apa-general".to_string(), "general".to_string()];
+        assert_eq!(
+            installed_lines(&cached),
+            vec!["general (built-in)".to_string(), "apa-general".to_string()]
+        );
     }
 
     #[test]
