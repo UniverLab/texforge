@@ -328,6 +328,7 @@ fn flush(run: Option<Run>, buf: &mut String, out: &mut String, used: &mut BTreeS
         FontStyle::Normal => buf.clone(),
         FontStyle::Bold => format!("\\textbf{{{}}}", buf),
         FontStyle::Italic => format!("\\textit{{{}}}", buf),
+        FontStyle::BoldItalic => format!("\\textbf{{\\textit{{{}}}}}", buf),
     };
     match run.color {
         Some(rgb) => {
@@ -1258,5 +1259,146 @@ mod tests {
         let o = caption_opts("main.tex", 5, "Hi", Some("lst:x"), Some("t"), None);
         let (out, _, _, origins) = render("a\nb", None, &o);
         assert_eq!(origins.len(), out.lines().count(), "{out:?}");
+    }
+
+    /// Render `code` as Python in one (theme, style) pair: the shared
+    /// driver for the style-pin tests below.
+    fn render_styled(
+        code: &str,
+        theme: crate::highlight::palette::HighlightTheme,
+        style: crate::highlight::palette::HighlightStyle,
+    ) -> String {
+        use crate::highlight::engine::highlight;
+        use crate::highlight::palette::palette;
+        let spans = highlight("python", code, theme, style).unwrap().unwrap();
+        let pal = palette(theme, style);
+        let mut used = BTreeSet::new();
+        let style_info = pal.block_style(false, style.paints_base(), &mut used);
+        let o = EmitOpts {
+            file: "t.tex",
+            first_line: 1,
+            body_line: 2,
+            end_line: 10,
+            first_number: 1,
+            external: false,
+            numbers: false,
+            caption: None,
+            float: None,
+            size_command: None,
+            colors: &style_info.colors,
+            base: style_info.base,
+        };
+        let (out, _, _, _) = render(code, Some(&spans), &o);
+        out
+    }
+
+    /// No other style's rendering changes: the four non-ink styles never
+    /// emit the new bold-italic nesting, and their emphasis behaviour is
+    /// unchanged (none for light/dark, bold+italic for the monos).
+    #[test]
+    fn non_ink_styles_keep_their_emphasis() {
+        use crate::highlight::palette::{HighlightStyle, HighlightTheme};
+        let code = "def foo(x):\n    return 1  # note\n";
+        for theme in [HighlightTheme::Github, HighlightTheme::OneLight] {
+            for style in [
+                HighlightStyle::Light,
+                HighlightStyle::LightMono,
+                HighlightStyle::Dark,
+                HighlightStyle::DarkMono,
+            ] {
+                let out = render_styled(code, theme, style);
+                assert!(
+                    !out.contains("\\textbf{\\textit{"),
+                    "{theme:?}/{style:?}: bold-italic must never leak out of ink: {out}"
+                );
+                match style {
+                    HighlightStyle::Light | HighlightStyle::Dark => {
+                        assert!(
+                            !out.contains("\\textbf{") && !out.contains("\\textit{"),
+                            "{theme:?}/{style:?}: must stay plain text: {out}"
+                        );
+                    }
+                    _ => {
+                        assert!(
+                            out.contains("\\textbf{") && out.contains("\\textit{"),
+                            "{theme:?}/{style:?}: must keep bold keywords and italic comments: {out}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every ink class in one snippet: keywords and the number are bold,
+    /// the function and class names are bold-italic, the comment is
+    /// italic, the string is bare, and only black or white colour names
+    /// appear. Fonts are asserted on the spans (immune to run merging)
+    /// and the nesting on the output.
+    #[test]
+    fn ink_weights_by_class() {
+        use crate::highlight::engine::highlight;
+        use crate::highlight::palette::{HighlightStyle, HighlightTheme};
+        let code = "def foo():\n    x = \"s\"\n    return 42  # note\nclass Bar:\n    pass\n";
+        let lines = highlight("python", code, HighlightTheme::Github, HighlightStyle::Ink)
+            .unwrap()
+            .unwrap();
+        let font_of = |needle: &str| {
+            lines
+                .iter()
+                .flatten()
+                .find(|span| span.text.contains(needle))
+                .unwrap_or_else(|| panic!("no span contains {needle:?}"))
+                .font
+        };
+        for keyword in ["def", "return", "class", "pass"] {
+            assert_eq!(font_of(keyword), FontStyle::Bold, "{keyword}");
+        }
+        assert_eq!(font_of("42"), FontStyle::Bold, "number");
+        for name in ["foo", "Bar"] {
+            assert_eq!(font_of(name), FontStyle::BoldItalic, "{name}");
+        }
+        assert_eq!(font_of("note"), FontStyle::Italic, "comment");
+        for span in lines
+            .iter()
+            .flatten()
+            .filter(|span| span.text.contains('"'))
+        {
+            assert_eq!(span.font, FontStyle::Normal, "string: {span:?}");
+        }
+
+        let out = render_styled(code, HighlightTheme::Github, HighlightStyle::Ink);
+        assert!(out.contains("\\textbf{\\textit{"), "names: {out}");
+        assert!(out.contains("\\textbf{"), "keywords/numbers: {out}");
+        assert!(out.contains("\\textit{"), "comment: {out}");
+        assert!(
+            out.contains("\\char34{}s\\char34{}"),
+            "string with its quotes: {out}"
+        );
+        for marker in ["\\textcolor{", "\\colorbox{"] {
+            let mut rest = out.as_str();
+            while let Some(start) = rest.find(marker) {
+                rest = &rest[start + marker.len()..];
+                let end = rest.find('}').expect("a colour name closes");
+                let name = &rest[..end];
+                assert!(
+                    name == "tfxcol000000" || name == "tfxcolffffff",
+                    "ink must use only black or white, found {name}: {out}"
+                );
+                rest = &rest[end..];
+            }
+        }
+    }
+
+    /// Bold-italic nests the italic inside the bold, in the same form the
+    /// existing arms use.
+    #[test]
+    fn bold_italic_nests_textit_inside_textbf() {
+        let spans = vec![vec![Span {
+            text: "foo".to_string(),
+            color: None,
+            font: FontStyle::BoldItalic,
+        }]];
+        let (out, _, _, _) = render("foo", Some(&spans), &opts("main.tex", 1, false));
+        assert!(out.contains("\\textbf{\\textit{foo}}"), "out: {out}");
     }
 }

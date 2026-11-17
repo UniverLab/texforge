@@ -197,7 +197,7 @@ print edition:
 | `light-mono` | greys only — keywords bold, comments italic | `#f6f6f6` |
 | `dark` | the dark twin of the theme: GitHub Dark Dimmed or One Dark | `#22272e`, `#282c34` |
 | `dark-mono` | greys only, on a dark frame | `#2b2b2b` |
-| `ink` | pure black on white — keywords bold, comments italic | `#ffffff` |
+| `ink` | pure black on white — bold keywords and numbers, bold-italic names, italic comments | `#ffffff` |
 
 `theme` still picks the *palette family* (`github` / `one-light`) and `style`
 picks light vs dark vs monochrome; a `dark` block takes its colours from the

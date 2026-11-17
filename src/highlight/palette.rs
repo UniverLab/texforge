@@ -142,13 +142,14 @@ pub enum FontStyle {
     Normal,
     Bold,
     Italic,
+    BoldItalic,
 }
 
 impl From<SyntectFont> for FontStyle {
-    /// syntect allows any combination of the three flags; the listings only
-    /// ever set one, and bold wins over italic when both arrive.
     fn from(style: SyntectFont) -> Self {
-        if style.contains(SyntectFont::BOLD) {
+        if style.contains(SyntectFont::BOLD) && style.contains(SyntectFont::ITALIC) {
+            Self::BoldItalic
+        } else if style.contains(SyntectFont::BOLD) {
             Self::Bold
         } else if style.contains(SyntectFont::ITALIC) {
             Self::Italic
@@ -162,7 +163,7 @@ impl From<SyntectFont> for FontStyle {
 /// selectors in [`SCOPE_GROUPS`] collapse onto these 13, which is what lets
 /// every palette be a flat `[Rgb; 13]` array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Category {
+pub(crate) enum Category {
     Comment,
     String,
     Constant,
@@ -364,8 +365,8 @@ const LIGHT_MONO: Palette = Palette {
 };
 
 /// Pure black on white for single-ink printing: no grey text, no tinted
-/// frame. Token classes are told apart by weight and shape only — keywords
-/// bold, comments italic, everything else regular upright.
+/// frame. Token classes are told apart by weight and shape: bold keywords and
+/// numbers, bold-italic names, italic comments, everything else regular.
 const INK: Palette = Palette {
     name: "ink",
     base: Rgb::new(0x00, 0x00, 0x00),
@@ -514,6 +515,9 @@ impl Palette {
     /// The syntect font flag for `category`: only the mono palettes lean on
     /// weight and slant, so the light palettes emit plain text as always.
     fn font_style(&self, category: Category) -> Option<SyntectFont> {
+        if self.name == "ink" {
+            return crate::highlight::ink::font_style(category);
+        }
         if !self.mono {
             return None;
         }
@@ -773,14 +777,14 @@ mod tests {
         assert_eq!(flag("comment"), Some(SyntectFont::ITALIC));
     }
 
-    /// `FontStyle::from` follows its documented precedence: bold wins when
-    /// syntect reports both flags, underline alone carries no emphasis.
     #[test]
-    fn font_style_from_prefers_bold_over_italic() {
+    fn font_style_from_maps_bold_italic_and_other() {
         assert_eq!(
             FontStyle::from(SyntectFont::BOLD | SyntectFont::ITALIC),
-            FontStyle::Bold
+            FontStyle::BoldItalic
         );
+        assert_eq!(FontStyle::from(SyntectFont::BOLD), FontStyle::Bold);
+        assert_eq!(FontStyle::from(SyntectFont::ITALIC), FontStyle::Italic);
         assert_eq!(FontStyle::from(SyntectFont::UNDERLINE), FontStyle::Normal);
     }
 

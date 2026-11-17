@@ -22,6 +22,7 @@ use crate::texutil;
 mod caption;
 mod emit;
 mod engine;
+mod ink;
 mod linemap;
 mod palette;
 mod preamble;
