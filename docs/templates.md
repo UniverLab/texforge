@@ -15,7 +15,7 @@ project always works — even offline.
 
 ```bash
 texforge template list              # installed + available in the registry
-texforge template list --installed  # only locally installed templates
+texforge template list --local      # only locally installed templates
 texforge template add <name>        # download a template from the registry
 texforge template add <folder>      # install a template from a local folder
 texforge template remove <name>     # remove an installed template

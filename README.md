@@ -201,8 +201,9 @@ texforge init
 | `texforge config <key>` | Show value for key (name, email, institution, language) |
 | `texforge config <key> <value>` | Set value for key |
 | `texforge template list` | List installed + available in registry |
-| `texforge template list --installed` | List only locally installed templates |
+| `texforge template list --local` | List only locally installed templates |
 | `texforge template add <name>` | Download template from registry |
+| `texforge template add <folder>` | Install a template from a local folder (`--force` replaces an existing one) |
 | `texforge template remove <name>` | Remove installed template |
 | `texforge template validate <name>` | Verify template compatibility |
 
@@ -244,7 +245,7 @@ texforge config language "spanish"
 
 ## Templates
 
-Templates are managed through the [texforge-templates](https://github.com/UniverLab/texforge-templates) registry. The `general` template is embedded in the binary and works offline. Run `texforge template list --all` to see all available templates.
+Templates are managed through the [texforge-templates](https://github.com/UniverLab/texforge-templates) registry. The `general` template is embedded in the binary and works offline. Run `texforge template list` to see all available templates. A template you are developing can be installed from a folder with `texforge template add <folder>` (`--force` replaces an existing one); local templates are never refreshed from the network.
 
 ---
 
