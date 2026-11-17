@@ -91,6 +91,8 @@ Every diagram becomes a `figure`. Without `pos` it floats like any other
 image; `pos=H` keeps it exactly where it is written; `caption` adds a
 numbered caption and `label` a `\ref` target.
 
+`texforge check` resolves a `\ref` to a diagram `label=`, with or without a `caption`.
+
 If an option value contains a comma, wrap it in braces — the same
 convention LaTeX packages already use for this:
 
