@@ -68,7 +68,7 @@ impl HighlightTheme {
     }
 }
 
-/// The four rendering styles. `Light` is today's rendering, unchanged.
+/// The five rendering styles. `Light` is today's rendering, unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightStyle {
     /// Today's rendering: the theme's own palette on a light frame.
@@ -80,6 +80,8 @@ pub enum HighlightStyle {
     Dark,
     /// Greys only, on a dark frame — a terminal that survives a mono printer.
     DarkMono,
+    /// Pure black on white for single-ink printing; ignores theme.
+    Ink,
 }
 
 impl Default for HighlightStyle {
@@ -91,7 +93,7 @@ impl Default for HighlightStyle {
 }
 
 /// The valid style names, in the order errors should list them.
-pub const VALID_STYLE_NAMES: [&str; 4] = ["light", "light-mono", "dark", "dark-mono"];
+pub const VALID_STYLE_NAMES: [&str; 5] = ["light", "light-mono", "dark", "dark-mono", "ink"];
 
 impl HighlightStyle {
     /// Parse a style name from `style=`, `[highlight] style` or a
@@ -103,6 +105,7 @@ impl HighlightStyle {
             "light-mono" => Ok(Self::LightMono),
             "dark" => Ok(Self::Dark),
             "dark-mono" => Ok(Self::DarkMono),
+            "ink" => Ok(Self::Ink),
             other => bail!(
                 "Unknown code style '{other}' — valid styles are: {}",
                 VALID_STYLE_NAMES.join(", ")
@@ -111,13 +114,14 @@ impl HighlightStyle {
     }
 
     /// The cache slot: styles are ordered as documented, and each theme gets
-    /// its own four slots.
+    /// its own five slots.
     fn index(self) -> usize {
         match self {
             Self::Light => 0,
             Self::LightMono => 1,
             Self::Dark => 2,
             Self::DarkMono => 3,
+            Self::Ink => 4,
         }
     }
 
@@ -359,6 +363,34 @@ const LIGHT_MONO: Palette = Palette {
     legacy_light: false,
 };
 
+/// Pure black on white for single-ink printing: no grey text, no tinted
+/// frame. Token classes are told apart by weight and shape only — keywords
+/// bold, comments italic, everything else regular upright.
+const INK: Palette = Palette {
+    name: "ink",
+    base: Rgb::new(0x00, 0x00, 0x00),
+    tint: Rgb::new(0xff, 0xff, 0xff),
+    frame: Rgb::new(0x00, 0x00, 0x00),
+    gutter: Rgb::new(0x00, 0x00, 0x00),
+    colors: [
+        Rgb::new(0x00, 0x00, 0x00), // comment
+        Rgb::new(0x00, 0x00, 0x00), // string
+        Rgb::new(0x00, 0x00, 0x00), // constant
+        Rgb::new(0x00, 0x00, 0x00), // function
+        Rgb::new(0x00, 0x00, 0x00), // class
+        Rgb::new(0x00, 0x00, 0x00), // keyword
+        Rgb::new(0x00, 0x00, 0x00), // tag
+        Rgb::new(0x00, 0x00, 0x00), // attribute
+        Rgb::new(0x00, 0x00, 0x00), // invalid
+        Rgb::new(0x00, 0x00, 0x00), // inserted
+        Rgb::new(0x00, 0x00, 0x00), // deleted
+        Rgb::new(0x00, 0x00, 0x00), // changed
+        Rgb::new(0x00, 0x00, 0x00), // raw
+    ],
+    mono: true,
+    legacy_light: false,
+};
+
 /// Greys only, on a dark frame: a terminal that stays readable when the
 /// printer throws the hue away.
 const DARK_MONO: Palette = Palette {
@@ -395,6 +427,7 @@ pub(crate) fn palette(theme: HighlightTheme, style: HighlightStyle) -> &'static 
     match (theme, style) {
         (_, HighlightStyle::LightMono) => &LIGHT_MONO,
         (_, HighlightStyle::DarkMono) => &DARK_MONO,
+        (_, HighlightStyle::Ink) => &INK,
         (HighlightTheme::Github, HighlightStyle::Light) => &GITHUB_LIGHT,
         (HighlightTheme::OneLight, HighlightStyle::Light) => &ONE_LIGHT,
         (HighlightTheme::Github, HighlightStyle::Dark) => &GITHUB_DARK,
@@ -492,14 +525,14 @@ impl Palette {
     }
 }
 
-/// Built themes, one slot per (theme, style) pair — `theme.index() * 4 +
+/// Built themes, one slot per (theme, style) pair — `theme.index() * 5 +
 /// style.index()`. Both knobs are in the key: indexing one on the other would
 /// cross-wire the families.
-static THEMES: [OnceLock<Theme>; 8] = [const { OnceLock::new() }; 8];
+static THEMES: [OnceLock<Theme>; 10] = [const { OnceLock::new() }; 10];
 
 /// The cached syntect theme for one palette.
 pub(crate) fn theme_of(theme: HighlightTheme, style: HighlightStyle) -> &'static Theme {
-    let slot = theme.index() * 4 + style.index();
+    let slot = theme.index() * 5 + style.index();
     THEMES[slot].get_or_init(|| build_theme(palette(theme, style)))
 }
 
@@ -559,14 +592,18 @@ mod tests {
         (high + 0.05) / (low + 0.05)
     }
 
-    fn styles() -> [(HighlightTheme, HighlightStyle); 6] {
+    fn styles() -> [(HighlightTheme, HighlightStyle); 10] {
         [
             (HighlightTheme::Github, HighlightStyle::Light),
             (HighlightTheme::OneLight, HighlightStyle::Light),
             (HighlightTheme::Github, HighlightStyle::Dark),
             (HighlightTheme::OneLight, HighlightStyle::Dark),
             (HighlightTheme::Github, HighlightStyle::LightMono),
+            (HighlightTheme::OneLight, HighlightStyle::LightMono),
+            (HighlightTheme::Github, HighlightStyle::DarkMono),
             (HighlightTheme::OneLight, HighlightStyle::DarkMono),
+            (HighlightTheme::Github, HighlightStyle::Ink),
+            (HighlightTheme::OneLight, HighlightStyle::Ink),
         ]
     }
 
@@ -585,6 +622,7 @@ mod tests {
             HighlightStyle::parse("dark-mono").unwrap(),
             HighlightStyle::DarkMono
         );
+        assert_eq!(HighlightStyle::parse("ink").unwrap(), HighlightStyle::Ink);
         let err = HighlightStyle::parse("neon").unwrap_err().to_string();
         assert!(err.contains("neon"), "{err}");
         for name in VALID_STYLE_NAMES {
@@ -621,6 +659,8 @@ mod tests {
         assert!(!palette(HighlightTheme::Github, HighlightStyle::Dark).mono);
         assert!(palette(HighlightTheme::Github, HighlightStyle::LightMono).mono);
         assert!(palette(HighlightTheme::Github, HighlightStyle::DarkMono).mono);
+        assert!(palette(HighlightTheme::Github, HighlightStyle::Ink).mono);
+        assert!(!HighlightStyle::Ink.paints_base());
     }
 
     /// `light` must stay today's rendering: the frame hairline is still the
@@ -692,12 +732,12 @@ mod tests {
     #[test]
     fn theme_cache_keys_cover_every_pair() {
         let mut slots: Vec<usize> = (0..2)
-            .flat_map(|theme| (0..4).map(move |style| theme * 4 + style))
+            .flat_map(|theme| (0..5).map(move |style| theme * 5 + style))
             .collect();
         assert_eq!(slots.len(), THEMES.len(), "one slot per pair");
         slots.sort_unstable();
         slots.dedup();
-        assert_eq!(slots.len(), 8, "indices must stay distinct: {slots:?}");
+        assert_eq!(slots.len(), 10, "indices must stay distinct: {slots:?}");
         for (theme, style) in styles() {
             let built = theme_of(theme, style);
             assert_eq!(
@@ -742,6 +782,24 @@ mod tests {
             FontStyle::Bold
         );
         assert_eq!(FontStyle::from(SyntectFont::UNDERLINE), FontStyle::Normal);
+    }
+
+    /// `ink` is black on white only: every value is pure black except the
+    /// white tint, so a black-only print loses nothing.
+    #[test]
+    fn ink_palette_is_black_and_white() {
+        let black = Rgb::new(0, 0, 0);
+        let white = Rgb::new(0xff, 0xff, 0xff);
+        for theme in [HighlightTheme::Github, HighlightTheme::OneLight] {
+            let ink = palette(theme, HighlightStyle::Ink);
+            assert_eq!(ink.tint, white, "{theme:?}: tint must be white");
+            assert_eq!(ink.base, black, "{theme:?}: base must be black");
+            assert_eq!(ink.frame, black, "{theme:?}: frame must be black");
+            assert_eq!(ink.gutter, black, "{theme:?}: gutter must be black");
+            for color in ink.colors().iter() {
+                assert_eq!(*color, black, "{theme:?}: {color:?} must be black");
+            }
+        }
     }
 
     /// WCAG AA (4.5:1) for every token against its own frame. The two `light`

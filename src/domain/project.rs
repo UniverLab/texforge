@@ -37,7 +37,8 @@ pub struct HighlightConfig {
     #[serde(default)]
     pub theme: Option<String>,
     /// Document-wide listing style (`light`, `light-mono`, `dark`,
-    /// `dark-mono`). A block's `style=` or a `[highlight.by_lang]` entry wins.
+    /// `dark-mono`, `ink`). A block's `style=` or a `[highlight.by_lang]`
+    /// entry wins.
     #[serde(default)]
     pub style: Option<String>,
     /// Per-language styles, keyed by language name or alias

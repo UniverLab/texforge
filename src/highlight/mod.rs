@@ -1082,7 +1082,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("neon"), "{err}");
-        for name in ["light", "light-mono", "dark", "dark-mono"] {
+        for name in ["light", "light-mono", "dark", "dark-mono", "ink"] {
             assert!(err.contains(name), "missing {name}: {err}");
         }
     }
@@ -1207,6 +1207,43 @@ mod tests {
                 (parts[0] - parts[1]).abs() < 0.002 && (parts[1] - parts[2]).abs() < 0.002,
                 "light-mono must be greyscale: {line}"
             );
+        }
+    }
+
+    /// An `ink` block is pure black on white: keywords bold, comments
+    /// italic, and every colour name is a black or white one.
+    #[test]
+    fn ink_block_emits_black_on_white() {
+        let dir = captioned_fixture(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, style=ink]\n\
+             # note\ndef f():\n    return \"x\"\n\\end{code}\n\\end{document}\n",
+        );
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        assert!(
+            out.contains("\\definecolor{tfxcol000000}"),
+            "black must be defined: {out}"
+        );
+        assert!(
+            out.contains("\\definecolor{tfxcolffffff}"),
+            "white must be defined: {out}"
+        );
+        assert!(out.contains("\\textbf{"), "keywords are bold: {out}");
+        assert!(out.contains("\\textit{"), "comments are italic: {out}");
+        for marker in ["\\textcolor{", "\\colorbox{"] {
+            let mut rest = out.as_str();
+            while let Some(start) = rest.find(marker) {
+                rest = &rest[start + marker.len()..];
+                let end = rest.find('}').expect("a colour name closes");
+                let name = &rest[..end];
+                if name == "tfxcol000000" || name == "tfxcolffffff" {
+                    rest = &rest[end..];
+                    continue;
+                }
+                panic!("ink must use only black or white, found {name}: {out}");
+            }
         }
     }
 
