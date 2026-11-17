@@ -22,7 +22,9 @@ texforge template remove <name>     # remove an installed template
 texforge template validate <name>   # verify template compatibility
 ```
 
-Installed templates are cached under `~/.texforge/templates/`.
+Installed templates are cached under `~/.texforge/templates/`. The
+built-in `general` template is listed once under `Installed:`, even when a
+downloaded copy of `general` is cached.
 
 ## Using a template
 
