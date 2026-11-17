@@ -136,7 +136,12 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     )?;
     // After diagrams: the code pass rewrites what diagrams just copied, and
     // its warning line numbers are build-copy coordinates (like Tectonic's).
-    let line_map = highlight::process(build_dir, &project.config.build.entry, highlight_cfg)?;
+    let line_map = highlight::process(
+        &project.root,
+        build_dir,
+        &project.config.build.entry,
+        highlight_cfg,
+    )?;
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -308,7 +313,12 @@ fn run_build(
     ) {
         return WatchResult::Err(e.to_string());
     }
-    let line_map = match highlight::process(build_dir, &project.config.build.entry, highlight_cfg) {
+    let line_map = match highlight::process(
+        &project.root,
+        build_dir,
+        &project.config.build.entry,
+        highlight_cfg,
+    ) {
         Ok(map) => map,
         Err(e) => return WatchResult::Err(e.to_string()),
     };

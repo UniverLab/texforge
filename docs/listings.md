@@ -38,6 +38,8 @@ pass writes nothing and documents compile exactly as before.
 | `pos` | `H` (inline, the default), `h`, `t`, `b`, `p` | `H` — the listing stays where it is written and may break across pages |
 | `size` | `scriptsize`, `footnotesize`, `small`, `normalsize` | `small` (today's size); any other value warns and uses `small` |
 | `style` | `light`, `light-mono`, `dark`, `dark-mono` (see [Styles](#styles)) | `[highlight.by_lang]` for that language, else `[highlight] style`, else `light`; any other value fails the build |
+| `file` | path to a project file, relative to the project root (never absolute, never escaping with `..`) | _(none)_ — the block renders its own body |
+| `lines` | `10-40`, `10-`, `-40`, or `25` (1-based, inclusive) | the whole file; requires `file=` |
 
 An unknown `lang` never fails the build: the block renders monochrome and
 `texforge build` warns, naming the language and pointing at
@@ -58,6 +60,35 @@ font = "inconsolata" # typewriter family for code blocks (default "document")
 [highlight.by_lang]
 bash = "dark"        # shell commands in a terminal-dark frame
 ```
+
+## Including a file
+
+Instead of pasting a script, take the block from a file of the project —
+the `\lstinputlisting` / `\inputminted` shape, without their costs:
+
+```latex
+\begin{code}[lang=python, file=scripts/07_probar_modelo.py, lines=10-40]
+\end{code}
+```
+
+With `file=`, the block body is ignored and the file is read at build time;
+`lines=` keeps a 1-based inclusive range (`10-40`, `10-` to the end,
+`-40` from the start, `25` for one line). The same options apply
+(`numbers`, `caption`, `label`, `pos`, `size`, `style`), and with `numbers`
+the gutter shows the file's own line numbers — a listing of lines 10–40 is
+numbered 10…40. Without `lang=`, the language is inferred from the file
+extension; an unknown extension renders a plain monospace block.
+
+The file's text is read at build time and embedded in the generated LaTeX,
+so the document stays self-contained: no `\inputminted`,
+`\lstinputlisting`, or shell-escape is ever emitted, and no external file
+is needed at compile time.
+
+A missing or unreadable file, a malformed range, a range past the end, an
+escaping path, or `lines=` without `file=` fails the build, naming the
+block's source file and line, the `file=` path, and the cause. `texforge
+check` reports the same problems without building, and warns when a block
+carries both `file=` and a body.
 
 ## Font
 

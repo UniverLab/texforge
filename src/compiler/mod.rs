@@ -1004,6 +1004,7 @@ mod tests {
         // Source line 5 holds the long code line.
         let map = crate::highlight::process(
             dir.path(),
+            dir.path(),
             "main.tex",
             crate::highlight::Settings::default(),
         )
@@ -1135,6 +1136,7 @@ mod tests {
         std::fs::write(dir.path().join("main.tex"), main).unwrap();
         // Source line 7 holds the undefined command.
         let map = crate::highlight::process(
+            dir.path(),
             dir.path(),
             "main.tex",
             crate::highlight::Settings::default(),

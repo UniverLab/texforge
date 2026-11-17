@@ -2,6 +2,7 @@
 
 mod engine;
 mod glyphs;
+mod listings;
 mod paths;
 pub(crate) mod spell;
 
@@ -246,6 +247,7 @@ fn run_file_checks(
             errors,
         );
         check_environments(&rel, &content, &verbatim_lines, errors);
+        errors.extend(listings::check_code_blocks(root, &rel, &content));
         check_diagram_blocks(&rel, &content, "mermaid", &verbatim_lines, errors);
         check_diagram_blocks(&rel, &content, "graphviz", &verbatim_lines, errors);
         check_diagram_blocks(&rel, &content, "d2", &verbatim_lines, errors);

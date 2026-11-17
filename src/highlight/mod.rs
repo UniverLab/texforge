@@ -25,6 +25,7 @@ mod engine;
 mod linemap;
 mod palette;
 mod preamble;
+pub(crate) mod source;
 
 pub use engine::language_key;
 pub use linemap::LineMap;
@@ -48,8 +49,8 @@ pub const LST_ENV: &str = "lstlisting";
 // takes its style from `[highlight.by_lang]` or the document default, so a
 // `style=` there keeps the usual "unknown option" warning instead of
 // silently picking a treatment the author may have meant for a `code` block.
-const CODE_OPTION_KEYS: &[&str] = &[
-    "lang", "numbers", "caption", "label", "pos", "size", "style",
+pub(crate) const CODE_OPTION_KEYS: &[&str] = &[
+    "lang", "numbers", "caption", "label", "pos", "size", "style", "file", "lines",
 ];
 const LSTLISTING_OPTION_KEYS: &[&str] = &[
     "language",
@@ -113,8 +114,8 @@ pub struct Warning {
 /// Run the pass and print warnings in the diagrams' `warning: …` shape.
 /// Returns the build-copy → source line map for the compiler's warning
 /// attribution.
-pub fn process(build_dir: &Path, entry: &str, cfg: Settings) -> Result<LineMap> {
-    let (warnings, line_map) = run_inner(build_dir, entry, cfg)?;
+pub fn process(root: &Path, build_dir: &Path, entry: &str, cfg: Settings) -> Result<LineMap> {
+    let (warnings, line_map) = run_inner(root, build_dir, entry, cfg)?;
     for warning in &warnings {
         eprintln!(
             "warning: {}:{}: {}",
@@ -129,10 +130,27 @@ pub fn process(build_dir: &Path, entry: &str, cfg: Settings) -> Result<LineMap> 
 /// returns the line map); unit tests use this to assert warnings alone.
 #[cfg(test)]
 pub fn run(build_dir: &Path, entry: &str, cfg: Settings) -> Result<Vec<Warning>> {
-    Ok(run_inner(build_dir, entry, cfg)?.0)
+    Ok(run_inner(build_dir, build_dir, entry, cfg)?.0)
 }
 
-fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warning>, LineMap)> {
+/// Test helper with a project root separate from the build directory: the
+/// `file=` fixture lives in `root`, like a real project's scripts.
+#[cfg(test)]
+pub fn run_with_root(
+    root: &Path,
+    build_dir: &Path,
+    entry: &str,
+    cfg: Settings,
+) -> Result<Vec<Warning>> {
+    Ok(run_inner(root, build_dir, entry, cfg)?.0)
+}
+
+fn run_inner(
+    root: &Path,
+    build_dir: &Path,
+    entry: &str,
+    cfg: Settings,
+) -> Result<(Vec<Warning>, LineMap)> {
     let Settings {
         theme,
         style,
@@ -194,6 +212,7 @@ fn run_inner(build_dir: &Path, entry: &str, cfg: Settings) -> Result<(Vec<Warnin
         }
         let mut origins = Vec::new();
         let mut state = RewriteState {
+            root,
             colors: &mut colors,
             has_gutter: &mut has_gutter,
             has_caption: &mut has_caption,
@@ -304,6 +323,7 @@ fn in_comment(content: &str, offset: usize) -> bool {
 /// per output line, so the build can map finished-copy lines back to the
 /// source (copied regions map 1:1; block lines map through the emission).
 struct RewriteState<'a> {
+    root: &'a Path,
     colors: &'a mut BTreeSet<Rgb>,
     has_gutter: &'a mut bool,
     has_caption: &'a mut bool,
@@ -382,13 +402,22 @@ fn rewrite_file(
         };
         let body_line = 1 + content[..body_abs + stripped_newline].matches('\n').count();
 
-        let body = strip_block_edges(raw_body).replace('\r', "");
+        let inline = strip_block_edges(raw_body).replace('\r', "");
+        // `file=` replaces the body with the file's text (and `lines=` keeps
+        // a range of it); every option below applies unchanged.
+        let text = source::resolve(state.root, rel, first_line, &opts, &inline)?;
+        let body = text.body;
         let block_numbers = numbers_for(env, &opts, default_numbers);
         if block_numbers {
             *state.has_gutter = true;
         }
 
         let lang = lang_for(env, &opts);
+        let lang = if lang.is_empty() {
+            text.inferred_lang.unwrap_or_default()
+        } else {
+            lang
+        };
         let style = styles.resolve(env, &opts, &lang)?;
         let block_palette = palette::palette(theme, style);
         let block_style =
@@ -410,10 +439,14 @@ fn rewrite_file(
             *state.has_caption = true;
         }
         let emit_opts = resolved.emit_opts(
-            rel,
-            first_line,
-            body_line,
-            end_line,
+            emit::BlockPlacement {
+                file: rel,
+                first_line,
+                body_line,
+                end_line,
+                first_number: text.first_number,
+                external: text.external,
+            },
             block_numbers,
             &block_style,
         );
@@ -522,22 +555,21 @@ struct ResolvedBlock<'a> {
 
 impl<'a> ResolvedBlock<'a> {
     /// Everything the emission needs: the block's own caption/float/size
-    /// options, where it sits in the build copy, and the frame colours its
-    /// style resolved to.
+    /// options, where it sits in the build copy (plus the external file's
+    /// own first line number), and the frame colours its style resolved to.
     fn emit_opts(
         &'a self,
-        file: &'a str,
-        first_line: usize,
-        body_line: usize,
-        end_line: usize,
+        placement: emit::BlockPlacement<'a>,
         numbers: bool,
         style: &'a BlockStyle,
     ) -> EmitOpts<'a> {
         EmitOpts {
-            file,
-            first_line,
-            body_line,
-            end_line,
+            file: placement.file,
+            first_line: placement.first_line,
+            body_line: placement.body_line,
+            end_line: placement.end_line,
+            first_number: placement.first_number,
+            external: placement.external,
             numbers,
             caption: self.caption.map(|text| EmitCaption {
                 text,
@@ -1632,7 +1664,7 @@ mod tests {
              \\begin{code}\na = 1\nb = 2\n\\end{code}\n\\end{document}\n",
         )
         .unwrap();
-        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let map = process(dir.path(), dir.path(), "main.tex", Settings::default()).unwrap();
         let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
         // Source line 5 holds `b = 2` (plain block: escaped `b\tfxsp{}=\tfxsp{}2`).
         let build_line = rewritten
@@ -1666,7 +1698,7 @@ mod tests {
         )
         .unwrap();
 
-        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let map = process(dir.path(), dir.path(), "main.tex", Settings::default()).unwrap();
         let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
         assert!(rewritten.contains("texforge code listings"), "{rewritten}");
 
@@ -1910,7 +1942,7 @@ mod tests {
              \\begin{code}\na = 1\n\\end{code}\n\\end{document}\n",
         )
         .unwrap();
-        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let map = process(dir.path(), dir.path(), "main.tex", Settings::default()).unwrap();
         let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
         let lines: Vec<&str> = rewritten.lines().collect();
         let medskip = lines
@@ -1997,7 +2029,7 @@ mod tests {
             "\\documentclass{article}\n\\begin{document}\n\
              \\begin{code}\na = 1\nb = 2\n  \\end{code}\n\\end{document}\n",
         );
-        let map = process(dir.path(), "main.tex", Settings::default()).unwrap();
+        let map = process(dir.path(), dir.path(), "main.tex", Settings::default()).unwrap();
         let rewritten = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
 
         let build_line = rewritten
@@ -2465,6 +2497,235 @@ mod tests {
         assert_eq!(
             absent_bytes, explicit_bytes,
             "font = \"document\" must be byte-identical to an absent key"
+        );
+    }
+
+    /// A `file=` block renders byte-identical LaTeX to the same text pasted
+    /// inline: one code path, only the source differs.
+    #[test]
+    fn file_matches_inline_latex() {
+        let code = "def fib(n):\n    return n  # base\n";
+        let inline_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            inline_dir.path().join("main.tex"),
+            format!(
+                "\\documentclass{{article}}\n\\begin{{document}}\n\
+                 \\begin{{code}}[lang=python]\n{code}\\end{{code}}\n\
+                 \\end{{document}}\n"
+            ),
+        )
+        .unwrap();
+        // The real layout: the project root holds the script, the build
+        // directory only the copied `.tex` — `file=` never resolves against
+        // the build tree.
+        let file_root = tempfile::tempdir().unwrap();
+        let main = "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=python, file=fib.py]\n\
+             the body is ignored\n\
+             \\end{code}\n\
+             \\end{document}\n";
+        std::fs::write(file_root.path().join("fib.py"), code).unwrap();
+        std::fs::write(file_root.path().join("main.tex"), main).unwrap();
+        let file_build = tempfile::tempdir().unwrap();
+        std::fs::write(file_build.path().join("main.tex"), main).unwrap();
+
+        let inline_warnings = run(inline_dir.path(), "main.tex", Settings::default()).unwrap();
+        let file_warnings = run_with_root(
+            file_root.path(),
+            file_build.path(),
+            "main.tex",
+            Settings::default(),
+        )
+        .unwrap();
+        assert!(inline_warnings.is_empty(), "{inline_warnings:?}");
+        assert!(file_warnings.is_empty(), "{file_warnings:?}");
+        let inline_out = std::fs::read_to_string(inline_dir.path().join("main.tex")).unwrap();
+        let file_out = std::fs::read_to_string(file_build.path().join("main.tex")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file_root.path().join("main.tex")).unwrap(),
+            main,
+            "the project root is never rewritten"
+        );
+        assert!(
+            inline_out.contains("\\tfxcodestyle"),
+            "the inline fixture must really rewrite:\n{inline_out}"
+        );
+        assert_eq!(inline_out, file_out, "file= must match the inline render");
+    }
+
+    /// Every `lines=` form renders only its lines, with and without the
+    /// gutter; with `numbers` the gutter shows the file's own numbers (a
+    /// range starting at 2 starts at 2).
+    #[test]
+    fn lines_forms_and_numbering() {
+        let code = "l1\nl2\nl3\nl4\nl5\n";
+        for numbers in [true, false] {
+            for (spec, shown, hidden) in [
+                ("2-4", vec![2, 3, 4], vec![1, 5]),
+                ("2-", vec![2, 3, 4, 5], vec![1]),
+                ("-3", vec![1, 2, 3], vec![4, 5]),
+                ("3", vec![3], vec![1, 2, 4, 5]),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                std::fs::write(dir.path().join("s.py"), code).unwrap();
+                let gutter = if numbers { ", numbers=true" } else { "" };
+                std::fs::write(
+                    dir.path().join("main.tex"),
+                    format!(
+                        "\\documentclass{{article}}\n\\begin{{document}}\n\
+                         \\begin{{code}}[file=s.py, lines={spec}{gutter}]\n\
+                         \\end{{code}}\n\
+                         \\end{{document}}\n"
+                    ),
+                )
+                .unwrap();
+                let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+                assert!(warnings.is_empty(), "{spec}/{numbers}: {warnings:?}");
+                let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+                for n in shown {
+                    if numbers {
+                        assert!(
+                            out.contains(&format!("\\hbox to 2em{{\\hss {n}}}")),
+                            "{spec}/{numbers}: gutter must show {n}:\n{out}"
+                        );
+                    } else {
+                        assert!(
+                            out.contains(&format!("l{n}")),
+                            "{spec}/{numbers}: line {n} must render:\n{out}"
+                        );
+                    }
+                }
+                for n in hidden {
+                    if numbers {
+                        assert!(
+                            !out.contains(&format!("\\hss {n}}}")),
+                            "{spec}/{numbers}: gutter must not show {n}:\n{out}"
+                        );
+                    } else {
+                        assert!(
+                            !out.contains(&format!("l{n}")),
+                            "{spec}/{numbers}: line {n} must not render:\n{out}"
+                        );
+                    }
+                }
+                if !numbers {
+                    assert!(
+                        !out.contains("\\hbox to 2em"),
+                        "no gutter without numbers:\n{out}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Build-time `file=` failures name the block's source file and line,
+    /// the `file=` path, and the cause.
+    #[test]
+    fn file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("s.py"), "l1\nl2\n").unwrap();
+        for (spec, file, cause) in [
+            ("", "gone.py", "cannot read"),
+            ("lines=9-12", "s.py", "past the end"),
+            ("lines=bogus", "s.py", "malformed"),
+            ("", "../outside.py", "inside the project root"),
+        ] {
+            let opts = if spec.is_empty() {
+                format!("file={file}")
+            } else {
+                format!("file={file}, {spec}")
+            };
+            std::fs::write(
+                dir.path().join("main.tex"),
+                format!(
+                    "\\documentclass{{article}}\n\\begin{{document}}\n\
+                     \\begin{{code}}[{opts}]\n\
+                     \\end{{code}}\n\
+                     \\end{{document}}\n"
+                ),
+            )
+            .unwrap();
+            let err = run(dir.path(), "main.tex", Settings::default())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("main.tex:3"), "{opts}: {err}");
+            assert!(err.contains(file), "{opts}: {err}");
+            assert!(err.contains(cause), "{opts}: {err}");
+        }
+        // `lines=` without `file=` is an error too.
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lines=1-2]\nx\n\\end{code}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        let err = run(dir.path(), "main.tex", Settings::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("main.tex:3"), "{err}");
+        assert!(err.contains("lines= requires file="), "{err}");
+    }
+
+    /// Without `lang=`, the extension picks the syntax (and colours the
+    /// block); an unknown extension falls back to plain monospace silently.
+    #[test]
+    fn extension_inference() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("run.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.path().join("notes.weird"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[file=run.rs]\n\\end{code}\n\
+             \\begin{code}[file=notes.weird]\n\\end{code}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        let warnings = run(dir.path(), "main.tex", Settings::default()).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        let blocks: Vec<&str> = out.split("{\n\\tfxcodestyle").collect();
+        assert_eq!(blocks.len(), 3, "two blocks must render:\n{out}");
+        assert!(
+            blocks[1].contains("\\textcolor{tfxcol"),
+            "the .rs block must highlight:\n{out}"
+        );
+        assert!(
+            !blocks[2].contains("\\textcolor{tfxcol"),
+            "the .weird block must stay monochrome:\n{out}"
+        );
+    }
+
+    /// The file's text is embedded: no shell-escape or external-file command
+    /// may survive in the generated LaTeX.
+    #[test]
+    fn file_block_is_self_contained() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("s.py"), "x = \\input{y}\n").unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[file=s.py]\n\\end{code}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        for forbidden in [
+            "\\inputminted",
+            "\\lstinputlisting",
+            "\\input{",
+            "\\write18",
+        ] {
+            assert!(
+                !out.contains(forbidden),
+                "self-contained output must not contain {forbidden}:\n{out}"
+            );
+        }
+        assert!(
+            out.contains("\\textbackslash{}input"),
+            "the file text is embedded (escaped), not referenced:\n{out}"
         );
     }
 }
