@@ -95,10 +95,11 @@ Values resolve in this order, the first one that exists winning:
 4. the template default
 
 The project name is the value of `title` unless the values file sets `title`
-itself. Every key in the file must be a placeholder the template declares, and
-an unknown key fails the run naming both the unknown keys and the declared
-names. Values are substituted verbatim: they are LaTeX source, nothing is
-escaped, so a value may contain `\textbf{x}`, `&` or `%`.
+itself; that title is also written to `project.toml` as `[document] title`, so
+the PDF is named after it. Every key in the file must be a placeholder the
+template declares, and an unknown key fails the run naming both the unknown
+keys and the declared names. Values are substituted verbatim: they are LaTeX
+source, nothing is escaped, so a value may contain `\textbf{x}`, `&` or `%`.
 
 A required placeholder left without a value fails the run, reporting every
 missing placeholder and its description, and the directory the run created is

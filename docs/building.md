@@ -8,7 +8,10 @@ order: 4
 
 ## `texforge build`
 
-Compiles the project to `<title>.pdf` in the project root. The file name is the `[document] title` in lowercase with every run of characters other than letters and digits replaced by one hyphen (no leading or trailing hyphen); `My Thesis: Final Version` gives `my-thesis-final-version.pdf`:
+Compiles the project to `<title>.pdf` in the project root. The file name is the
+`[document] title` in lowercase with every run of characters other than letters
+and digits replaced by one hyphen, and no leading or trailing hyphen, so
+`My Thesis: Final Version` becomes `my-thesis-final-version.pdf`:
 
 1. Copies sources into a temporary build directory (originals are never
    modified).

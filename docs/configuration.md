@@ -73,7 +73,7 @@ entry = "main.tex"
 
 | Key | Description |
 |---|---|
-| `document.title` | Document title |
+| `document.title` | Document title. `texforge new` writes the `title` from `--values` when the file sets one, otherwise the project name. It also names the built PDF (see [Building](building.md)). |
 | `document.author` | Document author |
 | `document.template` | Template the project was created from |
 | `build.entry` | Entry `.tex` file passed to the engine |
