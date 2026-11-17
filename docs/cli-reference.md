@@ -94,6 +94,20 @@ Default scope is global (`~/.texforge/spell-words`). Both scopes are unioned at 
 |---|---|
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, and project |
 
+## Agent skill
+
+| Command | Description |
+|---|---|
+| `texforge skill` | Print the agent skill embedded in this binary |
+| `texforge skill --references` | Also print the bundled reference files, each preceded by `=== references/<name> ===` |
+| `texforge skill --list` | List the bundled reference file names, one per line |
+
+The skill is embedded at build time from `skill/` in the repository, so the text
+always matches the installed version and nothing is installed or synced apart.
+It is printed to stdout only; `--references` and `--list` are mutually
+exclusive. The text names the version that printed it, so a stale copy can be
+spotted.
+
 ## Maintenance
 
 | Command | Description |

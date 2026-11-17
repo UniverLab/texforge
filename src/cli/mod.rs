@@ -116,6 +116,15 @@ enum Commands {
     },
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
+    /// Print the agent skill embedded in this binary
+    Skill {
+        /// Also print the bundled reference files
+        #[arg(long, conflicts_with = "list")]
+        references: bool,
+        /// List the bundled reference file names, one per line
+        #[arg(long)]
+        list: bool,
+    },
     /// Update texforge to the latest stable release (always asks first)
     ///
     /// Exit codes: 0 = up to date (or update installed / declined /
@@ -307,6 +316,7 @@ impl Cli {
                 commands::spell::execute(action)
             }
             Commands::Doctor => commands::doctor::execute(),
+            Commands::Skill { references, list } => commands::skill::execute(list, references),
             Commands::Update { check, yes } => {
                 // `update` reports status through exit codes — 0 up to date,
                 // 1 update available (`--check`), 2 the check itself could not
