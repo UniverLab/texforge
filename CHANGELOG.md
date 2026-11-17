@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An outdated managed Tectonic is updated to the supported version on the next build or `doctor`, which also warns when the Tectonic in `PATH` is older than the supported one.
 - `texforge template list` prints the built-in `general` template once under `Installed:`, even when a downloaded copy of `general` is cached.
 - Piping output to a closed pipe (e.g. `texforge skill | head`) now exits quietly with code 0.
+- `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
 
 ### Added
 

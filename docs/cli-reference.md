@@ -61,7 +61,8 @@ texforge new <name> [-t <template>] [--values <file>]
 | `--values` | path to a `.toml`, `.yaml` or `.yml` file | none |
 
 The `--values` file fills template placeholders; its keys are echoed into
-the project as `values.toml`.
+the project as `values.toml`. A `title` key also sets `[document] title`
+in the generated `project.toml`, so the PDF is named after it.
 
 Example:
 

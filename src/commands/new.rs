@@ -79,9 +79,10 @@ pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -
     // backslashes, so every interpolated string goes through the TOML escaper:
     // a raw `author` would otherwise produce a manifest nothing can parse.
     let author = values.get("author").map_or("Author", String::as_str);
+    let title = values.get("title").map_or(name, String::as_str);
     let project_toml = format!(
         r#"[document]
-title = {name}
+title = {title}
 author = {author}
 template = {template_name}
 
@@ -89,7 +90,7 @@ template = {template_name}
 entry = "main.tex"
 bibliography = "bib/references.bib"
 "#,
-        name = values_file::toml_string(name),
+        title = values_file::toml_string(title),
         author = values_file::toml_string(author),
         template_name = values_file::toml_string(template_name),
     );
@@ -711,6 +712,58 @@ required = true
         assert!(
             main.contains("\\author{A \\& \"B\" }"),
             "the author must reach main.tex verbatim:\n{main}"
+        );
+    }
+
+    #[test]
+    fn values_title_reaches_project_toml() {
+        let (result, root) = run_new(
+            None,
+            None,
+            Some(("client.toml", "title = \"My \\\"Great\\\" Report\"\n")),
+        );
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["title"].as_str(),
+            Some("My \"Great\" Report"),
+            "the values title must reach project.toml:\n{manifest}"
+        );
+    }
+
+    #[test]
+    fn project_toml_title_defaults_to_the_project_name() {
+        let (result, root) = run_new(None, None, None);
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["title"].as_str(),
+            Some("demo"),
+            "without a values title the project name is the title:\n{manifest}"
+        );
+    }
+
+    #[test]
+    fn title_with_a_backslash_round_trips_into_project_toml() {
+        let (result, root) = run_new(None, None, Some(("client.toml", "title = \"A \\\\ B\"\n")));
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["title"].as_str(),
+            Some("A \\ B"),
+            "a backslash title must round-trip through project.toml:\n{manifest}"
         );
     }
 
