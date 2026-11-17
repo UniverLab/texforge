@@ -121,12 +121,12 @@ flowchart LR
 \end{mermaid}
 ```
 
-| Preset | Effect |
-|---|---|
-| `default` | Each renderer's own untouched default. Omitting `style=` always renders this — no existing document changes appearance. |
-| `editorial` | Restrained palette, one accent colour, no drop shadows, thin strokes, generous whitespace. |
-| `monochrome` | Greyscale only — for documents printed in black and white. |
-| `technical` | Drafting register: uniform stroke weight, no fills, labels in a monospaced face where the renderer allows it. |
+| Preset | Effect | Suits |
+|---|---|---|
+| `default` | Each renderer's own untouched default. Omitting `style=` always renders this — no existing document changes appearance. | Any document that wants the renderers' own look. |
+| `editorial` | Restrained palette (ink `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`), one accent colour, no drop shadows, thin strokes, generous whitespace, EB Garamond type. | The `article` and `workshop` templates. |
+| `monochrome` | Greyscale only — for documents printed in black and white. | The `apa` templates. |
+| `technical` | Drafting register: uniform stroke weight, no fills, labels in a monospaced face where the renderer allows it. | The `ieee` template. |
 
 An unrecognised style name (e.g. `style=editoral`) fails the build with a
 message naming the value and listing the valid ones — it never silently
@@ -156,7 +156,8 @@ still renders and the build still succeeds even where a renderer can't
 express part of a preset.
 
 - **Mermaid** has the richest surface (a full theme: colours, font, layout
-  spacing), so every preset is expressed almost exactly.
+  spacing), so every preset is expressed almost exactly — colour, font and
+  spacing all carry over.
 - **D2** has native theming (a named colour palette), so presets map onto
   it with good fidelity. `technical`'s monospaced labels come from D2's own
   `mono` theme rule, which also adds minor drafting-style ornamentation
@@ -166,6 +167,7 @@ express part of a preset.
 - **Graphviz** has no theme concept at all — styling is per-node and
   per-edge only. Node fill/border colour and edge colour carry over, but a
   document-wide background is not expressible, and neither is a
-  monospaced label face (`technical`'s font rule has no effect here).
+  font family (`layout-rs` never reads `fontname`, so for Graphviz — as
+  for D2, which fixes its own faces — only colours change).
 
 See also: highlight source code with the [`code` environment](listings.md) — native syntax highlighting with no `listings`/`minted` setup.

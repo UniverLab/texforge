@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `editorial` diagram preset now uses the refreshed template palette
+  (ink `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`) with an
+  EB Garamond font stack for Mermaid, suiting the `article` and `workshop`
+  templates; `monochrome` (for the `apa` templates) and `technical` (for
+  `ieee`) gained matching font stacks, and D2/Graphviz render colours only.
+  Cached diagrams render once more after this change, then reuse the cache.
 - The release check used by `texforge init` moved into the updater so both
   paths share one lookup, throttled to once a day for the notice; `init`
   keeps its existing prompt-and-confirm behaviour.

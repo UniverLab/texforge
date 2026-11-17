@@ -226,6 +226,7 @@ fn content_hash(src: &str, style: DiagramStyle) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut hasher);
     (style as u8).hash(&mut hasher);
+    style.fingerprint().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -597,6 +598,69 @@ mod tests {
             content_hash(src, DiagramStyle::Default),
             content_hash(src, DiagramStyle::Editorial)
         );
+    }
+
+    #[test]
+    fn content_hash_includes_style_fingerprint() {
+        let src = "digraph G { A -> B }";
+        for style in [
+            DiagramStyle::Default,
+            DiagramStyle::Editorial,
+            DiagramStyle::Monochrome,
+            DiagramStyle::Technical,
+        ] {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            src.hash(&mut hasher);
+            (style as u8).hash(&mut hasher);
+            style.fingerprint().hash(&mut hasher);
+            assert_eq!(content_hash(src, style), hasher.finish());
+        }
+    }
+
+    /// Every `#rrggbb` token in `output` must have equal channels.
+    fn assert_grayscale(output: &str) {
+        let bytes = output.as_bytes();
+        let mut i = 0;
+        let mut checked = 0;
+        while i + 7 <= bytes.len() {
+            if bytes[i] == b'#' && bytes[i + 1..i + 7].iter().all(|b| b.is_ascii_hexdigit()) {
+                let channel = |k: usize| &output[i + 1 + k * 2..i + 3 + k * 2];
+                assert_eq!(
+                    channel(0),
+                    channel(1),
+                    "chromatic token {} in: {output}",
+                    &output[i..i + 7]
+                );
+                assert_eq!(
+                    channel(1),
+                    channel(2),
+                    "chromatic token {} in: {output}",
+                    &output[i..i + 7]
+                );
+                checked += 1;
+                i += 7;
+            } else {
+                i += 1;
+            }
+        }
+        assert!(checked > 0, "no colours found in: {output}");
+    }
+
+    #[test]
+    fn monochrome_mermaid_output_is_grayscale() {
+        let opts = style::mermaid_options(DiagramStyle::Monochrome);
+        assert_grayscale(&format!("{:?}", opts.theme));
+    }
+
+    #[test]
+    fn monochrome_d2_output_is_grayscale() {
+        assert_grayscale(&style::d2_prefix(DiagramStyle::Monochrome));
+    }
+
+    #[test]
+    fn monochrome_graphviz_output_is_grayscale() {
+        let injected = style::graphviz_inject("digraph G { A -> B }", DiagramStyle::Monochrome);
+        assert_grayscale(&injected);
     }
 
     #[test]
