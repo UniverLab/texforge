@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/UniverLab/texforge/main/scripts/ins
 irm https://raw.githubusercontent.com/UniverLab/texforge/main/scripts/install.ps1 | iex
 ```
 
-This downloads and installs `texforge`. No Rust toolchain required. Tectonic (the LaTeX engine) is installed automatically on first build. For 1.x releases the installer verifies the minisign signature of `SHA256SUMS.txt` and needs `minisign` on `PATH` (`apt install minisign` / `brew install minisign`) or `SKIP_SIGNATURE=1` to skip that check; Windows installs are checked by SHA256 only.
+This downloads and installs `texforge`. No Rust toolchain required. Tectonic (the LaTeX engine) is installed automatically on first build. For 1.x releases both installers verify the minisign signature of `SHA256SUMS.txt` and need `minisign` on `PATH` (`apt install minisign` / `brew install minisign` / `scoop install minisign`) or `SKIP_SIGNATURE=1` to skip that check.
 
 You can customize the install:
 

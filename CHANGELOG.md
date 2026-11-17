@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On release, set `date-released` and `version` in `CITATION.cff` to the release date and the released Cargo.toml version.
 - Release checksums (`SHA256SUMS.txt`) are now signed with minisign.
 - `texforge update` and `scripts/install.sh` verify the minisign signature of `SHA256SUMS.txt` before installing 1.x releases.
+- `scripts/install.ps1` verifies the minisign signature of `SHA256SUMS.txt` on 1.x releases (`SKIP_SIGNATURE=1` skips the check).
 
 ### Added
 

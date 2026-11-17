@@ -72,12 +72,12 @@ From version 1.0.0 every release signs `SHA256SUMS.txt` with minisign
 with no sums file, no signature file, or a bad signature is refused before
 anything is installed; 0.x releases predate signing and stay lenient.
 
-The quick installer (`scripts/install.sh`) performs the same signature check
-and needs the `minisign` tool on `PATH` for 1.x releases — install it with
-`apt install minisign` or `brew install minisign`, or set `SKIP_SIGNATURE=1`
-to skip the signature check (the SHA256 comparison still runs against the
-downloaded sums). The Windows installer (`scripts/install.ps1`) has no
-minisign tool available, so Windows installs are checked by SHA256 only.
+Both quick installers (`scripts/install.sh` on Linux/macOS and
+`scripts/install.ps1` on Windows) perform the same signature check and need the
+`minisign` tool on `PATH` for 1.x releases — install it with
+`apt install minisign`, `brew install minisign` or `scoop install minisign`
+(Windows), or set `SKIP_SIGNATURE=1` to skip the signature check (the SHA256
+comparison still runs against the downloaded sums).
 
 `texforge init` still shows a passive notice (at most once a day) when a
 newer release exists; that notice never downloads unless you answer yes.
