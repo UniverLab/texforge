@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - `outline`/`stats` no longer count `\section`/`\subsection` inside `\titleformat`/`\titlespacing*` args as empty sections.
+- `outline` and `stats` list starred sectioning commands (`\chapter*`, `\section*`, ...) unnumbered with an empty number, resolving title macros such as `\abstractname` to their English text.
 - On release, set `date-released` and `version` in `CITATION.cff` to the release date and the released Cargo.toml version.
 - Release checksums (`SHA256SUMS.txt`) are now signed with minisign.
 - `texforge update` and `scripts/install.sh` verify the minisign signature of `SHA256SUMS.txt` before installing 1.x releases.

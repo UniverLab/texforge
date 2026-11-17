@@ -77,14 +77,20 @@ pub enum Token {
     ///   (`\textit`, `\href`, `\textcolor`, dot-leader constructs, ...)
     ///   resolved to plain text and escaped specials (`\&`, `\%`, ...)
     ///   unescaped to their literal character — see
-    ///   [`resolve_section_title`]. This is what `outline`, `wordcount` and
-    ///   `pdftext` display: human-readable prose.
+    ///   [`resolve_section_title`]. A title that is exactly one standard
+    ///   heading macro (`\abstractname`, `\contentsname`, ...) instead
+    ///   resolves to that macro's English text; any other bare macro stays as
+    ///   written. This is what `outline`, `wordcount` and `pdftext` display:
+    ///   human-readable prose.
     /// * `raw_title` is the verbatim source text of that same braced
     ///   argument, escapes and macros intact. This is what the glyph linter
     ///   reads: it needs to see `\&` as still escaped to judge whether a
     ///   special character is protected.
     Section {
         level: u8,
+        /// True for the `*` form (`\section*{...}`), which LaTeX leaves
+        /// unnumbered.
+        starred: bool,
         title: String,
         raw_title: String,
     },
@@ -500,6 +506,7 @@ mod tests {
             tokens[2],
             Token::Section {
                 level: 2,
+                starred: false,
                 title: "Three".to_string(),
                 raw_title: "Three".to_string(),
             }
@@ -513,6 +520,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: true,
                 title: "Intro".to_string(),
                 raw_title: "Intro".to_string(),
             }]
@@ -526,6 +534,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: false,
                 title: "Full title".to_string(),
                 raw_title: "Full title".to_string(),
             }]
@@ -1148,16 +1157,17 @@ mod tests {
     /// title, plain, and space-before-brace (which reads an empty title).
     #[test]
     fn section_forms_stay_sections() {
-        for (src, title) in [
-            (r"\section*{Title}", "Title"),
-            (r"\section[Short]{Long}", "Long"),
-            (r"\section{Title}", "Title"),
+        for (src, title, starred) in [
+            (r"\section*{Title}", "Title", true),
+            (r"\section[Short]{Long}", "Long", false),
+            (r"\section{Title}", "Title", false),
         ] {
             let tokens = tokenize(src);
             assert_eq!(
                 tokens,
                 vec![Token::Section {
                     level: 2,
+                    starred,
                     title: title.to_string(),
                     raw_title: title.to_string(),
                 }],
@@ -1175,6 +1185,7 @@ mod tests {
             sections,
             vec![&Token::Section {
                 level: 2,
+                starred: false,
                 title: String::new(),
                 raw_title: String::new(),
             }],

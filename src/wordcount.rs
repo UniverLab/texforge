@@ -42,8 +42,8 @@ use crate::texparse::{tokenize, SectionTracker, Token, TokenizedFile};
 /// One counted section, or one `.tex` file in `--by file` mode.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SectionStat {
-    /// Dotted section number (`1`, `1.1`, `2.1.1`) in section mode; the
-    /// `.tex` file name in `--by file` mode.
+    /// Dotted section number (`1`, `1.1`, `2.1.1`) in section mode, empty for
+    /// a starred section; the `.tex` file name in `--by file` mode.
     pub path: String,
     /// Section level (`0` = part, ..., `6` = subparagraph) in section mode.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +97,23 @@ fn count_title_words(title: &str) -> usize {
 /// Numbering lives in [`crate::texparse::SectionTracker`], shared with the
 /// `outline` command so both JSON contracts number sections identically.
 type Section = (u8, String, String, usize);
+
+/// Start a section: flush the running one, number numbered sections via the
+/// tracker (starred sections keep an empty number and consume none), count
+/// the title words into the new section, and return them.
+fn begin_section(state: &mut CountState, level: u8, title: &str, starred: bool) -> usize {
+    if let Some(finished) = state.current.take() {
+        state.sections.push(finished);
+    }
+    let number = if starred {
+        String::new()
+    } else {
+        state.tracker.enter(level)
+    };
+    let title_words = count_title_words(title);
+    state.current = Some((level, number, title.to_string(), title_words));
+    title_words
+}
 
 /// Word counts collected in one pass over every token stream.
 struct RawCounts {
@@ -154,17 +171,17 @@ fn walk(idx: usize, files: &[TokenizedFile], state: &mut CountState, visited: &m
     for token in &files[idx].tokens {
         match token {
             Token::BeginDocument => state.in_document = true,
-            Token::Section { level, title, .. } => {
+            Token::Section {
+                level,
+                starred,
+                title,
+                ..
+            } => {
                 if !state.in_document {
                     continue;
                 }
-                if let Some(finished) = state.current.take() {
-                    state.sections.push(finished);
-                }
-                let number = state.tracker.enter(*level);
-                let title_words = count_title_words(title);
+                let title_words = begin_section(state, *level, title, *starred);
                 state.file_words[idx] += title_words;
-                state.current = Some((*level, number, title.clone(), title_words));
             }
             Token::Text(text) => {
                 if !state.in_document {
@@ -543,6 +560,23 @@ more text
         assert_eq!(
             paths_and_words(&stats),
             vec![("main.tex".to_string(), 2), ("ch1.tex".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn starred_section_has_no_number() {
+        let src = "\\begin{document}\n\\section{A}\nalpha\n\\section*{Notes}\nnote body\n\\section{B}\nbeta\n\\end{document}";
+        let stats = count_document("Doc", &files_from(&[("main.tex", src)]));
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["1", "", "2"]);
+        assert_eq!(stats.sections[1].title.as_deref(), Some("Notes"));
+        assert_eq!(
+            paths_and_words(&stats),
+            vec![
+                ("1".to_string(), 2),
+                ("".to_string(), 3),
+                ("2".to_string(), 2)
+            ]
         );
     }
 

@@ -6,8 +6,7 @@ mod commands;
 mod groups;
 mod math;
 
-use super::sections::section_level;
-use super::title::resolve_section_title;
+use super::sections::{resolve_title, section_level};
 use super::{is_command_char, SpannedToken, Token, TokenizedSource, PROSE_COMMANDS};
 
 /// Single-pass state machine over the character stream.
@@ -206,14 +205,15 @@ impl<'a> Parser<'a> {
     }
 
     fn handle_section(&mut self, level: u8, start: usize, tokens: &mut Vec<SpannedToken>) {
-        self.eat('*');
+        let starred = self.eat('*');
         let _ = self.read_bracket_group();
         let raw_title = self.read_braced_group().unwrap_or_default();
-        let title = resolve_section_title(&raw_title);
+        let title = resolve_title(&raw_title);
         self.push(
             tokens,
             Token::Section {
                 level,
+                starred,
                 title,
                 raw_title,
             },

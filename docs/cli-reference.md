@@ -481,6 +481,8 @@ Example:
 texforge outline --json
 ```
 
+Starred sectioning commands (`\chapter*`, `\section*`, ...) are listed unnumbered: they keep their level and title but consume no number.
+
 Exit codes: see the table.
 
 #### `texforge outline --json` fields
@@ -497,8 +499,8 @@ Each entry of `sections`:
 | Field | Type | Meaning |
 |---|---|---|
 | `level` | integer | section level (`0` = part, …, `4` = subsubsection) |
-| `number` | string | dotted section number (`1`, `1.1`, `2.1.1`) |
-| `title` | string | resolved section title (LaTeX markup stripped to text) |
+| `number` | string | dotted section number (`1`, `1.1`, `2.1.1`); empty for starred sections |
+| `title` | string | resolved section title (LaTeX markup stripped to text; a title that is exactly one standard macro such as `\abstractname` resolves to its English text) |
 | `file` | string | `.tex` file containing the section, relative to the project root |
 | `line` | integer | 1-based line of the section command within `file` |
 
@@ -514,6 +516,10 @@ texforge stats [--by <section|file>] [--json]
 |---|---|---|
 | `--by` | `section` or `file`: break down by section or by `.tex` file | `section` |
 | `--json` | none (switch): output JSON instead of a human-readable breakdown | off |
+
+In section mode a starred sectioning command (`\chapter*`, `\section*`, ...) has
+an empty section number: its words are reported under its title, with no number
+before it, and it consumes no number.
 
 Example:
 
@@ -539,7 +545,7 @@ Each entry of `sections`:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `path` | string | dotted section number, or the `.tex` file name with `--by file` |
+| `path` | string | dotted section number, or the `.tex` file name with `--by file`; empty for a starred section |
 | `level` | integer or absent | section level (`0` = part, …, `6` = subparagraph); absent with `--by file` |
 | `words` | integer | word count for this section or file |
 
