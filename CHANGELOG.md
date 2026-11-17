@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - On release, set `date-released` and `version` in `CITATION.cff` to the release date and the released Cargo.toml version.
+- Release checksums (`SHA256SUMS.txt`) are now signed with minisign.
 
 ### Added
 
