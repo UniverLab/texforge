@@ -485,6 +485,9 @@ Reports:
 - Available fonts and dictionaries
 - Whether the current directory is a recognized texforge project
 
+Like a build, `doctor` first updates an outdated managed Tectonic to the
+supported version, and flags a Tectonic in `PATH` that is older than it.
+
 ---
 
 ## Runtime Directory
