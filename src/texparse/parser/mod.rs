@@ -191,6 +191,37 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether a sectioning command is followed by a section argument: an
+    /// optional `*` immediately after the name, then `[` or `{` after
+    /// optional spaces. Anything else (`}`, `,`, another command, EOF)
+    /// means the command is a plain command, not a section.
+    fn section_argument_follows(&self) -> bool {
+        let rest = self.src[self.pos..]
+            .strip_prefix('*')
+            .unwrap_or(&self.src[self.pos..]);
+        rest.trim_start()
+            .chars()
+            .next()
+            .is_some_and(|c| c == '[' || c == '{')
+    }
+
+    fn handle_section(&mut self, level: u8, start: usize, tokens: &mut Vec<SpannedToken>) {
+        self.eat('*');
+        let _ = self.read_bracket_group();
+        let raw_title = self.read_braced_group().unwrap_or_default();
+        let title = resolve_section_title(&raw_title);
+        self.push(
+            tokens,
+            Token::Section {
+                level,
+                title,
+                raw_title,
+            },
+            start,
+            self.pos,
+        );
+    }
+
     pub(super) fn handle_command(
         &mut self,
         name: &str,
@@ -203,20 +234,11 @@ impl<'a> Parser<'a> {
             "verb" | "lstinline" => self.handle_verb_command(name, start, tokens),
             _ => {
                 if let Some(level) = section_level(name) {
-                    self.eat('*');
-                    let _ = self.read_bracket_group();
-                    let raw_title = self.read_braced_group().unwrap_or_default();
-                    let title = resolve_section_title(&raw_title);
-                    self.push(
-                        tokens,
-                        Token::Section {
-                            level,
-                            title,
-                            raw_title,
-                        },
-                        start,
-                        self.pos,
-                    );
+                    if self.section_argument_follows() {
+                        self.handle_section(level, start, tokens);
+                    } else {
+                        self.handle_plain_command(name, start, tokens);
+                    }
                 } else if name == "href" {
                     self.handle_href(start, tokens);
                 } else if PROSE_COMMANDS.contains(&name) {

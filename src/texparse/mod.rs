@@ -1119,4 +1119,102 @@ mod tests {
             ]
         );
     }
+
+    /// Sectioning commands inside `\titleformat`/`\titlespacing*` arguments
+    /// are not sections: `\section`/`\subsection` name the command, they do
+    /// not start one.
+    #[test]
+    fn sectioning_commands_as_arguments_are_not_sections() {
+        let tokens = tokenize(r"\titleformat{\section}{\Large}{}{0pt}{}");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Section { .. })),
+            "titleformat arg must not be a section: {tokens:?}"
+        );
+        let tokens = tokenize(r"\titlespacing*{\subsection}{0pt}{1ex}{1ex}");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Section { .. })),
+            "titlespacing arg must not be a section: {tokens:?}"
+        );
+        assert!(
+            tokens.contains(&Token::Command {
+                name: "subsection".to_string(),
+                args: vec![],
+            }),
+            "bare subsection is a plain command: {tokens:?}"
+        );
+    }
+
+    /// The four section forms keep their titles: starred, optional TOC
+    /// title, plain, and space-before-brace (which reads an empty title).
+    #[test]
+    fn section_forms_stay_sections() {
+        for (src, title) in [
+            (r"\section*{Title}", "Title"),
+            (r"\section[Short]{Long}", "Long"),
+            (r"\section{Title}", "Title"),
+        ] {
+            let tokens = tokenize(src);
+            assert_eq!(
+                tokens,
+                vec![Token::Section {
+                    level: 2,
+                    title: title.to_string(),
+                    raw_title: title.to_string(),
+                }],
+                "section form: {src}"
+            );
+        }
+        // A space before the brace still opens a section, but the group reads
+        // do not skip spaces, so the title reads empty.
+        let tokens = tokenize(r"\section {Title}");
+        let sections: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Section { .. }))
+            .collect();
+        assert_eq!(
+            sections,
+            vec![&Token::Section {
+                level: 2,
+                title: String::new(),
+                raw_title: String::new(),
+            }],
+            "space before brace: {tokens:?}"
+        );
+    }
+
+    /// A sectioning command at end of input is a plain command, never a
+    /// section, and tokenization stays panic-free.
+    #[test]
+    fn bare_sectioning_command_at_eof_is_plain() {
+        let tokens = tokenize(r"\section");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "section".to_string(),
+                args: vec![],
+            }]
+        );
+    }
+
+    /// A titlesec preamble adds no sections: the real sections that follow
+    /// still number `1` and `1.1`.
+    #[test]
+    fn preamble_titlesec_does_not_shift_numbers() {
+        let tokens = tokenize(
+            "\\titleformat{\\section}{}{}{}{}\n\\titlespacing*{\\section}{0pt}{1ex}{1ex}\n\\section{Introduction}\n\\subsection{A}",
+        );
+        let sections: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Section { .. }))
+            .collect();
+        assert_eq!(sections.len(), 2, "only real sections: {tokens:?}");
+        let mut tracker = SectionTracker::new(6);
+        let mut numbers = Vec::new();
+        for token in &tokens {
+            if let Token::Section { level, .. } = token {
+                numbers.push(tracker.enter(*level));
+            }
+        }
+        assert_eq!(numbers, vec!["1", "1.1"]);
+    }
 }

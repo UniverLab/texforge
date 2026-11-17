@@ -397,4 +397,15 @@ mod tests {
         std::env::set_current_dir(&orig).unwrap();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn preamble_titlesec_adds_no_outline_sections() {
+        let dir = write(&[(
+            "main.tex",
+            "\\titleformat{\\section}{}{}{}{}\n\\titleformat{\\subsection}{}{}{}{}\n\\titlespacing*{\\section}{0pt}{1ex}{1ex}\n\\begin{document}\n\\section{Introduction}\n\\subsection{Background}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(titles(&outline), vec!["Introduction", "Background"]);
+        assert_eq!(numbers(&outline), vec!["1", "1.1"]);
+    }
 }

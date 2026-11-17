@@ -128,4 +128,32 @@ mod tests {
         std::env::set_current_dir(&orig).unwrap();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn titlesec_adds_no_stats_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\titleformat{\\section}{}{}{}{}\n\\titleformat{\\subsection}{}{}{}{}\n\\begin{document}\n\\titlespacing*{\\subsection}{0pt}{1ex}{1ex}\n\\section{Introduction}\n\\subsection{Background}\n\\end{document}",
+        )
+        .unwrap();
+        let files = crate::texparse::tokenize_document(dir.path(), "main.tex");
+        let stats = crate::wordcount::count_document("Doc", &files);
+        assert!(
+            stats
+                .sections
+                .iter()
+                .all(|s| s.title != Some(String::new())),
+            "no empty-titled section: {:?}",
+            stats.sections
+        );
+        let titles: Vec<&str> = stats
+            .sections
+            .iter()
+            .map(|s| s.title.as_deref().unwrap_or(""))
+            .collect();
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(titles, vec!["Introduction", "Background"]);
+        assert_eq!(paths, vec!["1", "1.1"]);
+    }
 }
