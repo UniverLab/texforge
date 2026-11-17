@@ -1160,7 +1160,7 @@ mod tests {
         assert!(out.contains("\\textcolor{tfxcol22272e}"), "dark tint rule");
         assert!(out.contains("\\textcolor{tfxcol8b949e}"), "dark frame rule");
         assert!(
-            out.contains("\\textcolor{tfxcol8b949e}{\\hbox to 2em{\\hss 1}}"),
+            out.contains("\\textcolor{tfxcol8b949e}{\\hbox to 2em{\\hss \\tfxnoselect{1}}}"),
             "the gutter uses the dark comment colour: {out}"
         );
         assert!(
@@ -1494,8 +1494,8 @@ mod tests {
         );
 
         let out = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
-        assert!(out.contains("\\hbox to 2em{\\hss 1}"));
-        assert!(out.contains("\\hbox to 2em{\\hss 3}"));
+        assert!(out.contains("\\hbox to 2em{\\hss \\tfxnoselect{1}}"));
+        assert!(out.contains("\\hbox to 2em{\\hss \\tfxnoselect{3}}"));
         assert!(out.contains("\\definecolor{tfxgutter}"));
     }
 
@@ -2039,15 +2039,15 @@ mod tests {
 
         for (name, out) in [("flush", &flush_out), ("indented", &indented_out)] {
             assert!(
-                out.contains("\\hbox to 2em{\\hss 1}"),
+                out.contains("\\hbox to 2em{\\hss \\tfxnoselect{1}}"),
                 "{name} line 1: {out}"
             );
             assert!(
-                out.contains("\\hbox to 2em{\\hss 2}"),
+                out.contains("\\hbox to 2em{\\hss \\tfxnoselect{2}}"),
                 "{name} line 2: {out}"
             );
             assert!(
-                !out.contains("\\hbox to 2em{\\hss 3}"),
+                !out.contains("\\hbox to 2em{\\hss \\tfxnoselect{3}}"),
                 "{name}: an indented \\end{{code}} must not add a third, empty numbered line:\n{out}"
             );
         }
@@ -2622,7 +2622,7 @@ mod tests {
                 for n in shown {
                     if numbers {
                         assert!(
-                            out.contains(&format!("\\hbox to 2em{{\\hss {n}}}")),
+                            out.contains(&format!("\\hbox to 2em{{\\hss \\tfxnoselect{{{n}}}}}")),
                             "{spec}/{numbers}: gutter must show {n}:\n{out}"
                         );
                     } else {
@@ -2635,7 +2635,7 @@ mod tests {
                 for n in hidden {
                     if numbers {
                         assert!(
-                            !out.contains(&format!("\\hss {n}}}")),
+                            !out.contains(&format!("\\hss \\tfxnoselect{{{n}}}}}")),
                             "{spec}/{numbers}: gutter must not show {n}:\n{out}"
                         );
                     } else {

@@ -160,6 +160,7 @@ fn display_width(line: &str, numbers: bool, gutter_width: usize) -> usize {
 /// separator rule and the 0.8em gap are emitted separately by
 /// [`render_block`]).
 fn gutter(number: usize, width: usize, color: &str) -> String {
+    let number = format!("\\tfxnoselect{{{number}}}");
     format!("\\textcolor{{{color}}}{{\\hbox to {width}em{{\\hss {number}}}}}")
 }
 
@@ -803,7 +804,7 @@ mod tests {
         // The `\hss` precedes the digit: the number is right-aligned in its
         // gutter box, hugging the separator rule (FR3).
         assert!(
-            out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 1}}"),
+            out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss \\tfxnoselect{1}}}"),
             "right-aligned gutter: {out}"
         );
         assert!(
@@ -919,9 +920,18 @@ mod tests {
     #[test]
     fn numbered_blank_lines_keep_their_number() {
         let (out, _, _, _) = render("a\n\nb", None, &opts("main.tex", 1, true));
-        assert!(out.contains("\\hbox to 2em{\\hss 1}"), "out: {out}");
-        assert!(out.contains("\\hbox to 2em{\\hss 2}"), "out: {out}");
-        assert!(out.contains("\\hbox to 2em{\\hss 3}"), "out: {out}");
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{1}}"),
+            "out: {out}"
+        );
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{2}}"),
+            "out: {out}"
+        );
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{3}}"),
+            "out: {out}"
+        );
         assert!(
             !out.contains("\\mbox{}"),
             "the gutter box is the line: {out}"
@@ -1109,9 +1119,33 @@ mod tests {
     #[test]
     fn numbered_blocks_prefix_every_line_with_the_gutter() {
         let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, true));
-        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 1}}"));
-        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 2}}"));
+        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss \\tfxnoselect{1}}}"));
+        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss \\tfxnoselect{2}}}"));
         assert!(out.contains("\\hspace{0.8em}"));
+    }
+
+    /// Every numbered line wraps its digit in `\tfxnoselect` and nothing
+    /// else: one wrap per line, each holding that line's number (FR2).
+    #[test]
+    fn every_numbered_line_wraps_only_its_digit_in_tfxnoselect() {
+        let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, true));
+        assert_eq!(out.matches("\\tfxnoselect{").count(), 2, "out: {out}");
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{1}}"),
+            "out: {out}"
+        );
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{2}}"),
+            "out: {out}"
+        );
+    }
+
+    /// A block without numbering emits no `\tfxnoselect` and no gutter (FR2).
+    #[test]
+    fn unnumbered_blocks_never_wrap_the_gutter() {
+        let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, false));
+        assert!(!out.contains("\\tfxnoselect"), "out: {out}");
+        assert!(!out.contains("\\hbox to 2em"), "out: {out}");
     }
 
     #[test]

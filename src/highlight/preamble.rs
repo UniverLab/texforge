@@ -185,6 +185,14 @@ pub(crate) fn injected_block_with_caption(
     // emitted as `\tfxsp{}` and never as a `~` token.
     out.push_str(r"\newcommand{\tfxsp}{\nobreakspace{}}");
     out.push('\n');
+    // Copy suppression for the gutter: an empty `ActualText` marked-content
+    // span (XeTeX `\special`, no package) around the argument, so viewers
+    // that honour `ActualText` copy nothing of the line number while the
+    // digits still print. One group keeps the `BDC`/`EMC` pair balanced.
+    out.push_str(
+        r"\newcommand{\tfxnoselect}[1]{{\special{pdf:literal direct /Span << /ActualText <FEFF> >> BDC}#1\special{pdf:literal direct EMC}}}",
+    );
+    out.push('\n');
     out.push_str(&format!(
         "\\definecolor{{tfxtint}}{{rgb}}{{{}}}\n",
         frame.tint.to_rgb_list()
@@ -725,6 +733,41 @@ mod tests {
             .to_string();
         assert!(err.contains("no \\begin{document}"), "{err}");
         assert!(err.contains("main.tex"), "{err}");
+    }
+
+    /// The copy-suppression macro wraps its argument in one group holding an
+    /// empty `ActualText` span, `BDC` before the argument and `EMC` after it,
+    /// so the marked-content pair is balanced and the gutter copies as
+    /// nothing while it still prints (FR1, FR3).
+    #[test]
+    fn noselect_macro_wraps_an_empty_actual_text_span() {
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
+        assert!(block.contains("\\newcommand{\\tfxnoselect}[1]"), "{block}");
+        let definition = block
+            .lines()
+            .find(|line| line.contains("\\newcommand{\\tfxnoselect}"))
+            .unwrap();
+        assert_eq!(definition.matches(" BDC}").count(), 1, "{definition}");
+        assert_eq!(
+            definition
+                .matches("\\special{pdf:literal direct EMC}")
+                .count(),
+            1,
+            "{definition}"
+        );
+        let begin = definition.find("/ActualText <FEFF> >> BDC}").unwrap();
+        let argument = definition.find("#1").unwrap();
+        let end = definition
+            .find("\\special{pdf:literal direct EMC}")
+            .unwrap();
+        assert!(begin < argument && argument < end, "{definition}");
+        assert!(definition.ends_with("EMC}}}"), "{definition}");
     }
 
     #[test]

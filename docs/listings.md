@@ -257,7 +257,11 @@ border, and both keep their side borders and tint.
 
 With `numbers`, the gutter sits inside the frame: numbers right-aligned in
 the palette's comment colour, separated from the code by a 0.3pt rule in the
-border colour.
+border colour. Each number is wrapped in an empty PDF `ActualText` span, so
+selecting and copying the block in viewers that honour `ActualText` copies
+the code without the line numbers, while the numbers still print on the page.
+`numbers=false` removes the gutter everywhere, and viewers that ignore
+`ActualText` may still copy the digits.
 
 Vertical rhythm is `\medskip` before and after every inline block; a floated
 one (`pos=` other than `H`) has left the text flow, so it adds none. The
