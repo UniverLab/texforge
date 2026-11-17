@@ -28,6 +28,9 @@ enum Commands {
         /// Template name (default: basic)
         #[arg(short, long)]
         template: Option<String>,
+        /// Fill template placeholders from a .toml, .yaml or .yml file
+        #[arg(long, value_name = "FILE")]
+        values: Option<PathBuf>,
     },
     /// Compile project to PDF
     Build {
@@ -234,7 +237,11 @@ impl Cli {
         match self.command {
             Commands::Clean => commands::clean::execute(),
             Commands::Init => commands::init::execute(),
-            Commands::New { name, template } => commands::new::execute(&name, template.as_deref()),
+            Commands::New {
+                name,
+                template,
+                values,
+            } => commands::new::execute(&name, template.as_deref(), values.as_deref()),
             Commands::Build {
                 watch,
                 delay,
@@ -416,6 +423,33 @@ mod tests {
                 assert!(yes);
             }
             _ => panic!("`texforge update --yes` must parse into Commands::Update"),
+        }
+    }
+
+    /// `texforge new --values` must reach the command with the path intact.
+    #[test]
+    fn new_accepts_a_values_file() {
+        let cli = Cli::try_parse_from([
+            "texforge",
+            "new",
+            "demo",
+            "-t",
+            "contract",
+            "--values",
+            "client.toml",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::New {
+                name,
+                template,
+                values,
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(template.as_deref(), Some("contract"));
+                assert_eq!(values.as_deref(), Some(std::path::Path::new("client.toml")));
+            }
+            _ => panic!("`texforge new` must parse into Commands::New"),
         }
     }
 

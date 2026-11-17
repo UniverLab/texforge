@@ -70,6 +70,44 @@ manifest. When you create a project, texforge fills them from your answers
 and from your [global configuration](configuration.md) — so you don't
 retype your name and institution for every document.
 
+### Filling placeholders from a file
+
+`texforge new` accepts `--values <FILE>`, a flat table of placeholder name to
+value, so documents such as contracts, orders and audit reports are produced
+from data:
+
+```bash
+texforge new contract-2026 -t contract --values client.toml
+```
+
+The format follows the extension: `.toml` parses as TOML, `.yaml` and `.yml`
+as YAML. Any other extension is an error. Every value must be a string, an
+integer, a float or a boolean — a nested table, an array or a null is
+rejected with the offending key.
+
+Values resolve in this order, the first one that exists winning:
+
+1. the `--values` file
+2. the project config (`./.texforge/config.toml`)
+3. your user config (`~/.texforge/config.toml`)
+4. the template default
+
+The project name is the value of `title` unless the values file sets `title`
+itself. Every key in the file must be a placeholder the template declares, and
+an unknown key fails the run naming both the unknown keys and the declared
+names. Values are substituted verbatim: they are LaTeX source, nothing is
+escaped, so a value may contain `\textbf{x}`, `&` or `%`.
+
+A required placeholder left without a value fails the run, reporting every
+missing placeholder and its description, and the directory the run created is
+removed. Optional placeholders without a value are left as they are.
+
+With `--values`, the values used are also written to `values.toml` in the new
+project: a header comment, then one `key = "value"` line per key of that file,
+sorted by key. Only the file's own keys are written — never values that came
+from your configuration. Keep the file with the document and pass it back to
+`texforge new --values` to regenerate from the same data.
+
 ## Writing your own template
 
 A template is a directory with a manifest describing its files and

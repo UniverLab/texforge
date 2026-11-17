@@ -35,6 +35,10 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
 
+# YAML values files for `texforge new --values`: a maintained, pure-Rust fork
+# of the unmaintained serde_yaml.
+serde_norway = "0.9"
+
 # JSON output (texforge stats --json)
 serde_json = "1.0"
 

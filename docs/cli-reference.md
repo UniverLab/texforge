@@ -16,6 +16,7 @@ texforge <command> [options]
 |---|---|
 | `texforge new <name>` | Create a new project from the default template |
 | `texforge new <name> -t <template>` | Create with a specific template |
+| `texforge new <name> --values <file>` | Fill template placeholders from a `.toml`, `.yaml` or `.yml` file (writes `values.toml` in the project) |
 | `texforge init` | Interactive wizard — new project or migrate an existing one |
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `texforge new --values <FILE>` fills the placeholders a template declares
+  from a flat TOML (`.toml`) or YAML (`.yaml`, `.yml`) table: strings,
+  integers, floats and booleans, with file values winning over the project
+  config, the user config and the template defaults. The values used are
+  written to `values.toml` in the new project. A key the template does not
+  declare fails the run listing the unknown and the declared names, and a
+  required placeholder with no value now fails the run instead of leaving a
+  raw `{{name}}` in the generated document (the directory the run created is
+  removed).
 - `texforge update` — the explicit self-update command. It fetches the latest
   stable GitHub release (drafts and prereleases excluded), always asks before
   replacing the running binary (default **NO**, `--yes` skips the prompt),

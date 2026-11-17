@@ -24,6 +24,7 @@ mod test_sync;
 mod texparse;
 mod texutil;
 mod utils;
+mod values_file;
 mod version;
 mod wordcount;
 
