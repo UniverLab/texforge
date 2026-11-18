@@ -25,6 +25,7 @@ mod engine;
 mod fontspec_scan;
 mod ink;
 mod linemap;
+mod overlap;
 mod palette;
 mod preamble;
 pub(crate) mod source;
@@ -1779,6 +1780,22 @@ mod tests {
             eprintln!("blessed {path}");
         }
         assert_eq!(actual, snapshot(name));
+    }
+
+    /// A dark block with numbers: the frame rules carry the overlap so a
+    /// return to abutting per-line boxes fails this snapshot.
+    #[test]
+    fn dark_block_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{code}[lang=bash, style=dark, numbers=true]\necho one\necho two\necho three\n\\end{code}\n\\end{document}\n",
+        )
+        .unwrap();
+        run(dir.path(), "main.tex", Settings::default()).unwrap();
+        let actual = std::fs::read_to_string(dir.path().join("main.tex")).unwrap();
+        bless_or_compare("frame-dark.tex", &actual);
     }
 
     /// A framed block without numbers: no gutter, no separator, frame and

@@ -174,17 +174,20 @@ fn gutter_width(line_count: usize) -> usize {
 /// Vertical geometry of one line's frame overlay: `(raise, height)`.
 ///
 /// The mid-line rule covers the line's depth (`-3pt`, safe for `\small`
-/// descenders) up to `\baselineskip - 3pt`. The first line extends 3.4pt
+/// descenders) up to `\baselineskip - 3pt`, plus the [`overlap`](super::overlap)
+/// extension so consecutive rules overlap instead of abutting (rounding left
+/// a hairline of paper between them on dark backgrounds). The first line extends 3.4pt
 /// above (3pt top padding + the 0.4pt top border) and the last 3.4pt below,
-/// so the tint edge and the border coincide; a single-line block extends
-/// both ways (6.8pt total). All overlays are zero-metric (`\tfxsmash` +
+/// so the tint edge and the border coincide, and the last line also carries
+/// the overlap above so its top meets the previous line; a single-line block
+/// extends both ways (6.8pt total). All overlays are zero-metric (`\tfxsmash` +
 /// `\rlap`), so page breaking and line widths are exactly as without them.
 fn geometry(first: bool, last: bool) -> (&'static str, String) {
     match (first, last) {
         (true, true) => ("-6.4pt", "\\dimexpr\\baselineskip+6.8pt\\relax".to_string()),
         (true, false) => ("-3pt", "\\dimexpr\\baselineskip+3.4pt\\relax".to_string()),
-        (false, true) => ("-6.4pt", "\\dimexpr\\baselineskip+3.4pt\\relax".to_string()),
-        (false, false) => ("-3pt", "\\baselineskip".to_string()),
+        (false, true) => ("-6.4pt", super::overlap::last_line_height()),
+        (false, false) => ("-3pt", super::overlap::mid_line_height()),
     }
 }
 
