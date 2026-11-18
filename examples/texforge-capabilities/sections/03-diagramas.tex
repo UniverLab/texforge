@@ -259,12 +259,12 @@ flechas marcan dependencias.
 
 \subsection{D2}
 
-La figura~\ref{fig:pipeline} resume el trabajo como una tubería con la
+La figura~\ref{fig:pipeline} resume el trabajo como un pipeline con la
 sintaxis de D2: escribir, revisar, componer e inspeccionar, cada etapa con
 su comando dentro de la caja, y el artefacto que produce la salida. La
 arista a trazos marca el paso de verificación.
 
-\begin{d2}[width=1.0\linewidth, caption={Tubería de trabajo, de la escritura a la inspección}, label={fig:pipeline}, pos=H]
+\begin{d2}[width=1.0\linewidth, caption={Flujo de trabajo, de la escritura a la inspección}, label={fig:pipeline}, pos=H]
   direction: down
 
   classes: {
@@ -282,7 +282,7 @@ arista a trazos marca el paso de verificación.
     class: etapa
   }
 
-  flujo: Tubería {
+  flujo: Pipeline {
     grid-columns: 2
     escribir: "Escribir\nfuente .tex" {
       shape: document
