@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Piping output to a closed pipe (e.g. `texforge skill | head`) now exits quietly with code 0.
 - `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
 - `texforge check` resolves `\ref` to a `label=` option on `mermaid`, `d2` and `graphviz` blocks, with or without a `caption`.
+- The example directory was renamed to `texforge-capabilities` (the old name was misspelled).
 
 ### Added
 

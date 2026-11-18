@@ -297,7 +297,7 @@ mod tests {
         // section has already opened on an earlier page (`current` is
         // already `Some`), which is the actual shape of the bug: a
         // first-page-with-any-match short-circuit made this look fixed
-        // while the real failure (pages 4-6 of examples/texforge-capabilites,
+        // while the real failure (pages 4-6 of examples/texforge-capabilities,
         // each carrying a section already open from before) went uncaught.
         let pages = vec![
             "Alpha\nBody under Alpha.".to_string(),
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn line_is_section_heading_matches_dotted_numbering() {
-        // The real heading line from examples/texforge-capabilites.
+        // The real heading line from examples/texforge-capabilities.
         assert!(line_is_section_heading(
             "2.4. Estilos de Diagrama (style)",
             "Estilos de Diagrama (style)"
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn line_is_section_heading_rejects_table_of_contents_line_te_d() {
-        // TF-D: the table-of-contents entry from examples/texforge-capabilites
+        // TF-D: the table-of-contents entry from examples/texforge-capabilities
         // carries the same numbering prefix and title as the real heading,
         // but with dot leaders and a page number trailing it. That must not
         // match — a false match here is the same class of lie TE9 removed.
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn page_breaks_numbered_heading_matches_and_toc_does_not_te_d() {
         // TF-D: reproduces the bug with the real lines from
-        // examples/texforge-capabilites — a table of contents listing the
+        // examples/texforge-capabilities — a table of contents listing the
         // heading (with dot leaders and a page number) must not be mistaken
         // for the heading itself, which appears later as its own line.
         let pages = vec![
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn line_is_section_heading_rejects_leaderless_table_of_contents_line_tf_f() {
-        // TF-F: examples/texforge-capabilites' table of contents has a
+        // TF-F: examples/texforge-capabilities' table of contents has a
         // *second* shape for top-level entries — no dot leaders at all,
         // just the title then a bare page number. `d9af352` only ever
         // tested the dot-leader shape; this must be rejected too.
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn page_breaks_leaderless_toc_entry_never_matches_tf_f() {
         // TF-F: reproduces the second bug shape with the real lines from
-        // examples/texforge-capabilites — a leaderless top-level TOC entry
+        // examples/texforge-capabilities — a leaderless top-level TOC entry
         // must not be mistaken for the heading itself.
         let pages = vec![
             "Table of Contents\n3. Matemáticas 4".to_string(),
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn page_breaks_full_example_structure_tf_g() {
-        // TF-G: a seven-page fixture reproducing examples/texforge-capabilites'
+        // TF-G: a seven-page fixture reproducing examples/texforge-capabilities'
         // actual structure — TOC page mixing both TOC shapes (leaderless
         // top-level entries, dot-leader subsection entries), then the real
         // per-page content including the garbled letter-spaced text that
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn page_breaks_defect_2_regression_heading_preceded_by_diagram_junk() {
         // Regression for defect 2: `2.4. Estilos de Diagrama (style)` is a
-        // real heading line from examples/texforge-capabilites (page 3 of
+        // real heading line from examples/texforge-capabilities (page 3 of
         // the compiled PDF), but it is preceded by the garbled letter-spaced
         // text `pdf-extract` produces for the Mermaid diagram rendered at
         // the top of that page ("l o o p [ D i a g r a m a s ... ]", the

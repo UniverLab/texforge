@@ -6,4 +6,4 @@ pub(super) const MALFORMED_DATE_PDF: &[u8] =
     include_bytes!("../../tests/fixtures/malformed-date.pdf");
 
 pub(super) const CAPABILITIES_PDF: &[u8] =
-    include_bytes!("../../examples/texforge-capabilites/texforge-capabilites.pdf");
+    include_bytes!("../../examples/texforge-capabilities/texforge-capabilities.pdf");

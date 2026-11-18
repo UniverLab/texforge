@@ -21,7 +21,7 @@ type = "terminal"
 [[sources]]
 id = "pdf"
 type = "browser"
-url = "file:///home/jheisonmblivecom/Projects/UniverLab/texforge/examples/texforge-capabilites/texforge-capabilites.pdf"
+url = "file:///home/jheisonmblivecom/Projects/UniverLab/texforge/examples/texforge-capabilities/texforge-capabilities.pdf"
 
 [layout]
 width = 1440
@@ -48,7 +48,7 @@ x = 0
 y = 0
 width = 1440
 height = 1080
-url = "file:///home/jheisonmblivecom/Projects/UniverLab/texforge/examples/texforge-capabilites/texforge-capabilites.pdf"
+url = "file:///home/jheisonmblivecom/Projects/UniverLab/texforge/examples/texforge-capabilities/texforge-capabilities.pdf"
 reveal_at = 262.448
 
 [[timeline]]
@@ -91,7 +91,7 @@ quiet_ms = 1500
 
 [[timeline]]
 action = "type"
-text = 'Create a texforge project "texforge-capabilites" demonstrating all capabilities: Mermaid sequence diagram, Graphviz architecture digraph, D2 pipeline diagram, math equations with cross-refs, BibTeX citations, tikz diagram, examples of code listings, two booktabs tables, table of contents, and lists. Compile with texforge build.'
+text = 'Create a texforge project "texforge-capabilities" demonstrating all capabilities: Mermaid sequence diagram, Graphviz architecture digraph, D2 pipeline diagram, math equations with cross-refs, BibTeX citations, tikz diagram, examples of code listings, two booktabs tables, table of contents, and lists. Compile with texforge build.'
 human_salt = true
 
 [[timeline]]
