@@ -265,7 +265,10 @@ lets one document mix styles.
 The frame is painted per line with zero-size overlays, so page breaking
 works exactly as without it and a block split across pages stays open at
 the break: the first fragment has no bottom border, the second no top
-border, and both keep their side borders and tint.
+border, and both keep their side borders and tint. Consecutive line
+backgrounds overlap slightly, so the tint reads as one continuous
+background with no hairline between lines, on dark styles and light ones
+alike.
 
 With `numbers`, the gutter sits inside the frame: numbers right-aligned in
 the palette's comment colour, separated from the code by a 0.3pt rule in the
