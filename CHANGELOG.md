@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- In the `ink` code-listing style, gutter line numbers now render in grey so they do not compete with the code.
 - The capabilities example regained the Mermaid preset comparison and got richer Graphviz, D2 and TikZ figures.
 - Code listings default to DejaVu Sans Mono unless `[highlight] font` is set or project sources load fontspec; set `font = "document"` to keep the preamble's typewriter family.
 - The default DejaVu Sans Mono listing font now survives OpenType text packages (such as `ebgaramond`/`sourcesanspro`) that pull in fontspec: the injection re-selects T1 with the installed family when fontspec is loaded, so listings still embed DejaVu Sans Mono instead of falling back to Latin Modern.

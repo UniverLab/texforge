@@ -209,13 +209,14 @@ print edition:
 | `light-mono` | greys only — keywords bold, comments italic | `#f6f6f6` |
 | `dark` | the dark twin of the theme: GitHub Dark Dimmed or One Dark | `#22272e`, `#282c34` |
 | `dark-mono` | greys only, on a dark frame | `#2b2b2b` |
-| `ink` | pure black on white — bold keywords and numbers, bold-italic names, italic comments | `#ffffff` |
+| `ink` | black on white with grey gutter numbers — bold keywords and numbers, bold-italic names, italic comments | `#ffffff` |
 
 `theme` still picks the *palette family* (`github` / `one-light`) and `style`
 picks light vs dark vs monochrome; a `dark` block takes its colours from the
 dark twin of the theme. The two `-mono` styles ignore `theme`: with hue gone
 there is nothing left for the family to decide. `ink` is meant for
-black-only printing and likewise ignores `theme`. An unknown style name fails
+single-ink printing and likewise ignores `theme`; gutter line numbers render
+in grey (`#8a8a8a`) so they do not compete with the code. An unknown style name fails
 the build, naming the value and listing the valid ones.
 
 The style of a block is resolved most-specific-first:

@@ -364,15 +364,17 @@ const LIGHT_MONO: Palette = Palette {
     legacy_light: false,
 };
 
-/// Pure black on white for single-ink printing: no grey text, no tinted
-/// frame. Token classes are told apart by weight and shape: bold keywords and
-/// numbers, bold-italic names, italic comments, everything else regular.
+/// Pure black on white for single-ink printing: no tinted frame and no grey
+/// token text. Token classes are told apart by weight and shape: bold
+/// keywords and numbers, bold-italic names, italic comments, everything else
+/// regular. Gutter line numbers are a light grey so they do not compete with
+/// the code.
 const INK: Palette = Palette {
     name: "ink",
     base: Rgb::new(0x00, 0x00, 0x00),
     tint: Rgb::new(0xff, 0xff, 0xff),
     frame: Rgb::new(0x00, 0x00, 0x00),
-    gutter: Rgb::new(0x00, 0x00, 0x00),
+    gutter: Rgb::new(0x8a, 0x8a, 0x8a),
     colors: [
         Rgb::new(0x00, 0x00, 0x00), // comment
         Rgb::new(0x00, 0x00, 0x00), // string
@@ -788,18 +790,33 @@ mod tests {
         assert_eq!(FontStyle::from(SyntectFont::UNDERLINE), FontStyle::Normal);
     }
 
-    /// `ink` is black on white only: every value is pure black except the
-    /// white tint, so a black-only print loses nothing.
+    /// `ink` stays single-ink printable: the frame and every token are
+    /// black, the tint is white, and the gutter numbers are a light grey so
+    /// they do not compete with the code. No other colour enters the style.
     #[test]
-    fn ink_palette_is_black_and_white() {
+    fn ink_palette_contains_only_greys_and_black() {
         let black = Rgb::new(0, 0, 0);
         let white = Rgb::new(0xff, 0xff, 0xff);
+        let grey = Rgb::new(0x8a, 0x8a, 0x8a);
         for theme in [HighlightTheme::Github, HighlightTheme::OneLight] {
             let ink = palette(theme, HighlightStyle::Ink);
             assert_eq!(ink.tint, white, "{theme:?}: tint must be white");
             assert_eq!(ink.base, black, "{theme:?}: base must be black");
             assert_eq!(ink.frame, black, "{theme:?}: frame must be black");
-            assert_eq!(ink.gutter, black, "{theme:?}: gutter must be black");
+            assert_eq!(ink.gutter, grey, "{theme:?}: gutter must be grey");
+            for color in ink
+                .colors()
+                .iter()
+                .copied()
+                .chain([ink.base, ink.tint, ink.frame, ink.gutter])
+            {
+                assert_eq!(color.r, color.g, "{theme:?}: {color:?} must be a pure grey");
+                assert_eq!(color.g, color.b, "{theme:?}: {color:?} must be a pure grey");
+                assert!(
+                    color == black || color == white || color == grey,
+                    "{theme:?}: {color:?} must be black, white, or the gutter grey"
+                );
+            }
             for color in ink.colors().iter() {
                 assert_eq!(*color, black, "{theme:?}: {color:?} must be black");
             }
