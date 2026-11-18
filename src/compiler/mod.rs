@@ -1,5 +1,7 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
+pub(crate) mod tectonic_version;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
@@ -364,9 +366,31 @@ fn print_warnings(warnings: &[CompileWarning], verbose: bool) {
     }
 }
 
+/// Refresh the managed Tectonic copy when it is older than the pinned
+/// version. A missing home directory is `Absent`, never a new error —
+/// `doctor` must not newly fail because of the refresh.
+pub(crate) fn refresh_managed_tectonic() -> tectonic_version::Refresh {
+    tectonic_managed_path()
+        .map(|m| {
+            tectonic_version::refresh_managed_if_outdated(&m, TECTONIC_VERSION, &install_tectonic)
+        })
+        .unwrap_or(tectonic_version::Refresh::Absent)
+}
+
 /// Find the tectonic binary in PATH or known locations, auto-installing if needed.
 fn find_tectonic() -> Result<std::path::PathBuf> {
+    refresh_managed_tectonic();
     if let Some(path) = locate_tectonic() {
+        if let Some(version) = tectonic_version::query_tectonic_version(&path) {
+            if tectonic_version::is_older(&version, TECTONIC_VERSION) {
+                eprintln!(
+                    "warning: Tectonic {} at {} is older than the {} that texforge supports; BibTeX fixes are missing. Remove it from PATH or run 'texforge doctor'.",
+                    version,
+                    path.display(),
+                    TECTONIC_VERSION
+                );
+            }
+        }
         return Ok(path);
     }
     eprintln!("Tectonic not found. Installing automatically...");
@@ -415,6 +439,19 @@ const TECTONIC_BIN: &str = "tectonic.exe";
 #[cfg(not(windows))]
 const TECTONIC_BIN: &str = "tectonic";
 
+pub(crate) const TECTONIC_VERSION: &str = "0.17.0";
+
+fn tectonic_download_url(target: &str) -> String {
+    let filename = if target.contains("windows") {
+        format!("tectonic-{TECTONIC_VERSION}-{target}.zip")
+    } else {
+        format!("tectonic-{TECTONIC_VERSION}-{target}.tar.gz")
+    };
+    format!(
+        "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{TECTONIC_VERSION}/{filename}"
+    )
+}
+
 fn tectonic_managed_path() -> Result<std::path::PathBuf> {
     dirs::home_dir()
         .map(|h| h.join(".texforge").join("bin").join(TECTONIC_BIN))
@@ -424,19 +461,10 @@ fn tectonic_managed_path() -> Result<std::path::PathBuf> {
 /// Download and install tectonic to the given path.
 fn install_tectonic(dest: &std::path::Path) -> Result<()> {
     let target = current_target()?;
-    let version = "0.15.0";
-    let (filename, is_zip) = if target.contains("windows") {
-        (format!("tectonic-{}-{}.zip", version, target), true)
-    } else {
-        (format!("tectonic-{}-{}.tar.gz", version, target), false)
-    };
+    let is_zip = target.contains("windows");
+    let url = tectonic_download_url(target);
 
-    let url = format!(
-        "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{}/{}",
-        version, filename
-    );
-
-    eprintln!("Downloading tectonic {}...", version);
+    eprintln!("Downloading tectonic {}...", TECTONIC_VERSION);
 
     let response = reqwest::blocking::Client::new()
         .get(&url)
@@ -493,7 +521,11 @@ fn install_from_zip(bytes: &[u8], dest: &std::path::Path) -> Result<()> {
     let mut archive = zip::ZipArchive::new(cursor)?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        if file.name().ends_with("tectonic.exe") || file.name() == "tectonic.exe" {
+        let is_match = {
+            let name = file.name()?;
+            name.ends_with("tectonic.exe") || name == "tectonic.exe"
+        };
+        if is_match {
             std::io::copy(&mut file, &mut std::fs::File::create(dest)?)?;
             return Ok(());
         }
@@ -996,6 +1028,7 @@ mod tests {
         // Source line 5 holds the long code line.
         let map = crate::highlight::process(
             dir.path(),
+            dir.path(),
             "main.tex",
             crate::highlight::Settings::default(),
         )
@@ -1128,6 +1161,7 @@ mod tests {
         // Source line 7 holds the undefined command.
         let map = crate::highlight::process(
             dir.path(),
+            dir.path(),
             "main.tex",
             crate::highlight::Settings::default(),
         )
@@ -1139,5 +1173,24 @@ mod tests {
             "the error must point at source line 7: {msg}"
         );
         assert!(!msg.contains("ERROR [main.tex:21]"), "{msg}");
+    }
+
+    #[test]
+    fn download_url_uses_pinned_version_for_all_targets() {
+        for target in [
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let url = tectonic_download_url(target);
+            assert!(url.contains(TECTONIC_VERSION), "{target}: {url}");
+            assert!(
+                url.contains(&format!("tectonic-{TECTONIC_VERSION}-{target}")),
+                "{target}: {url}"
+            );
+            assert!(!url.contains("0.15.0"), "{target}: {url}");
+        }
     }
 }

@@ -1,0 +1,60 @@
+% Capitulo 7: novedades de la version 1.0, tabla y lista.
+\section{Novedades de la 1.0}\label{sec:novedades}
+
+La versión 1.0 redondea el flujo con comandos que antes no existían y con
+detalles de acabado en los listados. Hasta ahora crear un proyecto con
+datos era manual, las plantillas propias no existían, el entorno se
+diagnosticaba a ojo, actualizar era descargar a mano, la estructura solo
+se veía en el PDF y los listados vestían un único estilo con números que
+se pegaban al copiar. La tabla~\ref{tab:novedades} recoge lo que cambia,
+con su documentación de referencia; la lista que sigue cuenta lo que
+cambia en el día a día.
+
+\begin{table}[H]
+  \centering
+  \caption{Novedades de la versión 1.0 y dónde leer más}
+  \label{tab:novedades}
+  \begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+    \toprule
+    \sffamily\small\bfseries Novedad & \sffamily\small\bfseries Qué hace & \sffamily\small\bfseries Dónde leer más \\
+    \midrule
+    \texttt{new -{}-values} & Rellena la plantilla desde un fichero de valores y lo guarda como \texttt{values.toml}. & Referencia de \texttt{new} \\
+    \texttt{template add} & Registra una carpeta local como plantilla. & Referencia de \texttt{template} \\
+    \texttt{skill} & Expone la destreza de agente del binario. & Referencia de \texttt{skill} \\
+    \texttt{doctor} & Diagnostica y actualiza el Tectonic gestionado. & Referencia de \texttt{doctor} \\
+    \texttt{update} & Trae el binario nuevo con la firma verificada. & Referencia de \texttt{update} \\
+    \texttt{outline} & Dibuja el árbol de secciones. & Referencia de \texttt{outline} \\
+    \texttt{pdf} & Inspecciona el PDF: texto, fuentes, páginas y chequeo. & Referencia de \texttt{pdf} \\
+    Estilo \texttt{ink} & Listados en negro, sin depender del tema. & Listados de código \\
+    DejaVu por defecto & Los listados usan DejaVu Sans Mono salvo decisión propia. & Listados de código \\
+    Números que no se copian & El \texttt{ActualText} deja los números fuera del portapapeles. & Listados de código \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{novabox}
+  Todo este documento es nuevo en la 1.0 por dentro: se recompuso como pieza
+  editorial sobre el lenguaje visual de UniverLab, con portada, cabecera,
+  cajas y paleta propias, en lugar del artículo neutro anterior.
+\end{novabox}
+
+\begin{itemize}
+  \item Crear con valores: \texttt{texforge new tesis -t tesis -{}-values
+    datos.toml} deja cada proyecto con sus datos desde el primer minuto, y
+  el fichero usado queda archivado como \texttt{values.toml}.
+  \item Plantillas propias: cualquier carpeta con un \texttt{main.tex} y su
+  \texttt{project.toml} se vuelve plantilla con \texttt{template add}, sin
+  pasar por el registro remoto.
+  \item Entorno sano: \texttt{doctor} dice qué versión del motor hay,
+  cuánto ocupa la caché y qué diccionarios están instalados, y trae
+  el motor gestionado al día sin que tengas que pedirlo.
+  \item Actualización confiada: \texttt{update} comprueba la firma antes
+  de sustituir el binario, y \texttt{update -{}-check} solo pregunta si hay
+  algo nuevo.
+  \item Leer el PDF sin abrirlo: \texttt{pdf text} para la accesibilidad,
+  \texttt{pdf info} para las fuentes, \texttt{pdf pages} para comparar
+  compilaciones y \texttt{pdf check} para cazar palabras perdidas.
+  \item Listados serios: pie con numeración, etiqueta para citarlo,
+  lectura desde archivo con \texttt{file} y \texttt{lines}, y el estilo
+  \texttt{ink} cuando el destino es el papel.
+\end{itemize}

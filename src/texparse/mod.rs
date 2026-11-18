@@ -77,14 +77,20 @@ pub enum Token {
     ///   (`\textit`, `\href`, `\textcolor`, dot-leader constructs, ...)
     ///   resolved to plain text and escaped specials (`\&`, `\%`, ...)
     ///   unescaped to their literal character — see
-    ///   [`resolve_section_title`]. This is what `outline`, `wordcount` and
-    ///   `pdftext` display: human-readable prose.
+    ///   [`resolve_section_title`]. A title that is exactly one standard
+    ///   heading macro (`\abstractname`, `\contentsname`, ...) instead
+    ///   resolves to that macro's English text; any other bare macro stays as
+    ///   written. This is what `outline`, `wordcount` and `pdftext` display:
+    ///   human-readable prose.
     /// * `raw_title` is the verbatim source text of that same braced
     ///   argument, escapes and macros intact. This is what the glyph linter
     ///   reads: it needs to see `\&` as still escaped to judge whether a
     ///   special character is protected.
     Section {
         level: u8,
+        /// True for the `*` form (`\section*{...}`), which LaTeX leaves
+        /// unnumbered.
+        starred: bool,
         title: String,
         raw_title: String,
     },
@@ -500,6 +506,7 @@ mod tests {
             tokens[2],
             Token::Section {
                 level: 2,
+                starred: false,
                 title: "Three".to_string(),
                 raw_title: "Three".to_string(),
             }
@@ -513,6 +520,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: true,
                 title: "Intro".to_string(),
                 raw_title: "Intro".to_string(),
             }]
@@ -526,6 +534,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: false,
                 title: "Full title".to_string(),
                 raw_title: "Full title".to_string(),
             }]
@@ -1118,5 +1127,105 @@ mod tests {
                 Token::Text("|".to_string()),
             ]
         );
+    }
+
+    /// Sectioning commands inside `\titleformat`/`\titlespacing*` arguments
+    /// are not sections: `\section`/`\subsection` name the command, they do
+    /// not start one.
+    #[test]
+    fn sectioning_commands_as_arguments_are_not_sections() {
+        let tokens = tokenize(r"\titleformat{\section}{\Large}{}{0pt}{}");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Section { .. })),
+            "titleformat arg must not be a section: {tokens:?}"
+        );
+        let tokens = tokenize(r"\titlespacing*{\subsection}{0pt}{1ex}{1ex}");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Section { .. })),
+            "titlespacing arg must not be a section: {tokens:?}"
+        );
+        assert!(
+            tokens.contains(&Token::Command {
+                name: "subsection".to_string(),
+                args: vec![],
+            }),
+            "bare subsection is a plain command: {tokens:?}"
+        );
+    }
+
+    /// The four section forms keep their titles: starred, optional TOC
+    /// title, plain, and space-before-brace (which reads an empty title).
+    #[test]
+    fn section_forms_stay_sections() {
+        for (src, title, starred) in [
+            (r"\section*{Title}", "Title", true),
+            (r"\section[Short]{Long}", "Long", false),
+            (r"\section{Title}", "Title", false),
+        ] {
+            let tokens = tokenize(src);
+            assert_eq!(
+                tokens,
+                vec![Token::Section {
+                    level: 2,
+                    starred,
+                    title: title.to_string(),
+                    raw_title: title.to_string(),
+                }],
+                "section form: {src}"
+            );
+        }
+        // A space before the brace still opens a section, but the group reads
+        // do not skip spaces, so the title reads empty.
+        let tokens = tokenize(r"\section {Title}");
+        let sections: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Section { .. }))
+            .collect();
+        assert_eq!(
+            sections,
+            vec![&Token::Section {
+                level: 2,
+                starred: false,
+                title: String::new(),
+                raw_title: String::new(),
+            }],
+            "space before brace: {tokens:?}"
+        );
+    }
+
+    /// A sectioning command at end of input is a plain command, never a
+    /// section, and tokenization stays panic-free.
+    #[test]
+    fn bare_sectioning_command_at_eof_is_plain() {
+        let tokens = tokenize(r"\section");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "section".to_string(),
+                args: vec![],
+            }]
+        );
+    }
+
+    /// A titlesec preamble adds no sections: the real sections that follow
+    /// still number `1` and `1.1`.
+    #[test]
+    fn preamble_titlesec_does_not_shift_numbers() {
+        let tokens = tokenize(
+            "\\titleformat{\\section}{}{}{}{}\n\\titlespacing*{\\section}{0pt}{1ex}{1ex}\n\\section{Introduction}\n\\subsection{A}",
+        );
+        let sections: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Section { .. }))
+            .collect();
+        assert_eq!(sections.len(), 2, "only real sections: {tokens:?}");
+        let mut tracker = SectionTracker::new(6);
+        let mut numbers = Vec::new();
+        for token in &tokens {
+            if let Token::Section { level, .. } = token {
+                numbers.push(tracker.enter(*level));
+            }
+        }
+        assert_eq!(numbers, vec!["1", "1.1"]);
     }
 }

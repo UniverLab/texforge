@@ -50,22 +50,54 @@ digraph G {
 \end{graphviz}
 ```
 
+## Accents and special characters
+
+Mermaid, D2 and Graphviz do not read LaTeX, but the block sits in a `.tex`
+file, so the usual LaTeX accents are still accepted: texforge translates
+them to the corresponding UTF-8 character before rendering, in all three
+environments.
+
+```latex
+\begin{mermaid}
+flowchart LR
+  A["M\'etodos"] --> B["Evaluaci\'on"] --> C["\~nand\'u"]
+\end{mermaid}
+```
+
+`\'e`, `\'{e}` and `{\'e}` all render as `é` and share a single cached image,
+so whichever escape style the document already uses works unchanged. Acute,
+grave, circumflex, diaeresis, tilde, macron and dot accents work with or
+without braces; the letter forms `\c{c}` (cedilla), `\v{s}` (caron),
+`\u{a}`, `\H{o}`, `\r{a}` (ring) and `\k{a}` need the braced argument.
+`\-` is dropped, and `\&`, `\%` and `\_` become the literal characters.
+Any other backslash is left untouched — a Graphviz `\n` line break still
+starts a new line. `texforge check` does not flag these escapes: they are
+normal in the surrounding LaTeX.
+
 ## Options
 
 | Option | Default | Description |
 |---|---|---|
-| `width` | `\linewidth` | Image width (ignored when `scale` is set) |
+| `width` | `\linewidth` | Image width (ignored when `scale` is set); when given without `height`, the figure keeps its natural aspect ratio |
 | `height` | _(none)_ | Image height (ignored when `scale` is set) |
 | `scale` | _(none)_ | Scale factor — overrides `width`/`height` when set |
-| `keepaspectratio` | _(off)_ | Keep the aspect ratio; only meaningful with both `width` and `height` |
+| `keepaspectratio` | _(auto with width only)_ | Keep the aspect ratio. Added automatically when `width` is set without `height`; set it explicitly to keep the proportions when you give both `width` and `height` |
 | `pos` | _(none — floats)_ | Figure placement (`H`, `t`, `b`, `h`, `p`); omit it to let LaTeX place the figure like any other image, `H` keeps it exactly where it is written |
 | `caption` | _(none)_ | Figure caption |
 | `label` | _(none)_ | `\label{…}` placed after the caption, for `\ref` |
 | `style` | `default` | Editorial style preset — see below |
 
+A figure given only `width=` keeps the rendered artefact's natural
+proportions: texforge adds `keepaspectratio` for you, so the image is never
+stretched or squashed. Give both `width` and `height` to fix both dimensions,
+and add `keepaspectratio` yourself if you want the image scaled to fit that
+box without distortion; `scale=` overrides both dimensions.
+
 Every diagram becomes a `figure`. Without `pos` it floats like any other
 image; `pos=H` keeps it exactly where it is written; `caption` adds a
 numbered caption and `label` a `\ref` target.
+
+`texforge check` resolves a `\ref` to a diagram `label=`, with or without a `caption`.
 
 If an option value contains a comma, wrap it in braces — the same
 convention LaTeX packages already use for this:
@@ -97,12 +129,12 @@ flowchart LR
 \end{mermaid}
 ```
 
-| Preset | Effect |
-|---|---|
-| `default` | Each renderer's own untouched default. Omitting `style=` always renders this — no existing document changes appearance. |
-| `editorial` | Restrained palette, one accent colour, no drop shadows, thin strokes, generous whitespace. |
-| `monochrome` | Greyscale only — for documents printed in black and white. |
-| `technical` | Drafting register: uniform stroke weight, no fills, labels in a monospaced face where the renderer allows it. |
+| Preset | Effect | Suits |
+|---|---|---|
+| `default` | Each renderer's own untouched default. Omitting `style=` always renders this — no existing document changes appearance. | Any document that wants the renderers' own look. |
+| `editorial` | Restrained palette (ink `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`), one accent colour, no drop shadows, thin strokes, generous whitespace, EB Garamond type. | The `article` and `workshop` templates. |
+| `monochrome` | Greyscale only — for documents printed in black and white. | The `apa` templates. |
+| `technical` | Drafting register: uniform stroke weight, no fills, labels in a monospaced face where the renderer allows it. | The `ieee` template. |
 
 An unrecognised style name (e.g. `style=editoral`) fails the build with a
 message naming the value and listing the valid ones — it never silently
@@ -132,7 +164,8 @@ still renders and the build still succeeds even where a renderer can't
 express part of a preset.
 
 - **Mermaid** has the richest surface (a full theme: colours, font, layout
-  spacing), so every preset is expressed almost exactly.
+  spacing), so every preset is expressed almost exactly — colour, font and
+  spacing all carry over.
 - **D2** has native theming (a named colour palette), so presets map onto
   it with good fidelity. `technical`'s monospaced labels come from D2's own
   `mono` theme rule, which also adds minor drafting-style ornamentation
@@ -142,6 +175,7 @@ express part of a preset.
 - **Graphviz** has no theme concept at all — styling is per-node and
   per-edge only. Node fill/border colour and edge colour carry over, but a
   document-wide background is not expressible, and neither is a
-  monospaced label face (`technical`'s font rule has no effect here).
+  font family (`layout-rs` never reads `fontname`, so for Graphviz — as
+  for D2, which fixes its own faces — only colours change).
 
 See also: highlight source code with the [`code` environment](listings.md) — native syntax highlighting with no `listings`/`minted` setup.

@@ -28,6 +28,22 @@ pub(crate) struct EmitCaption<'a> {
     pub(crate) label: Option<&'a str>,
 }
 
+/// Where one block sits: build-copy coordinates plus the external file's
+/// own first line number (1 for an inline block).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BlockPlacement<'a> {
+    pub(crate) file: &'a str,
+    pub(crate) first_line: usize,
+    /// 1-based line (in the build copy) of the block's first body line.
+    pub(crate) body_line: usize,
+    pub(crate) end_line: usize,
+    /// The file's own number of the first rendered line (the `lines=` range
+    /// start; 1 for an inline block).
+    pub(crate) first_number: usize,
+    /// The text came from `file=`: warnings point at the `\begin` line.
+    pub(crate) external: bool,
+}
+
 /// Everything `render_block` needs to place one block in the document: which
 /// build-copy file it came from (warnings point there — the build copy is what
 /// Tectonic reports errors in), the `\begin` line, the line the body starts
@@ -40,6 +56,8 @@ pub(crate) struct EmitOpts<'a> {
     /// this is the body's own line.
     pub(crate) body_line: usize,
     pub(crate) end_line: usize,
+    pub(crate) first_number: usize,
+    pub(crate) external: bool,
     pub(crate) numbers: bool,
     pub(crate) caption: Option<EmitCaption<'a>>,
     /// Float placement (`pos=` other than `H`) — `None` renders the block
@@ -142,6 +160,7 @@ fn display_width(line: &str, numbers: bool, gutter_width: usize) -> usize {
 /// separator rule and the 0.8em gap are emitted separately by
 /// [`render_block`]).
 fn gutter(number: usize, width: usize, color: &str) -> String {
+    let number = format!("\\tfxnoselect{{{number}}}");
     format!("\\textcolor{{{color}}}{{\\hbox to {width}em{{\\hss {number}}}}}")
 }
 
@@ -155,17 +174,20 @@ fn gutter_width(line_count: usize) -> usize {
 /// Vertical geometry of one line's frame overlay: `(raise, height)`.
 ///
 /// The mid-line rule covers the line's depth (`-3pt`, safe for `\small`
-/// descenders) up to `\baselineskip - 3pt`. The first line extends 3.4pt
+/// descenders) up to `\baselineskip - 3pt`, plus the [`overlap`](super::overlap)
+/// extension so consecutive rules overlap instead of abutting (rounding left
+/// a hairline of paper between them on dark backgrounds). The first line extends 3.4pt
 /// above (3pt top padding + the 0.4pt top border) and the last 3.4pt below,
-/// so the tint edge and the border coincide; a single-line block extends
-/// both ways (6.8pt total). All overlays are zero-metric (`\tfxsmash` +
+/// so the tint edge and the border coincide, and the last line also carries
+/// the overlap above so its top meets the previous line; a single-line block
+/// extends both ways (6.8pt total). All overlays are zero-metric (`\tfxsmash` +
 /// `\rlap`), so page breaking and line widths are exactly as without them.
 fn geometry(first: bool, last: bool) -> (&'static str, String) {
     match (first, last) {
         (true, true) => ("-6.4pt", "\\dimexpr\\baselineskip+6.8pt\\relax".to_string()),
         (true, false) => ("-3pt", "\\dimexpr\\baselineskip+3.4pt\\relax".to_string()),
-        (false, true) => ("-6.4pt", "\\dimexpr\\baselineskip+3.4pt\\relax".to_string()),
-        (false, false) => ("-3pt", "\\baselineskip".to_string()),
+        (false, true) => ("-6.4pt", super::overlap::last_line_height()),
+        (false, false) => ("-3pt", super::overlap::mid_line_height()),
     }
 }
 
@@ -228,11 +250,11 @@ fn separator_rule(first: bool, last: bool, color: &str) -> String {
 /// the block together. Each source line is its own one-line paragraph, so
 /// club/widow penalties do not apply — `\vadjust{\penalty10000}` in the
 /// vlist between the paragraphs does.
-fn break_penalty(line: usize, last: usize) -> &'static str {
-    if last < 2 {
+fn break_penalty(index: usize, total: usize) -> &'static str {
+    if total < 2 {
         return "";
     }
-    if line == 1 || line == last - 1 {
+    if index == 0 || index + 2 == total {
         "\\vadjust{\\penalty10000}"
     } else {
         ""
@@ -241,17 +263,20 @@ fn break_penalty(line: usize, last: usize) -> &'static str {
 
 /// Render one line's overlay + gutter + code into a single `\noindent`
 /// paragraph. Stays on one output file line: the build-copy line map
-/// depends on it.
+/// depends on it. `number` is the displayed gutter number (the file's own
+/// line for a `lines=` range); `index` is the 0-based position driving the
+/// frame geometry.
 fn emit_line(
     body: &str,
-    line: usize,
-    last: usize,
+    number: usize,
+    index: usize,
+    total: usize,
     numbers: bool,
     width: usize,
     colors: &BlockColors,
 ) -> String {
-    let first = line == 1;
-    let is_last = line == last;
+    let first = index == 0;
+    let is_last = index + 1 == total;
     let mut out = String::from("\\noindent ");
     out.push_str(&tint_rule(first, is_last, &colors.tint));
     out.push_str(&side_rules(first, is_last, &colors.frame));
@@ -259,12 +284,12 @@ fn emit_line(
     // 4pt inner padding between the frame and the code.
     out.push_str("\\kern4pt");
     if numbers {
-        out.push_str(&gutter(line, width, &colors.gutter));
+        out.push_str(&gutter(number, width, &colors.gutter));
         out.push_str(&separator_rule(first, is_last, &colors.frame));
         out.push_str("\\hspace{0.8em}");
     }
     out.push_str(body);
-    out.push_str(break_penalty(line, last));
+    out.push_str(break_penalty(index, total));
     out
 }
 
@@ -306,6 +331,7 @@ fn flush(run: Option<Run>, buf: &mut String, out: &mut String, used: &mut BTreeS
         FontStyle::Normal => buf.clone(),
         FontStyle::Bold => format!("\\textbf{{{}}}", buf),
         FontStyle::Italic => format!("\\textit{{{}}}", buf),
+        FontStyle::BoldItalic => format!("\\textbf{{\\textit{{{}}}}}", buf),
     };
     match run.color {
         Some(rgb) => {
@@ -359,7 +385,7 @@ pub(crate) fn render_block(
         lines.pop();
     }
     let total = lines.len();
-    let width = gutter_width(total);
+    let width = gutter_width(opts.first_number + total.saturating_sub(1));
     let mut out_lines: Vec<String> = Vec::with_capacity(total * 2 + 10);
     let mut out_origins: Vec<usize> = Vec::with_capacity(total * 2 + 10);
     push_opening(&mut out_lines, &mut out_origins, opts);
@@ -377,6 +403,16 @@ pub(crate) fn render_block(
     }
     out_lines.push(String::new());
     out_origins.push(opts.first_line);
+
+    // An external block's text lives in the project file, not the build
+    // copy: warnings name the `\begin` line instead of per-line body lines.
+    let warn_line = |i: usize| {
+        if opts.external {
+            opts.first_line
+        } else {
+            opts.body_line + i
+        }
+    };
 
     for (i, line) in lines.iter().enumerate() {
         let rendered_body = if line.is_empty() {
@@ -402,26 +438,27 @@ pub(crate) fn render_block(
         // onto `\noindent` and form an undefined control sequence.
         out_lines.push(emit_line(
             &rendered_body,
-            i + 1,
+            opts.first_number + i,
+            i,
             total,
             opts.numbers,
             width,
             opts.colors,
         ));
-        out_origins.push(opts.body_line + i);
+        out_origins.push(warn_line(i));
         if i + 1 < total {
             // Blank separator between two line paragraphs: Tectonic reports
             // an overfull paragraph on its end line, so attribute it to the
             // code line above, not below.
             out_lines.push(String::new());
-            out_origins.push(opts.body_line + i);
+            out_origins.push(warn_line(i));
         }
 
         let width_of_line = display_width(line, opts.numbers, width);
         if width_of_line > OVERFULL_CHAR_LIMIT {
             warnings.push(Warning {
                 file: opts.file.to_string(),
-                line: opts.body_line + i,
+                line: warn_line(i),
                 message: format!(
                     "code line is {width_of_line} chars wide — it may exceed the text width; split it"
                 ),
@@ -430,7 +467,7 @@ pub(crate) fn render_block(
     }
 
     out_lines.push("\\par".to_string());
-    out_origins.push(opts.body_line + total.saturating_sub(1));
+    out_origins.push(warn_line(total.saturating_sub(1)));
     out_lines.push("}".to_string());
     out_origins.push(opts.end_line);
     push_closing(&mut out_lines, &mut out_origins, opts);
@@ -525,6 +562,8 @@ mod tests {
             first_line: body_line.saturating_sub(1),
             body_line,
             end_line: body_line + 100,
+            first_number: 1,
+            external: false,
             numbers,
             caption: None,
             float: None,
@@ -547,6 +586,8 @@ mod tests {
             first_line: body_line.saturating_sub(1),
             body_line,
             end_line: body_line + 100,
+            first_number: 1,
+            external: false,
             numbers: false,
             caption: Some(EmitCaption { text, label }),
             float,
@@ -767,7 +808,7 @@ mod tests {
         // The `\hss` precedes the digit: the number is right-aligned in its
         // gutter box, hugging the separator rule (FR3).
         assert!(
-            out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 1}}"),
+            out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss \\tfxnoselect{1}}}"),
             "right-aligned gutter: {out}"
         );
         assert!(
@@ -817,6 +858,8 @@ mod tests {
             first_line: 4,
             body_line: 5,
             end_line: 9,
+            first_number: 1,
+            external: false,
             numbers: false,
             caption: None,
             float: None,
@@ -881,9 +924,18 @@ mod tests {
     #[test]
     fn numbered_blank_lines_keep_their_number() {
         let (out, _, _, _) = render("a\n\nb", None, &opts("main.tex", 1, true));
-        assert!(out.contains("\\hbox to 2em{\\hss 1}"), "out: {out}");
-        assert!(out.contains("\\hbox to 2em{\\hss 2}"), "out: {out}");
-        assert!(out.contains("\\hbox to 2em{\\hss 3}"), "out: {out}");
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{1}}"),
+            "out: {out}"
+        );
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{2}}"),
+            "out: {out}"
+        );
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{3}}"),
+            "out: {out}"
+        );
         assert!(
             !out.contains("\\mbox{}"),
             "the gutter box is the line: {out}"
@@ -1071,9 +1123,33 @@ mod tests {
     #[test]
     fn numbered_blocks_prefix_every_line_with_the_gutter() {
         let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, true));
-        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 1}}"));
-        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss 2}}"));
+        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss \\tfxnoselect{1}}}"));
+        assert!(out.contains("\\textcolor{tfxgutter}{\\hbox to 2em{\\hss \\tfxnoselect{2}}}"));
         assert!(out.contains("\\hspace{0.8em}"));
+    }
+
+    /// Every numbered line wraps its digit in `\tfxnoselect` and nothing
+    /// else: one wrap per line, each holding that line's number (FR2).
+    #[test]
+    fn every_numbered_line_wraps_only_its_digit_in_tfxnoselect() {
+        let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, true));
+        assert_eq!(out.matches("\\tfxnoselect{").count(), 2, "out: {out}");
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{1}}"),
+            "out: {out}"
+        );
+        assert!(
+            out.contains("\\hbox to 2em{\\hss \\tfxnoselect{2}}"),
+            "out: {out}"
+        );
+    }
+
+    /// A block without numbering emits no `\tfxnoselect` and no gutter (FR2).
+    #[test]
+    fn unnumbered_blocks_never_wrap_the_gutter() {
+        let (out, _, _, _) = render("a\nb", None, &opts("main.tex", 1, false));
+        assert!(!out.contains("\\tfxnoselect"), "out: {out}");
+        assert!(!out.contains("\\hbox to 2em"), "out: {out}");
     }
 
     #[test]
@@ -1186,5 +1262,146 @@ mod tests {
         let o = caption_opts("main.tex", 5, "Hi", Some("lst:x"), Some("t"), None);
         let (out, _, _, origins) = render("a\nb", None, &o);
         assert_eq!(origins.len(), out.lines().count(), "{out:?}");
+    }
+
+    /// Render `code` as Python in one (theme, style) pair: the shared
+    /// driver for the style-pin tests below.
+    fn render_styled(
+        code: &str,
+        theme: crate::highlight::palette::HighlightTheme,
+        style: crate::highlight::palette::HighlightStyle,
+    ) -> String {
+        use crate::highlight::engine::highlight;
+        use crate::highlight::palette::palette;
+        let spans = highlight("python", code, theme, style).unwrap().unwrap();
+        let pal = palette(theme, style);
+        let mut used = BTreeSet::new();
+        let style_info = pal.block_style(false, style.paints_base(), &mut used);
+        let o = EmitOpts {
+            file: "t.tex",
+            first_line: 1,
+            body_line: 2,
+            end_line: 10,
+            first_number: 1,
+            external: false,
+            numbers: false,
+            caption: None,
+            float: None,
+            size_command: None,
+            colors: &style_info.colors,
+            base: style_info.base,
+        };
+        let (out, _, _, _) = render(code, Some(&spans), &o);
+        out
+    }
+
+    /// No other style's rendering changes: the four non-ink styles never
+    /// emit the new bold-italic nesting, and their emphasis behaviour is
+    /// unchanged (none for light/dark, bold+italic for the monos).
+    #[test]
+    fn non_ink_styles_keep_their_emphasis() {
+        use crate::highlight::palette::{HighlightStyle, HighlightTheme};
+        let code = "def foo(x):\n    return 1  # note\n";
+        for theme in [HighlightTheme::Github, HighlightTheme::OneLight] {
+            for style in [
+                HighlightStyle::Light,
+                HighlightStyle::LightMono,
+                HighlightStyle::Dark,
+                HighlightStyle::DarkMono,
+            ] {
+                let out = render_styled(code, theme, style);
+                assert!(
+                    !out.contains("\\textbf{\\textit{"),
+                    "{theme:?}/{style:?}: bold-italic must never leak out of ink: {out}"
+                );
+                match style {
+                    HighlightStyle::Light | HighlightStyle::Dark => {
+                        assert!(
+                            !out.contains("\\textbf{") && !out.contains("\\textit{"),
+                            "{theme:?}/{style:?}: must stay plain text: {out}"
+                        );
+                    }
+                    _ => {
+                        assert!(
+                            out.contains("\\textbf{") && out.contains("\\textit{"),
+                            "{theme:?}/{style:?}: must keep bold keywords and italic comments: {out}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every ink class in one snippet: keywords and the number are bold,
+    /// the function and class names are bold-italic, the comment is
+    /// italic, the string is bare, and only black or white colour names
+    /// appear. Fonts are asserted on the spans (immune to run merging)
+    /// and the nesting on the output.
+    #[test]
+    fn ink_weights_by_class() {
+        use crate::highlight::engine::highlight;
+        use crate::highlight::palette::{HighlightStyle, HighlightTheme};
+        let code = "def foo():\n    x = \"s\"\n    return 42  # note\nclass Bar:\n    pass\n";
+        let lines = highlight("python", code, HighlightTheme::Github, HighlightStyle::Ink)
+            .unwrap()
+            .unwrap();
+        let font_of = |needle: &str| {
+            lines
+                .iter()
+                .flatten()
+                .find(|span| span.text.contains(needle))
+                .unwrap_or_else(|| panic!("no span contains {needle:?}"))
+                .font
+        };
+        for keyword in ["def", "return", "class", "pass"] {
+            assert_eq!(font_of(keyword), FontStyle::Bold, "{keyword}");
+        }
+        assert_eq!(font_of("42"), FontStyle::Bold, "number");
+        for name in ["foo", "Bar"] {
+            assert_eq!(font_of(name), FontStyle::BoldItalic, "{name}");
+        }
+        assert_eq!(font_of("note"), FontStyle::Italic, "comment");
+        for span in lines
+            .iter()
+            .flatten()
+            .filter(|span| span.text.contains('"'))
+        {
+            assert_eq!(span.font, FontStyle::Normal, "string: {span:?}");
+        }
+
+        let out = render_styled(code, HighlightTheme::Github, HighlightStyle::Ink);
+        assert!(out.contains("\\textbf{\\textit{"), "names: {out}");
+        assert!(out.contains("\\textbf{"), "keywords/numbers: {out}");
+        assert!(out.contains("\\textit{"), "comment: {out}");
+        assert!(
+            out.contains("\\char34{}s\\char34{}"),
+            "string with its quotes: {out}"
+        );
+        for marker in ["\\textcolor{", "\\colorbox{"] {
+            let mut rest = out.as_str();
+            while let Some(start) = rest.find(marker) {
+                rest = &rest[start + marker.len()..];
+                let end = rest.find('}').expect("a colour name closes");
+                let name = &rest[..end];
+                assert!(
+                    name == "tfxcol000000" || name == "tfxcolffffff",
+                    "ink must use only black or white, found {name}: {out}"
+                );
+                rest = &rest[end..];
+            }
+        }
+    }
+
+    /// Bold-italic nests the italic inside the bold, in the same form the
+    /// existing arms use.
+    #[test]
+    fn bold_italic_nests_textit_inside_textbf() {
+        let spans = vec![vec![Span {
+            text: "foo".to_string(),
+            color: None,
+            font: FontStyle::BoldItalic,
+        }]];
+        let (out, _, _, _) = render("foo", Some(&spans), &opts("main.tex", 1, false));
+        assert!(out.contains("\\textbf{\\textit{foo}}"), "out: {out}");
     }
 }

@@ -295,6 +295,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: false,
                 title: "UniverLab.org".to_string(),
                 raw_title: r"\href{https://univerlab.org}{UniverLab.org}".to_string(),
             }]
@@ -351,6 +352,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 3,
+                starred: true,
                 title: "Fundador & Lead Engineer".to_string(),
                 raw_title: r"\textit{Fundador \& Lead Engineer}".to_string(),
             }]

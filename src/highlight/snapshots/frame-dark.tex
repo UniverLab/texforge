@@ -1,0 +1,37 @@
+\documentclass{article}
+% ---- texforge code listings (injected; do not edit, rebuild to refresh) ----
+\makeatletter
+\@ifpackageloaded{color}{}{\@ifpackageloaded{xcolor}{}{\usepackage{color}}}%
+\makeatother
+\makeatletter
+\@ifpackageloaded{DejaVuSansMono}{}{\usepackage{DejaVuSansMono}}%
+\@ifpackageloaded{fontspec}{\renewcommand{\ttfamily}{\fontencoding{T1}\fontfamily{\ttdefault}\selectfont}}{}%
+\makeatother
+\newcommand{\tfxcodestyle}{\ttfamily\small\setlength{\parindent}{0pt}\setlength{\parskip}{0pt}}
+\newcommand{\tfxsmash}[1]{\setbox0=\hbox{#1}\ht0=0pt\dp0=0pt\box0}
+\newcommand{\tfxsp}{\nobreakspace{}}
+\newcommand{\tfxnoselect}[1]{{\special{pdf:literal direct /Span << /ActualText <FEFF> >> BDC}#1\special{pdf:literal direct EMC}}}
+\definecolor{tfxtint}{rgb}{0.965,0.973,0.980}
+\definecolor{tfxframe}{rgb}{0.765,0.780,0.796}
+\definecolor{tfxcol22272e}{rgb}{0.133,0.153,0.180}
+\definecolor{tfxcol8b949e}{rgb}{0.545,0.580,0.620}
+\definecolor{tfxcol96d0ff}{rgb}{0.588,0.816,1.000}
+\definecolor{tfxcoladbac7}{rgb}{0.678,0.729,0.780}
+\definecolor{tfxcoldcbdfb}{rgb}{0.863,0.741,0.984}
+\definecolor{tfxgutter}{rgb}{0.416,0.451,0.490}
+% ---- end texforge code listings ----
+\begin{document}
+\par\medskip
+{
+\tfxcodestyle
+\color{tfxcoladbac7}
+
+\noindent \tfxsmash{\rlap{\kern0.4pt\textcolor{tfxcol22272e}{\rule[-3pt]{\dimexpr\linewidth-0.8pt\relax}{\dimexpr\baselineskip+3.4pt\relax}}}}\tfxsmash{\rlap{\textcolor{tfxcol8b949e}{\rule[-3pt]{0.4pt}{\dimexpr\baselineskip+3.4pt\relax}}}}\tfxsmash{\rlap{\kern\dimexpr\linewidth-0.4pt\relax\textcolor{tfxcol8b949e}{\rule[-3pt]{0.4pt}{\dimexpr\baselineskip+3.4pt\relax}}}}\tfxsmash{\rlap{\kern0.4pt\textcolor{tfxcol8b949e}{\rule[\baselineskip]{\dimexpr\linewidth-0.8pt\relax}{0.4pt}}}}\kern4pt\textcolor{tfxcol8b949e}{\hbox to 2em{\hss \tfxnoselect{1}}}\tfxsmash{\textcolor{tfxcol8b949e}{\rule[-3pt]{0.3pt}{\dimexpr\baselineskip+3.4pt\relax}}}\hspace{0.8em}\textcolor{tfxcoldcbdfb}{echo}\tfxsp{}\textcolor{tfxcol96d0ff}{one}\vadjust{\penalty10000}
+
+\noindent \tfxsmash{\rlap{\kern0.4pt\textcolor{tfxcol22272e}{\rule[-3pt]{\dimexpr\linewidth-0.8pt\relax}{\dimexpr\baselineskip+0.8pt\relax}}}}\tfxsmash{\rlap{\textcolor{tfxcol8b949e}{\rule[-3pt]{0.4pt}{\dimexpr\baselineskip+0.8pt\relax}}}}\tfxsmash{\rlap{\kern\dimexpr\linewidth-0.4pt\relax\textcolor{tfxcol8b949e}{\rule[-3pt]{0.4pt}{\dimexpr\baselineskip+0.8pt\relax}}}}\kern4pt\textcolor{tfxcol8b949e}{\hbox to 2em{\hss \tfxnoselect{2}}}\tfxsmash{\textcolor{tfxcol8b949e}{\rule[-3pt]{0.3pt}{\dimexpr\baselineskip+0.8pt\relax}}}\hspace{0.8em}\textcolor{tfxcoldcbdfb}{echo}\tfxsp{}\textcolor{tfxcol96d0ff}{two}\vadjust{\penalty10000}
+
+\noindent \tfxsmash{\rlap{\kern0.4pt\textcolor{tfxcol22272e}{\rule[-6.4pt]{\dimexpr\linewidth-0.8pt\relax}{\dimexpr\baselineskip+3.4pt+0.8pt\relax}}}}\tfxsmash{\rlap{\textcolor{tfxcol8b949e}{\rule[-6.4pt]{0.4pt}{\dimexpr\baselineskip+3.4pt+0.8pt\relax}}}}\tfxsmash{\rlap{\kern\dimexpr\linewidth-0.4pt\relax\textcolor{tfxcol8b949e}{\rule[-6.4pt]{0.4pt}{\dimexpr\baselineskip+3.4pt+0.8pt\relax}}}}\tfxsmash{\rlap{\kern0.4pt\textcolor{tfxcol8b949e}{\rule[-6.4pt]{\dimexpr\linewidth-0.8pt\relax}{0.4pt}}}}\kern4pt\textcolor{tfxcol8b949e}{\hbox to 2em{\hss \tfxnoselect{3}}}\tfxsmash{\textcolor{tfxcol8b949e}{\rule[-6.4pt]{0.3pt}{\dimexpr\baselineskip+3.4pt+0.8pt\relax}}}\hspace{0.8em}\textcolor{tfxcoldcbdfb}{echo}\tfxsp{}\textcolor{tfxcol96d0ff}{three}
+\par
+}
+\medskip\noindent 
+\end{document}

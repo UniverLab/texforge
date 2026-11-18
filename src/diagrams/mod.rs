@@ -14,7 +14,9 @@ use anyhow::{Context, Result};
 
 use crate::texutil;
 
+mod aspect;
 mod fonts;
+mod latex_escapes;
 mod preamble;
 pub mod style;
 use fonts::{shared_fontdb, shared_svg2pdf_fontdb};
@@ -176,7 +178,12 @@ fn render_env_facts(
         let (opts, after_opts) = parse_opts(after_begin, env)?;
 
         let end = find_end_tag(after_opts, &end_tag, env)?;
-        let diagram_src = after_opts[..end].trim();
+        // The block is written in the surrounding LaTeX, where `M\'etodos`
+        // is normal, but no diagram renderer reads LaTeX: translate the
+        // escapes here, at the one point all three environments pass
+        // through, so the cache key below already covers the translated text.
+        let translated = latex_escapes::translate_latex_escapes(after_opts[..end].trim());
+        let diagram_src = translated.as_str();
 
         validate_pos_option(&opts, env)?;
         // Only an explicit `pos=H` reaches `[H]` in the figure: an omitted
@@ -220,6 +227,7 @@ fn content_hash(src: &str, style: DiagramStyle) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut hasher);
     (style as u8).hash(&mut hasher);
+    style.fingerprint().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -269,32 +277,9 @@ fn build_figure_environment(
     filename: &str,
 ) -> Result<String> {
     let pos = opts.get("pos").map(String::as_str);
-    let width = opts.get("width").map(String::as_str);
-    let height = opts.get("height").map(String::as_str);
-    let scale = opts.get("scale").map(String::as_str);
-    let keepaspectratio = opts.contains_key("keepaspectratio");
     let label = opts.get("label").map(String::as_str);
     let rel_path = format!("diagrams/{}", filename);
-
-    let mut include_opts = Vec::new();
-    if let Some(s) = scale {
-        include_opts.push(format!("scale={s}"));
-    } else {
-        if let Some(w) = width {
-            include_opts.push(format!("width={w}"));
-        }
-        if let Some(h) = height {
-            include_opts.push(format!("height={h}"));
-        }
-    }
-    if keepaspectratio {
-        include_opts.push("keepaspectratio".to_string());
-    }
-    let include_str = if include_opts.is_empty() {
-        "width=\\linewidth".to_string()
-    } else {
-        include_opts.join(",")
-    };
+    let include_str = aspect::includegraphics_options(opts);
 
     let pos_str = pos.map(|p| format!("[{p}]")).unwrap_or_default();
     let mut fig = format!(
@@ -594,6 +579,69 @@ mod tests {
     }
 
     #[test]
+    fn content_hash_includes_style_fingerprint() {
+        let src = "digraph G { A -> B }";
+        for style in [
+            DiagramStyle::Default,
+            DiagramStyle::Editorial,
+            DiagramStyle::Monochrome,
+            DiagramStyle::Technical,
+        ] {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            src.hash(&mut hasher);
+            (style as u8).hash(&mut hasher);
+            style.fingerprint().hash(&mut hasher);
+            assert_eq!(content_hash(src, style), hasher.finish());
+        }
+    }
+
+    /// Every `#rrggbb` token in `output` must have equal channels.
+    fn assert_grayscale(output: &str) {
+        let bytes = output.as_bytes();
+        let mut i = 0;
+        let mut checked = 0;
+        while i + 7 <= bytes.len() {
+            if bytes[i] == b'#' && bytes[i + 1..i + 7].iter().all(|b| b.is_ascii_hexdigit()) {
+                let channel = |k: usize| &output[i + 1 + k * 2..i + 3 + k * 2];
+                assert_eq!(
+                    channel(0),
+                    channel(1),
+                    "chromatic token {} in: {output}",
+                    &output[i..i + 7]
+                );
+                assert_eq!(
+                    channel(1),
+                    channel(2),
+                    "chromatic token {} in: {output}",
+                    &output[i..i + 7]
+                );
+                checked += 1;
+                i += 7;
+            } else {
+                i += 1;
+            }
+        }
+        assert!(checked > 0, "no colours found in: {output}");
+    }
+
+    #[test]
+    fn monochrome_mermaid_output_is_grayscale() {
+        let opts = style::mermaid_options(DiagramStyle::Monochrome);
+        assert_grayscale(&format!("{:?}", opts.theme));
+    }
+
+    #[test]
+    fn monochrome_d2_output_is_grayscale() {
+        assert_grayscale(&style::d2_prefix(DiagramStyle::Monochrome));
+    }
+
+    #[test]
+    fn monochrome_graphviz_output_is_grayscale() {
+        let injected = style::graphviz_inject("digraph G { A -> B }", DiagramStyle::Monochrome);
+        assert_grayscale(&injected);
+    }
+
+    #[test]
     fn parse_opts_no_brackets_returns_empty_map() {
         let (map, rest) = parse_opts("hello", "mermaid").unwrap();
         assert!(map.is_empty());
@@ -870,6 +918,91 @@ mod tests {
         .unwrap();
         assert_eq!(result, content);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// Run one diagram block through the pipeline with a stub renderer and
+    /// return exactly the source the renderer received.
+    fn captured_diagram_source(env: &str, source: &str, dir: &Path) -> String {
+        let content = format!("\\begin{{{env}}}\n{source}\n\\end{{{env}}}");
+        let seen = std::cell::RefCell::new(String::new());
+        let out = render_env(&content, env, dir, DiagramStyle::Default, |src, _| {
+            seen.borrow_mut().push_str(src);
+            Ok((vec![1, 2, 3], "pdf"))
+        })
+        .unwrap();
+        assert!(
+            out.contains("\\includegraphics"),
+            "the block must be replaced: {out}"
+        );
+        seen.into_inner()
+    }
+
+    #[test]
+    fn render_mermaid_translates_latex_accents_before_rendering() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = captured_diagram_source(
+            "mermaid",
+            "graph LR\n  A[\"M\\'etodos\"] --> B[\"Evaluaci\\'on\"]",
+            dir.path(),
+        );
+        assert!(src.contains("Métodos"), "src: {src}");
+        assert!(src.contains("Evaluación"), "src: {src}");
+        assert!(
+            !src.contains('\\'),
+            "no escape must reach the renderer: {src}"
+        );
+    }
+
+    #[test]
+    fn render_d2_translates_latex_accents_before_rendering() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = captured_diagram_source("d2", "a: M\\'etodos -> b: Evaluaci\\'on", dir.path());
+        assert!(src.contains("Métodos"), "src: {src}");
+        assert!(src.contains("Evaluación"), "src: {src}");
+    }
+
+    #[test]
+    fn render_graphviz_translates_latex_accents_before_rendering() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = captured_diagram_source(
+            "graphviz",
+            "digraph G { a [label=\"M\\'etodos\"]; b [label=\"Evaluaci\\'on\"] }",
+            dir.path(),
+        );
+        assert!(src.contains("Métodos"), "src: {src}");
+        assert!(src.contains("Evaluación"), "src: {src}");
+    }
+
+    #[test]
+    fn render_graphviz_keeps_a_line_break_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = captured_diagram_source(
+            "graphviz",
+            "digraph G { a [label=\"one\\ntwo\"] }",
+            dir.path(),
+        );
+        assert!(src.contains("one\\ntwo"), "src: {src}");
+    }
+
+    #[test]
+    fn render_env_cache_key_uses_the_translated_source() {
+        let dir = tempfile::tempdir().unwrap();
+        for spelling in ["M\\'etodos", "M\\'{e}todos", "M{\\'e}todos", "Métodos"] {
+            let content = format!("\\begin{{mermaid}}\nA[\"{spelling}\"]\n\\end{{mermaid}}");
+            render_env(
+                &content,
+                "mermaid",
+                dir.path(),
+                DiagramStyle::Default,
+                |_, _| Ok((vec![1], "pdf")),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "every spelling of the same label must share one cached image"
+        );
     }
 
     #[test]

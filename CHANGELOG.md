@@ -7,8 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Dark (`dark`, `dark-mono`) code listings no longer show a thin light line between code lines: consecutive per-line background rules now overlap instead of abutting.
+- Diagram figures given only `width=` now keep their natural aspect ratio instead of being distorted.
+- `texforge check` and `texforge spell` no longer report words from `mermaid`, `d2` or `graphviz` diagram bodies as unknown prose.
+
+### Notes
+
+- In the `ink` code-listing style, gutter line numbers now render in grey so they do not compete with the code.
+- The capabilities example regained the Mermaid preset comparison and got richer Graphviz, D2 and TikZ figures.
+- Code listings default to DejaVu Sans Mono unless `[highlight] font` is set or project sources load fontspec; set `font = "document"` to keep the preamble's typewriter family.
+- The default DejaVu Sans Mono listing font now survives OpenType text packages (such as `ebgaramond`/`sourcesanspro`) that pull in fontspec: the injection re-selects T1 with the installed family when fontspec is loaded, so listings still embed DejaVu Sans Mono instead of falling back to Latin Modern.
+- Copying a numbered code listing in viewers that honour PDF `ActualText` skips the line numbers; they still print on the page, `numbers=false` removes them everywhere, and other viewers may still copy them.
+- The `ink` code-listing style now distinguishes keywords and numbers (bold), names (bold italic) and comments (italic), still black on white.
+- `outline`/`stats` no longer count `\section`/`\subsection` inside `\titleformat`/`\titlespacing*` args as empty sections.
+- `outline` and `stats` list starred sectioning commands (`\chapter*`, `\section*`, ...) unnumbered with an empty number, resolving title macros such as `\abstractname` to their English text.
+- On release, set `date-released` and `version` in `CITATION.cff` to the release date and the released Cargo.toml version.
+- Release checksums (`SHA256SUMS.txt`) are now signed with minisign.
+- `texforge update` and `scripts/install.sh` verify the minisign signature of `SHA256SUMS.txt` before installing 1.x releases.
+- `scripts/install.ps1` verifies the minisign signature of `SHA256SUMS.txt` on 1.x releases (`SKIP_SIGNATURE=1` skips the check).
+- An outdated managed Tectonic is updated to the supported version on the next build or `doctor`, which also warns when the Tectonic in `PATH` is older than the supported one.
+- `texforge template list` prints the built-in `general` template once under `Installed:`, even when a downloaded copy of `general` is cached.
+- Piping output to a closed pipe (e.g. `texforge skill | head`) now exits quietly with code 0.
+- `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
+- `texforge check` resolves `\ref` to a `label=` option on `mermaid`, `d2` and `graphviz` blocks, with or without a `caption`.
+- The example directory was renamed to `texforge-capabilities` (the old name was misspelled).
+- The `texforge-capabilities` example was redone as an editorial document.
+
 ### Added
 
+- The startup banner now picks a large or compact font from the terminal width, and prints nothing when stdout is not a TTY.
+- `texforge new --values <FILE>` fills the placeholders a template declares
+  from a flat TOML (`.toml`) or YAML (`.yaml`, `.yml`) table: strings,
+  integers, floats and booleans, with file values winning over the project
+  config, the user config and the template defaults. The values used are
+  written to `values.toml` in the new project. A key the template does not
+  declare fails the run listing the unknown and the declared names, and a
+  required placeholder with no value now fails the run instead of leaving a
+  raw `{{name}}` in the generated document (the directory the run created is
+  removed).
 - `texforge update` — the explicit self-update command. It fetches the latest
   stable GitHub release (drafts and prereleases excluded), always asks before
   replacing the running binary (default **NO**, `--yes` skips the prompt),
@@ -50,11 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twice; only a build that rewrote at least one code block injects it, and an
   unknown value fails the build listing the valid ones.
 
+- `texforge template add <folder>` installs a template from a local directory
+  (`--force` replaces an existing one); a local template is never refreshed
+  from the network. Registry downloads no longer count against GitHub's
+  unauthenticated API limit, and a refused request now says so — including
+  the `Retry-After`/`x-ratelimit-reset` values — instead of only "not found".
+
 ### Changed
 
+- The `editorial` diagram preset now uses the refreshed template palette
+  (ink `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`) with an
+  EB Garamond font stack for Mermaid, suiting the `article` and `workshop`
+  templates; `monochrome` (for the `apa` templates) and `technical` (for
+  `ieee`) gained matching font stacks, and D2/Graphviz render colours only.
+  Cached diagrams render once more after this change, then reuse the cache.
 - The release check used by `texforge init` moved into the updater so both
   paths share one lookup, throttled to once a day for the notice; `init`
   keeps its existing prompt-and-confirm behaviour.
 - A `cargo install` binary is refused with `cargo install --force texforge`
   guidance instead of being overwritten; `texforge uninstall` now reads the
   same cargo-install detection.
+- The pinned Tectonic used for automatic installs is now 0.17.0.

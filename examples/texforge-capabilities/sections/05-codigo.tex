@@ -1,0 +1,128 @@
+% Capitulo 5: listados de codigo en los cuatro estilos, mas ink.
+\section{Listados de código}\label{sec:codigo}
+
+texforge resalta el código fuente durante la compilación: cada bloque
+\texttt{code} se reescribe sobre la copia de compilación y solo necesita
+\texttt{color.sty}, sin \texttt{listings} ni \texttt{minted}. El lenguaje se
+indica con \texttt{lang} y la numeración con \texttt{numbers}. El tema de
+color y el estilo por defecto se eligen una vez para todo el documento en
+\texttt{project.toml}, aquí \texttt{one-light} con el estilo
+\texttt{light}, y cada bloque puede pedir su propio estilo: hay
+cuatro --- \texttt{light}, \texttt{light-mono}, \texttt{dark} y
+\texttt{dark-mono} --- más el quinto estilo \texttt{ink}, en negro.
+
+\subsection{Python}
+
+El listado~\ref{lst:python} aproxima la integral de Gauss del
+capítulo~\ref{sec:matematicas} por cuadratura: el mismo $\sqrt{\pi}$ de la
+ecuación~\eqref{eq:gauss}, ahora calculado a fuerza bruta.
+
+\begin{code}[lang=python, numbers=true, caption={Cuadratura de la integral de Gauss}, label={lst:python}]
+import numpy as np
+
+def integrar_gauss(n_puntos=1000):
+    """Aproxima la integral de Gauss por cuadratura."""
+    x = np.linspace(-10, 10, n_puntos)
+    dx = x[1] - x[0]
+    y = np.exp(-x**2)
+    return np.sum(y) * dx
+
+if __name__ == "__main__":
+    print(f"Integral = {integrar_gauss():.6f}")
+\end{code}
+
+\subsection{Rust}
+
+El listado~\ref{lst:fib} muestra la definición clásica de Fibonacci en
+Rust con el estilo \texttt{light-mono}: sin color, las palabras clave van en
+negrita y los comentarios en cursiva, que es lo que funciona impreso en
+blanco y negro.
+
+\begin{code}[lang=rust, style=light-mono, numbers=true, caption={Fibonacci en Rust}, label={lst:fib}]
+fn fibonacci(n: u64) -> u64 {
+    match n {
+        0 => 0,
+        1 => 1,
+        _ => fibonacci(n - 1) + fibonacci(n - 2),
+    }
+}
+
+fn main() {
+    println!("fib(10) = {}", fibonacci(10));
+}
+\end{code}
+
+\subsection{Shell}
+
+El listado~\ref{lst:shell} usa el estilo \texttt{dark}, con el aire de una
+terminal. Los caracteres especiales de \LaTeX{} se imprimen tal cual, porque
+cada carácter se escapa antes de llegar al motor.
+
+\begin{code}[lang=bash, style=dark, numbers=true, caption={Limpieza del directorio de compilación}, label={lst:shell}]
+#!/usr/bin/env bash
+set -euo pipefail
+
+texforge build
+texforge pdf info
+texforge clean
+\end{code}
+
+\subsection{TOML}
+
+El listado~\ref{lst:toml} es la configuración de resaltado de este
+documento, con el estilo \texttt{dark-mono}: fondo oscuro y una sola tinta
+clara, negritas y cursivas en lugar de colores.
+
+\begin{code}[lang=toml, style=dark-mono, numbers=true, caption={Resaltado del propio documento}, label={lst:toml}]
+[highlight]
+theme = "one-light"
+style = "light"
+\end{code}
+
+\subsection{Código desde un archivo}
+
+El listado~\ref{lst:archivo} no está escrito en el \texttt{.tex}: se lee
+del guion \texttt{scripts/stats.py} con \texttt{file} y un rango con
+\texttt{lines}. Los números son los del archivo, y un archivo ausente o un
+rango inválido fallan la compilación y \texttt{texforge check}.
+
+\begin{code}[lang=python, file=scripts/stats.py, lines=5-24, numbers=true, caption={Funciones leídas del archivo}, label={lst:archivo}]
+\end{code}
+
+\subsection{Estilo ink}
+
+El mismo archivo con \texttt{style=ink} usa solo negro: distingue los
+elementos por peso y forma, con palabras clave y números en negrita,
+nombres en negrita cursiva y comentarios en cursiva.
+
+\begin{code}[lang=python, file=scripts/stats.py, lines=5-24, numbers=true, style=ink]
+\end{code}
+
+\begin{novabox}
+  El estilo \texttt{ink} es nuevo en la 1.0: ignora el tema y compone en
+  negro sobre blanco, pensado para imprimir o fotocopiar.
+\end{novabox}
+
+\subsection{Pies y etiquetas}
+
+Todo bloque puede llevar pie y etiqueta: \texttt{caption=} escribe la línea
+de Listado con su número y \texttt{label=} le da nombre para citarlo con
+\texttt{\textbackslash ref}, como hacen los listados de este capítulo.
+\texttt{pos=} decide si flota o se queda donde está escrito, y
+\texttt{\textbackslash listoflistings} reúne todos los pies en un índice
+propio, igual que el de figuras y tablas.
+
+\subsection{Copiar sin números}
+
+Los números de línea se omiten al copiar en los visores que respetan el
+\texttt{ActualText} del PDF, y \texttt{numbers=false} los quita en todas
+partes, como en el bloque siguiente.
+
+\begin{code}[lang=python, file=scripts/stats.py, lines=5-24, numbers=false]
+\end{code}
+
+\begin{notebox}
+  Pegar de un listado numerado no arrastra los números en los visores
+  modernos: el PDF guarda el texto real aparte de lo que se ve. Si tu flujo
+  exige páginas sin números, \texttt{numbers=false} los retira del todo.
+\end{notebox}

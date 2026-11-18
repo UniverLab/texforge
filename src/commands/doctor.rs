@@ -3,15 +3,16 @@
 //! Reports the verified state of everything texforge manages: the Tectonic
 //! engine, its resource cache, fonts available to it, installed spell-check
 //! dictionaries, and whether the current directory is a texforge project.
-//! Read-only: it diagnoses, it never installs, repairs, or cleans anything.
-
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+//! It diagnoses, and refreshes an outdated managed Tectonic copy like a
+//! build does; it never repairs or cleans anything else.
 
 use anyhow::Result;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use crate::compiler;
+use crate::compiler::tectonic_version::{is_older, query_tectonic_version};
+use crate::compiler::TECTONIC_VERSION;
 use crate::domain::project::Project;
 use crate::linter;
 
@@ -22,17 +23,19 @@ use crate::linter;
 pub fn execute() -> Result<()> {
     println!("texforge doctor");
 
+    compiler::refresh_managed_tectonic();
     let tectonic = compiler::locate_tectonic();
     let tectonic_version = tectonic.as_deref().and_then(query_tectonic_version);
     println!();
     println!("Tectonic");
     print!(
-        "{}",
+        "{}{}",
         format_tectonic_status(
             tectonic
                 .as_deref()
                 .map(|p| (p, tectonic_version.as_deref()))
-        )
+        ),
+        outdated_line(tectonic_version.as_deref(), TECTONIC_VERSION).unwrap_or_default()
     );
 
     let cache_dir = tectonic_cache_dir();
@@ -67,25 +70,17 @@ fn format_tectonic_status(found: Option<(&Path, Option<&str>)>) -> String {
     }
 }
 
-/// Run `tectonic --version` and pull the version number out of its output.
-fn query_tectonic_version(path: &Path) -> Option<String> {
-    let output = Command::new(path).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
+/// Warn when the Tectonic that will run is older than the supported one.
+/// Pure so the warning text is testable without touching `PATH`.
+fn outdated_line(found: Option<&str>, pinned: &str) -> Option<String> {
+    let version = found?;
+    if is_older(version, pinned) {
+        Some(format!(
+            "    ! older than the supported {pinned}; run 'texforge build' to update the managed copy, or remove this one from PATH\n"
+        ))
+    } else {
+        None
     }
-    let raw = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    parse_version(&raw)
-}
-
-/// Pull the first `X.Y.Z`-shaped token out of arbitrary CLI output.
-fn parse_version(raw: &str) -> Option<String> {
-    raw.split(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .find(|tok| tok.matches('.').count() >= 2 && tok.starts_with(|c: char| c.is_ascii_digit()))
-        .map(str::to_string)
 }
 
 /// Resolve Tectonic's resource cache directory: `$TECTONIC_CACHE_DIR` when
@@ -300,26 +295,27 @@ mod tests {
         assert!(out.contains("could not determine"));
     }
 
-    // --- Version parsing ---
+    // --- Outdated-Tectonic warning (pure: no PATH access) ---
 
     #[test]
-    fn parse_version_extracts_simple_semver() {
-        assert_eq!(parse_version("tectonic 0.15.0\n"), Some("0.15.0".into()));
-    }
-
-    #[test]
-    fn parse_version_handles_concatenated_banner_output() {
-        // Tectonic's actual `--version` output has no separator between the
-        // clap-generated line and its own banner.
+    fn outdated_line_warns_for_older_version() {
         assert_eq!(
-            parse_version("tectonic 0.15.0Tectonic 0.15.0"),
-            Some("0.15.0".into())
+            outdated_line(Some("0.15.0"), "0.17.0"),
+            Some(
+                "    ! older than the supported 0.17.0; run 'texforge build' to update the managed copy, or remove this one from PATH\n"
+                    .to_string()
+            )
         );
     }
 
     #[test]
-    fn parse_version_none_when_absent() {
-        assert_eq!(parse_version("no version info here"), None);
+    fn outdated_line_none_for_current_version() {
+        assert_eq!(outdated_line(Some("0.17.0"), "0.17.0"), None);
+    }
+
+    #[test]
+    fn outdated_line_none_when_version_unknown() {
+        assert_eq!(outdated_line(None, "0.17.0"), None);
     }
 
     // --- Cache stats (covers the empty-cache case) ---

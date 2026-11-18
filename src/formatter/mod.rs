@@ -6,6 +6,8 @@
 //! collapses runs of blank lines. It never reflows paragraph text or touches
 //! the contents of verbatim-like environments.
 
+use crate::texutil::strip_comment;
+
 const INDENT: &str = "  ";
 
 /// Environments whose content must be passed through untouched.
@@ -90,8 +92,9 @@ fn leading_dedent(line: &str) -> usize {
 /// Net nesting change a line contributes: `\begin`/`\end` plus the balance of
 /// unescaped braces and brackets (comments and escaped delimiters ignored).
 fn nesting_delta(line: &str) -> i32 {
-    let mut delta = count_occurrences(line, "\\begin{") as i32;
-    delta -= count_occurrences(line, "\\end{") as i32;
+    let code = strip_comment(line);
+    let mut delta = count_occurrences(&code, "\\begin{") as i32;
+    delta -= count_occurrences(&code, "\\end{") as i32;
 
     let mut escaped = false;
     for ch in line.chars() {
@@ -711,5 +714,36 @@ mod tests {
         let src = "\\begin{doc}\nx % { unmatched\n\\end{doc}";
         let out = format(src);
         assert_eq!(out, "\\begin{doc}\n  x % { unmatched\n\\end{doc}\n");
+    }
+
+    #[test]
+    fn commented_begin_does_not_change_depth() {
+        let src = "% see \\begin{document} below\n\\documentclass{article}\nhello";
+        let out = format(src);
+        assert_eq!(
+            out,
+            "% see \\begin{document} below\n\\documentclass{article}\nhello\n"
+        );
+    }
+
+    #[test]
+    fn commented_out_env_block_does_not_shift() {
+        let src = "\\begin{document}\n% \\begin{abstract}\ntext\n% \\end{abstract}\nafter\n\\end{document}";
+        let out = format(src);
+        assert_eq!(
+            out,
+            "\\begin{document}\n  % \\begin{abstract}\n  text\n  % \\end{abstract}\n  after\n\\end{document}\n"
+        );
+    }
+
+    #[test]
+    fn escaped_percent_does_not_start_comment() {
+        assert_eq!(nesting_delta("\\% \\begin{x}"), 1);
+    }
+
+    #[test]
+    fn format_is_idempotent() {
+        let src = "\\begin{document}\n% \\begin{abstract}\ntext\n% \\end{abstract}\nafter\n\\end{document}";
+        assert_eq!(format(&format(src)), format(src));
     }
 }

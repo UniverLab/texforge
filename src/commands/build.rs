@@ -9,7 +9,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use notify::{RecursiveMode, Watcher};
 
-use crate::commands::init::BANNER;
 use crate::compiler;
 use crate::diagrams;
 use crate::domain::project::{Project, Reproducible};
@@ -82,8 +81,8 @@ fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
         caption_name: section.caption_name.clone(),
         list_name: section.list_name.clone(),
         font: match section.font.as_deref() {
-            Some(name) => ListingFont::parse(name)?,
-            None => ListingFont::default(),
+            Some(name) => Some(ListingFont::parse(name)?),
+            None => None,
         },
         fallback_language: None,
     })
@@ -136,7 +135,12 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     )?;
     // After diagrams: the code pass rewrites what diagrams just copied, and
     // its warning line numbers are build-copy coordinates (like Tectonic's).
-    let line_map = highlight::process(build_dir, &project.config.build.entry, highlight_cfg)?;
+    let line_map = highlight::process(
+        &project.root,
+        build_dir,
+        &project.config.build.entry,
+        highlight_cfg,
+    )?;
     let entry_filename = Path::new(&project.config.build.entry)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -171,7 +175,7 @@ pub fn watch(
     let preview_path =
         live_preview.map(|opts| resolve_preview_path(&project.root, opts.out.as_deref()));
 
-    print_watch_header(
+    let status_row = print_watch_header(
         &project.config.document.title,
         delay_secs,
         preview_path.as_deref(),
@@ -182,7 +186,7 @@ pub fn watch(
 
     let started = std::time::Instant::now();
     let result = run_build_with_preview(&project, &build_dir, verbose, epoch, live_preview);
-    redraw_status(&result, 1, started);
+    redraw_status(&result, 1, started, status_row);
 
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |res| {
@@ -218,7 +222,7 @@ pub fn watch(
 
         if last_tick.elapsed() >= Duration::from_secs(1) {
             last_tick = std::time::Instant::now();
-            redraw_status(&last_result, build_count, started);
+            redraw_status(&last_result, build_count, started, status_row);
         }
 
         if pending && last_event.elapsed() >= debounce {
@@ -227,7 +231,7 @@ pub fn watch(
             last_result =
                 run_build_with_preview(&project, &build_dir, verbose, epoch, live_preview);
             last_build = std::time::Instant::now();
-            redraw_status(&last_result, build_count, started);
+            redraw_status(&last_result, build_count, started, status_row);
         }
     }
 
@@ -251,17 +255,25 @@ fn is_relevant_watch_event(paths: &[PathBuf], build_dir: &Path) -> bool {
         .any(|p| !p.starts_with(build_dir) && p.extension().and_then(|e| e.to_str()) == Some("tex"))
 }
 
-fn print_watch_header(title: &str, delay_secs: u64, preview: Option<&Path>) {
+/// Draw the banner and title, and return the screen row the status block is
+/// drawn on: one below the title, whichever font the banner picked.
+fn print_watch_header(title: &str, delay_secs: u64, preview: Option<&Path>) -> usize {
     print!("\x1B[2J\x1B[H");
-    println!("{BANNER}");
+    let status_row = crate::banner::print() + 2;
     println!("  {title} — watching  ({delay_secs}s debounce  Ctrl+C to stop)");
     if let Some(path) = preview {
         println!("  live preview → {}", path.display());
     }
+    status_row
 }
 
-fn redraw_status(result: &WatchResult, build_count: u32, started: std::time::Instant) {
-    print!("\x1B[15;0H\x1B[J");
+fn redraw_status(
+    result: &WatchResult,
+    build_count: u32,
+    started: std::time::Instant,
+    status_row: usize,
+) {
+    print!("\x1B[{status_row};0H\x1B[J");
     let e = started.elapsed().as_secs();
     let session = format!("{:02}:{:02}:{:02}", e / 3600, (e % 3600) / 60, e % 60);
     println!();
@@ -308,7 +320,12 @@ fn run_build(
     ) {
         return WatchResult::Err(e.to_string());
     }
-    let line_map = match highlight::process(build_dir, &project.config.build.entry, highlight_cfg) {
+    let line_map = match highlight::process(
+        &project.root,
+        build_dir,
+        &project.config.build.entry,
+        highlight_cfg,
+    ) {
         Ok(map) => map,
         Err(e) => return WatchResult::Err(e.to_string()),
     };
@@ -689,30 +706,29 @@ mod tests {
 
     /// Font parsing and defaults.
     #[test]
-    fn highlight_font_parses_and_defaults_to_document() {
+    fn highlight_font_parses_and_defaults() {
         let mut project = project_with_highlight(Some("github"), None, None, None, None);
         project.config.highlight.as_mut().unwrap().font = Some("inconsolata".to_string());
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Inconsolata);
+        assert_eq!(settings.font, Some(ListingFont::Inconsolata));
 
-        // Absent section → Document
+        // Absent section → None (absent key)
         let mut project = project_with_highlight(None, None, None, None, None);
         project.config.highlight = None;
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Document);
+        assert_eq!(settings.font, None);
 
-        // Present section, absent key → Document
+        // Present section, absent key → None
         let mut project = project_with_highlight(None, None, None, None, None);
         project.config.highlight.as_mut().unwrap().font = None;
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Document);
+        assert_eq!(settings.font, None);
 
-        // Explicit "document" → Document (the same variant the absent key
-        // resolves to, which is what makes its output byte-identical)
+        // Explicit "document" → Some(Document)
         let mut project = project_with_highlight(None, None, None, None, None);
         project.config.highlight.as_mut().unwrap().font = Some("document".to_string());
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Document);
+        assert_eq!(settings.font, Some(ListingFont::Document));
     }
 
     /// Invalid font fails naming the value and all six valid names.

@@ -40,6 +40,16 @@ pub fn execute(json: bool, by: ByMode) -> Result<()> {
     Ok(())
 }
 
+/// Left column of one breakdown line: the section number and title in section
+/// mode, the file name in file mode. A starred section has an empty number, so
+/// its words appear under the title with no number before it.
+fn section_label(path: &str, title: Option<&str>, by: ByMode) -> String {
+    match by {
+        ByMode::Section => format!("{} {}", path, title.unwrap_or("")),
+        ByMode::File => path.to_string(),
+    }
+}
+
 /// Human-readable breakdown with dotted leaders and a total.
 fn print_human(stats: &DocumentStats, by: ByMode) {
     println!("{}", stats.document);
@@ -51,14 +61,7 @@ fn print_human(stats: &DocumentStats, by: ByMode) {
         );
     }
     for section in &stats.sections {
-        let left = match by {
-            ByMode::Section => format!(
-                "{} {}",
-                section.path,
-                section.title.as_deref().unwrap_or("")
-            ),
-            ByMode::File => section.path.clone(),
-        };
+        let left = section_label(&section.path, section.title.as_deref(), by);
         println!("  {}", dotted_line(&left, &section.words.to_string()));
     }
     if stats.preamble_words > 0 || !stats.sections.is_empty() {
@@ -90,6 +93,20 @@ mod tests {
     fn dotted_line_tolerates_overlong_left() {
         let line = dotted_line(&"x".repeat(70), "1");
         assert!(line.ends_with("1"));
+    }
+
+    #[test]
+    fn section_label_prints_a_starred_section_without_a_number() {
+        assert_eq!(
+            section_label("1", Some("Intro"), ByMode::Section),
+            "1 Intro"
+        );
+        assert_eq!(
+            section_label("", Some("Notes"), ByMode::Section),
+            " Notes",
+            "an empty number leaves the title where the number column ends"
+        );
+        assert_eq!(section_label("main.tex", None, ByMode::File), "main.tex");
     }
 
     #[test]
@@ -127,5 +144,33 @@ mod tests {
         let result = execute(false, ByMode::Section);
         std::env::set_current_dir(&orig).unwrap();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn titlesec_adds_no_stats_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\titleformat{\\section}{}{}{}{}\n\\titleformat{\\subsection}{}{}{}{}\n\\begin{document}\n\\titlespacing*{\\subsection}{0pt}{1ex}{1ex}\n\\section{Introduction}\n\\subsection{Background}\n\\end{document}",
+        )
+        .unwrap();
+        let files = crate::texparse::tokenize_document(dir.path(), "main.tex");
+        let stats = crate::wordcount::count_document("Doc", &files);
+        assert!(
+            stats
+                .sections
+                .iter()
+                .all(|s| s.title != Some(String::new())),
+            "no empty-titled section: {:?}",
+            stats.sections
+        );
+        let titles: Vec<&str> = stats
+            .sections
+            .iter()
+            .map(|s| s.title.as_deref().unwrap_or(""))
+            .collect();
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(titles, vec!["Introduction", "Background"]);
+        assert_eq!(paths, vec!["1", "1.1"]);
     }
 }

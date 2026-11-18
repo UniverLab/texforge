@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: texforge
+type: software
+version: 0.10.1
+date-released: RELEASE_DATE
+abstract: >-
+  Texforge is a unified LaTeX workspace — one tool for writing, rendering diagrams (Mermaid, Graphviz), and building PDFs. Set it up once and stay focused on your document.
+license: MIT
+repository-code: https://github.com/UniverLab/texforge
+url: https://univerlab.org/texforge
+authors:
+  - family-names: Martinez Bolivar
+    given-names: Jheison
+    affiliation: UniverLab
+    orcid: https://orcid.org/0009-0007-3668-102X
+keywords:
+  - latex
+  - pdf
+  - tectonic
+  - cli

@@ -101,7 +101,21 @@ impl ListingFont {
         let Some(FontLoad { package, line }) = self.load() else {
             return String::new();
         };
-        format!("\\makeatletter\n\\@ifpackageloaded{{{package}}}{{}}{{{line}}}%\n\\makeatother\n")
+        let mut out = format!("\\makeatletter\n\\@ifpackageloaded{{{package}}}{{}}{{{line}}}%\n");
+        if self == Self::DejaVuSansMono {
+            // Packages such as `ebgaramond`/`sourcesanspro` pull in fontspec
+            // under XeTeX, switching the default encoding to TU where the
+            // T1-only `DejaVuSansMono-TLF` family has no definition:
+            // `\ttfamily` then silently falls back to Latin Modern and no
+            // DejaVu font is embedded. Re-select T1 with the family the
+            // package installed (`\ttdefault`) whenever fontspec is loaded,
+            // so listings still embed DejaVu Sans Mono.
+            out.push_str(
+                "\\@ifpackageloaded{fontspec}{\\renewcommand{\\ttfamily}{\\fontencoding{T1}\\fontfamily{\\ttdefault}\\selectfont}}{}%\n",
+            );
+        }
+        out.push_str("\\makeatother\n");
+        out
     }
 }
 pub(crate) const BEGIN_MARKER: &str =
@@ -124,7 +138,9 @@ pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
 /// * `caption_names` — `Some` when at least one block carries `caption=`;
 ///   appends the listing counter, the chapter-aware numbering and
 ///   `\listoflistings`.
-/// * `font` — the typewriter family for code blocks; `Document` injects nothing.
+/// * `font` — the resolved typewriter family for code blocks; `Document`
+///   injects nothing (explicit, or resolved when project sources load
+///   fontspec).
 pub(crate) fn injected_block(
     colors: &BTreeSet<Rgb>,
     has_gutter: bool,
@@ -184,6 +200,14 @@ pub(crate) fn injected_block_with_caption(
     // `}` (a `\textcolor` boundary) or `-` (as in `n - 1`), so spaces are
     // emitted as `\tfxsp{}` and never as a `~` token.
     out.push_str(r"\newcommand{\tfxsp}{\nobreakspace{}}");
+    out.push('\n');
+    // Copy suppression for the gutter: an empty `ActualText` marked-content
+    // span (XeTeX `\special`, no package) around the argument, so viewers
+    // that honour `ActualText` copy nothing of the line number while the
+    // digits still print. One group keeps the `BDC`/`EMC` pair balanced.
+    out.push_str(
+        r"\newcommand{\tfxnoselect}[1]{{\special{pdf:literal direct /Span << /ActualText <FEFF> >> BDC}#1\special{pdf:literal direct EMC}}}",
+    );
     out.push('\n');
     out.push_str(&format!(
         "\\definecolor{{tfxtint}}{{rgb}}{{{}}}\n",
@@ -727,6 +751,41 @@ mod tests {
         assert!(err.contains("main.tex"), "{err}");
     }
 
+    /// The copy-suppression macro wraps its argument in one group holding an
+    /// empty `ActualText` span, `BDC` before the argument and `EMC` after it,
+    /// so the marked-content pair is balanced and the gutter copies as
+    /// nothing while it still prints (FR1, FR3).
+    #[test]
+    fn noselect_macro_wraps_an_empty_actual_text_span() {
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::Document,
+        );
+        assert!(block.contains("\\newcommand{\\tfxnoselect}[1]"), "{block}");
+        let definition = block
+            .lines()
+            .find(|line| line.contains("\\newcommand{\\tfxnoselect}"))
+            .unwrap();
+        assert_eq!(definition.matches(" BDC}").count(), 1, "{definition}");
+        assert_eq!(
+            definition
+                .matches("\\special{pdf:literal direct EMC}")
+                .count(),
+            1,
+            "{definition}"
+        );
+        let begin = definition.find("/ActualText <FEFF> >> BDC}").unwrap();
+        let argument = definition.find("#1").unwrap();
+        let end = definition
+            .find("\\special{pdf:literal direct EMC}")
+            .unwrap();
+        assert!(begin < argument && argument < end, "{definition}");
+        assert!(definition.ends_with("EMC}}}"), "{definition}");
+    }
+
     #[test]
     fn caption_machinery_defines_counter_chapter_guard_list_and_names() {
         let names = caption::Names {
@@ -837,6 +896,41 @@ mod tests {
             assert_eq!(
                 line_count, 1,
                 "{font:?} load line must appear once:\n{block}"
+            );
+        }
+    }
+
+    /// `DejaVu` re-selects T1 with the installed family when fontspec is
+    /// loaded: OpenType text packages (`ebgaramond`/`sourcesanspro`) switch
+    /// the default encoding to TU, where the T1-only `DejaVuSansMono-TLF`
+    /// family would otherwise fall back to Latin Modern and embed no
+    /// `DejaVu` font.
+    #[test]
+    fn dejavu_stanza_pins_ttfamily_under_fontspec() {
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::DejaVuSansMono,
+        );
+        assert!(
+            block.contains(
+                "\\@ifpackageloaded{fontspec}{\\renewcommand{\\ttfamily}{\\fontencoding{T1}\\fontfamily{\\ttdefault}\\selectfont}}{}%"
+            ),
+            "dejavu stanza must pin ttfamily under fontspec:\n{block}"
+        );
+        for font in [
+            ListingFont::Inconsolata,
+            ListingFont::SourceCodePro,
+            ListingFont::PlexMono,
+            ListingFont::FiraMono,
+        ] {
+            let other =
+                injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github, font);
+            assert!(
+                !other.contains("\\renewcommand{\\ttfamily}"),
+                "{font:?} must not touch \\ttfamily:\n{other}"
             );
         }
     }

@@ -1,0 +1,222 @@
+% Capacidades de texforge: documento de referencia editorial.
+% Compilado con texforge (motor tectonic embebido). Leer en UTF-8.
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[spanish]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[lining]{ebgaramond}
+\usepackage[scale=0.92]{sourcesanspro}
+\usepackage{microtype}
+\usepackage[a4paper,left=27mm,right=24mm,top=30mm,bottom=32mm,
+  headheight=14pt,headsep=14mm,footskip=14mm]{geometry}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage{needspace}
+\usepackage{etoolbox}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{placeins}
+% Las figuras del capitulo de diagramas son altas: dejan que una figura
+% ocupe casi toda la pagina y que quepan unas lineas de texto a su lado,
+% en vez de empujarla a una pagina propia.
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.85}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.85}
+% Las figuras del capitulo de diagramas van seguidas unas de otras: el aire
+% por defecto entre figura y texto deja huecos que empujan una figura a la
+% pagina siguiente.
+\setlength{\textfloatsep}{11pt plus 2pt minus 2pt}
+\setlength{\intextsep}{9pt plus 2pt minus 2pt}
+\setlength{\floatsep}{11pt plus 2pt minus 2pt}
+\setlength{\abovecaptionskip}{6pt}
+\usepackage{graphicx}
+\usepackage{lastpage}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage[most]{tcolorbox}
+\usepackage{amsmath,amssymb}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+
+% Paleta definida una sola vez: tonos del laboratorio y un unico acento.
+\definecolor{benchparchment}{HTML}{F4F0EA}
+\definecolor{benchdeep}{HTML}{EEE7DC}
+\definecolor{benchlamp}{HTML}{F6ECD2}
+\definecolor{benchink}{HTML}{1D1510}
+\definecolor{benchsepia}{HTML}{6B5A43}
+\definecolor{benchgraphite}{HTML}{5D5852}
+\definecolor{benchbrass}{HTML}{8A6A2C}
+\definecolor{benchcopper}{HTML}{9A5530}
+\definecolor{benchgarnet}{HTML}{87222C}
+\definecolor{benchslate}{HTML}{222928}
+\colorlet{docink}{benchink}
+\definecolor{docaccent}{HTML}{87222C}
+\colorlet{docmuted}{benchsepia}
+\colorlet{docrule}{benchsepia!35!white}
+\colorlet{docwarn}{benchgarnet}
+\hypersetup{colorlinks=true,linkcolor=docink,urlcolor=docaccent,
+  citecolor=docaccent,breaklinks=true,
+  pdftitle={Capacidades de texforge},pdfauthor={Jheison M}}
+\urlstyle{sf}
+
+% Etiquetas fijas en espanol.
+\newcommand{\lblVersion}{Versión}
+\newcommand{\lblDate}{Fecha}
+\newcommand{\lblAuthor}{Autor}
+\newcommand{\lblOrganization}{Organización}
+\newcommand{\lblNote}{Nota}
+\newcommand{\lblNews}{Novedad 1.0}
+\newcommand{\lblPage}{Página}
+\newcommand{\lblOf}{de}
+
+% Metadatos del documento, usados por la portada y el encabezado.
+\newcommand{\DocTitle}{Capacidades de texforge}
+\newcommand{\DocSubtitle}{Lo que el compilador hace por tus documentos, contado en un documento hecho con él}
+\newcommand{\DocOrg}{UniverLab}
+\newcommand{\DocOwner}{Jheison M}
+\newcommand{\DocVersion}{Versión 1.0}
+\newcommand{\DocDate}{18 de noviembre de 2026}
+
+% Sin soporte para xetex: las versalitas llevan el enfasis.
+\renewcommand{\textls}[2][]{#2}
+\newcommand{\caps}[1]{{\sffamily\scshape #1}}
+\newcommand{\metalabel}[1]{{\sffamily\scriptsize\scshape\textls[90]{\color{docmuted}#1}}}
+
+% Cabecera y pie: organizacion y titulo arriba, pagina abajo.
+\fancypagestyle{doc}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\caps{\DocOrg}}
+  \fancyhead[R]{\small\itshape\DocTitle}
+  \fancyfoot[L]{\small\caps{\DocVersion}}
+  \fancyfoot[R]{\small\sffamily\lblPage\ \thepage\ \lblOf\ \pageref{LastPage}}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0.4pt}
+  \renewcommand{\headrule}{\hbox to\headwidth{\color{docrule}\leaders\hrule height \headrulewidth\hfill}}
+  \renewcommand{\footrule}{\hbox to\headwidth{\color{docrule}\leaders\hrule height \footrulewidth\hfill}}}
+\pagestyle{doc}
+\fancypagestyle{plain}{\pagestyle{doc}}
+
+% Titulos: seccion Garamond con numero en acento y regla, subseccion sans.
+\titleformat{\section}{\normalfont\fontsize{20}{24}\selectfont\color{docink}}
+{\textcolor{docaccent}{\thesection}}{0.7em}{}[{\vspace{3pt}\color{docrule}\titlerule}]
+\titlespacing*{\section}{0pt}{1.6\baselineskip}{0.7\baselineskip}
+\titleformat{\subsection}{\sffamily\bfseries\normalsize\color{docink}}
+{\textcolor{docaccent}{\thesubsection}}{0.7em}{}
+\titlespacing*{\subsection}{0pt}{1.0\baselineskip}{0.3\baselineskip}
+\titleformat{\subsubsection}{\normalfont\itshape\color{docink}}{}{0pt}{}
+\titlespacing*{\subsubsection}{0pt}{0.8\baselineskip}{0.2\baselineskip}
+
+% Indice con tocloft.
+\renewcommand{\cftsecfont}{\normalfont\bfseries}
+\renewcommand{\cftsecpagefont}{\normalfont\bfseries}
+\renewcommand{\cftsubsecfont}{\normalfont}
+\renewcommand{\cftsecdotsep}{\cftnodots}
+\renewcommand{\cftsubsecdotsep}{\cftdotsep}
+\setlength{\cftbeforesecskip}{0.5em}
+\setlength{\cftbeforesubsecskip}{0.1em}
+\renewcommand{\cftdotsep}{2}
+\renewcommand{\cfttoctitlefont}{\normalfont\fontsize{20}{24}\selectfont\color{docink}}
+\setlength{\cftaftertoctitleskip}{0.8em}
+
+\frenchspacing
+\let\origsection\section
+\renewcommand{\section}{\needspace{8\baselineskip}\origsection}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.4\baselineskip}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.25}
+\setlist{leftmargin=1.5em,itemsep=1pt,topsep=2pt,parsep=0pt}
+\setlist[itemize]{label={\color{docaccent}\textbullet}}
+
+% Longitudes de la portada: definidas aqui para que el cuerpo solo nombre comandos.
+\newlength{\covertopskip}\setlength{\covertopskip}{2mm}
+\newlength{\covermidskip}\setlength{\covermidskip}{18pt}
+\newlength{\coversmallskip}\setlength{\coversmallskip}{2pt}
+
+% Franja de la portada, como las plantillas: texto en el preambulo.
+\newcommand{\DocKicker}{Documento de referencia \textperiodcentered\ Versión 1.0}
+\newcommand{\coverbands}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \node[anchor=north west,inner sep=0pt,fill=benchgarnet,minimum width=\paperwidth,
+      minimum height=2.4mm] at ([yshift=-22mm]current page.north west) {};
+    \node[anchor=north west,inner sep=0pt,fill=benchgarnet,minimum width=\paperwidth,
+      minimum height=0.9mm] at ([yshift=-132mm]current page.north west) {};
+    \node[anchor=north west,inner sep=0pt,fill=benchgarnet,minimum width=\paperwidth,
+      minimum height=0.35mm] at ([yshift=-134mm]current page.north west) {};
+  \end{tikzpicture}}
+
+% Cajas: panel tintado con barra de acento y rotulo en versalitas.
+\tcbset{docbox/.style={enhanced,breakable,colback=#1!6,colframe=#1!6,
+    boxrule=0pt,arc=0pt,outer arc=0pt,borderline west={2.4pt}{0pt}{#1},
+    left=11pt,right=10pt,top=6pt,bottom=6pt,before skip=7pt,after skip=7pt,
+    fonttitle=\sffamily\scriptsize\scshape\bfseries,coltitle=#1,
+    attach boxed title to top left={xshift=-1pt,yshift=-1pt},
+    boxed title style={empty,left=0pt,top=0pt,bottom=0pt}}}
+\newtcolorbox{notebox}[1][]{docbox=docmuted,title={\textls[90]{\lblNote}},#1}
+\newtcolorbox{novabox}[1][]{docbox=docaccent,title={\textls[90]{\lblNews}},#1}
+
+\begin{document}
+
+  % Portada: titulo y datos en un bloque enmarcado por reglas granate.
+  \begingroup
+  \thispagestyle{empty}
+  \noindent\begin{minipage}[t][\dimexpr\textheight-2\baselineskip\relax][t]{\textwidth}
+    \coverbands\par\nointerlineskip
+    \raggedright\color{docink}
+    \vspace*{\covertopskip}
+    {\large\color{docmuted}\caps{\DocOrg}\par}
+    \vspace{18mm}
+    {\sffamily\small\scshape\color{docaccent}\DocKicker\par}
+    \vspace{4mm}
+    {\fontsize{38}{42}\selectfont\DocTitle\par}
+    \vspace{6mm}
+    {\fontsize{16}{20}\selectfont\itshape\color{docmuted}\DocSubtitle\par}
+    \vspace{42mm}\color{docink}
+    \begin{tabular}{@{}p{5.6cm}p{5.6cm}@{}}
+      \metalabel{\lblVersion} & \metalabel{\lblDate} \\[\coversmallskip]
+      \DocVersion & \DocDate \\[\covermidskip]
+      \metalabel{\lblAuthor} & \metalabel{\lblOrganization} \\[\coversmallskip]
+      \DocOwner & \DocOrg \\
+    \end{tabular}
+    \vfill
+    {\color{docmuted}\small Compilado con texforge, sin TeX Live ni MiKTeX\par}
+  \end{minipage}
+  \endgroup
+  \clearpage
+
+  \section*{De un vistazo}
+  \begin{tcolorbox}[docbox=docaccent,title={\textls[90]{De un vistazo}}]
+    Este documento demuestra todo lo que texforge sabe componer: diagramas
+    Mermaid, Graphviz y D2 generados durante la compilación, un esquema
+    TikZ dibujado a mano, matemáticas con referencias cruzadas, listados de
+    código en cuatro lenguajes con el estilo \texttt{ink} y numeración que
+    no se copia, citas BibTeX, dos tablas \texttt{booktabs} y listas con
+    propósito. Todo lo que ves salió de \texttt{texforge build}.
+  \end{tcolorbox}
+
+  \tableofcontents
+  \clearpage
+
+  \input{sections/01-que-es}
+  \input{sections/02-flujo}
+  \input{sections/03-diagramas}
+  \input{sections/04-matematicas}
+  \input{sections/05-codigo}
+  \input{sections/06-bibliografia}
+  \input{sections/07-novedades}
+  \input{sections/08-listas}
+  \input{sections/09-conclusion}
+
+  % La última entrada cabe en la página anterior con una línea de más.
+  \enlargethispage{\baselineskip}
+  \bibliographystyle{plain}
+  \bibliography{bib/references}
+
+\end{document}

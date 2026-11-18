@@ -1,6 +1,6 @@
 //! `texforge new` command implementation.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
@@ -8,9 +8,14 @@ use anyhow::{Context, Result};
 use crate::manifest::TemplateManifest;
 use crate::placeholders::PlaceholderResolver;
 use crate::templates;
+use crate::values_file;
 
 /// Create a new project from a template.
-pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
+///
+/// `values_path` is the optional `--values` file: its keys must all be
+/// placeholders the template declares, they win over every other source, and
+/// it is echoed into the project as `values.toml`.
+pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -> Result<()> {
     validate_project_name(name)?;
 
     let template_name = template.unwrap_or("general");
@@ -26,6 +31,8 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
     );
 
     let resolved = templates::resolve(template_name)?;
+    let manifest = template_manifest(&resolved.files);
+    let file_values = load_values(values_path, manifest.as_ref(), template_name)?;
 
     // Create the project directory before resolving placeholders: the author
     // fallback runs `git config --get user.name` in the target directory and
@@ -34,45 +41,58 @@ pub fn execute(name: &str, template: Option<&str>) -> Result<()> {
 
     // Resolve any placeholders the template declares (defaults, project/user
     // config). Missing values are left as-is rather than failing generation.
-    // The project name doubles as the document title unless overridden.
-    let mut cli_args = HashMap::new();
-    cli_args.insert("title".to_string(), name.to_string());
+    // The project name doubles as the document title unless the values file
+    // overrides it.
+    let mut cli_args: HashMap<String, String> = file_values
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    cli_args
+        .entry("title".to_string())
+        .or_insert_with(|| name.to_string());
     let values = resolve_placeholder_values(&resolved.files, cli_args, project_dir);
 
-    // Write all template files into the (now existing) project directory
-    for (rel_path, content) in &resolved.files {
-        // Skip template.toml — it's metadata, not a project file
-        if rel_path == "template.toml" {
-            continue;
-        }
-        let dest = project_dir.join(rel_path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Substitute {{placeholder}} tokens in .tex files only — other files
-        // (code samples, images) are copied verbatim.
-        if rel_path.ends_with(".tex") {
-            let text = String::from_utf8_lossy(content);
-            let substituted = apply_substitutions(&text, &values);
-            std::fs::write(&dest, substituted)
-        } else {
-            std::fs::write(&dest, content)
-        }
-        .with_context(|| format!("Failed to write {}", dest.display()))?;
+    // A required placeholder with no value fails generation instead of leaving
+    // a raw `{{name}}` in the project. Remove the directory this run created.
+    let missing = missing_required(manifest.as_ref(), &values);
+    if !missing.is_empty() {
+        let _ = std::fs::remove_dir_all(project_dir);
+        let list = missing
+            .iter()
+            .map(|(key, description)| format!("  - {key}: {description}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        anyhow::bail!("Required placeholders have no value:\n{list}");
     }
 
-    // Generate project.toml
+    write_project_files(&resolved.files, &values, project_dir)?;
+
+    if values_path.is_some() {
+        std::fs::write(
+            project_dir.join("values.toml"),
+            values_file::render(&file_values),
+        )
+        .context("Failed to write values.toml")?;
+    }
+
+    // Generate project.toml. Values are LaTeX source and may hold quotes or
+    // backslashes, so every interpolated string goes through the TOML escaper:
+    // a raw `author` would otherwise produce a manifest nothing can parse.
     let author = values.get("author").map_or("Author", String::as_str);
+    let title = values.get("title").map_or(name, String::as_str);
     let project_toml = format!(
         r#"[document]
-title = "{name}"
-author = "{author}"
-template = "{template_name}"
+title = {title}
+author = {author}
+template = {template_name}
 
 [build]
 entry = "main.tex"
 bibliography = "bib/references.bib"
-"#
+"#,
+        title = values_file::toml_string(title),
+        author = values_file::toml_string(author),
+        template_name = values_file::toml_string(template_name),
     );
     std::fs::write(project_dir.join("project.toml"), project_toml)?;
 
@@ -87,6 +107,109 @@ bibliography = "bib/references.bib"
     Ok(())
 }
 
+/// Parse a template's `template.toml`. Returns `None` when the file is
+/// absent, not UTF-8 or does not parse: such a template declares no
+/// placeholders at all.
+fn template_manifest(files: &HashMap<String, Vec<u8>>) -> Option<TemplateManifest> {
+    let text = std::str::from_utf8(files.get("template.toml")?).ok()?;
+    TemplateManifest::from_str(text).ok()
+}
+
+/// Load the `--values` file, if any, and check its keys against the
+/// placeholders the template declares.
+fn load_values(
+    values_path: Option<&Path>,
+    manifest: Option<&TemplateManifest>,
+    template_name: &str,
+) -> Result<BTreeMap<String, String>> {
+    let Some(path) = values_path else {
+        return Ok(BTreeMap::new());
+    };
+    let values = values_file::load(path)?;
+    validate_values_keys(manifest, &values, template_name)?;
+    Ok(values)
+}
+
+/// Every key of the values file must be a placeholder the template declares,
+/// otherwise it would silently do nothing. A template without a parsable
+/// manifest declares nothing, so every key is unknown there.
+fn validate_values_keys(
+    manifest: Option<&TemplateManifest>,
+    values: &BTreeMap<String, String>,
+    template_name: &str,
+) -> Result<()> {
+    let declared: Vec<&str> = manifest.map_or_else(Vec::new, |manifest| {
+        manifest
+            .placeholders
+            .iter()
+            .map(|placeholder| placeholder.name.as_str())
+            .collect()
+    });
+    let unknown: Vec<&str> = values
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !declared.contains(key))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let declared_list = if declared.is_empty() {
+        "none".to_string()
+    } else {
+        declared.join(", ")
+    };
+    anyhow::bail!(
+        "Values file defines keys template '{template_name}' does not declare: {} (declared: {declared_list})",
+        unknown.join(", ")
+    )
+}
+
+/// The required placeholders left without a value after resolution, as
+/// `(name, description)` in declaration order.
+fn missing_required<'a>(
+    manifest: Option<&'a TemplateManifest>,
+    values: &HashMap<String, String>,
+) -> Vec<(&'a str, &'a str)> {
+    let Some(manifest) = manifest else {
+        return Vec::new();
+    };
+    manifest
+        .placeholders
+        .iter()
+        .filter(|placeholder| placeholder.required && !values.contains_key(&placeholder.name))
+        .map(|placeholder| (placeholder.name.as_str(), placeholder.description.as_str()))
+        .collect()
+}
+
+/// Write all template files into the project directory, substituting
+/// `{{placeholder}}` tokens in `.tex` files only — other files (code samples,
+/// images) are copied verbatim.
+fn write_project_files(
+    files: &HashMap<String, Vec<u8>>,
+    values: &HashMap<String, String>,
+    project_dir: &Path,
+) -> Result<()> {
+    for (rel_path, content) in files {
+        // Skip template.toml — it's metadata, not a project file
+        if rel_path == "template.toml" {
+            continue;
+        }
+        let dest = project_dir.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if rel_path.ends_with(".tex") {
+            let text = String::from_utf8_lossy(content);
+            let substituted = apply_substitutions(&text, values);
+            std::fs::write(&dest, substituted)
+        } else {
+            std::fs::write(&dest, content)
+        }
+        .with_context(|| format!("Failed to write {}", dest.display()))?;
+    }
+    Ok(())
+}
+
 /// Resolve placeholder values from a template's manifest, if present.
 /// Returns an empty map for templates without a (valid) `template.toml` or
 /// without declared placeholders. `project_dir` is where the git identity
@@ -98,13 +221,7 @@ fn resolve_placeholder_values(
 ) -> HashMap<String, String> {
     let mut values = HashMap::new();
 
-    let Some(toml_bytes) = files.get("template.toml") else {
-        return values;
-    };
-    let Ok(text) = std::str::from_utf8(toml_bytes) else {
-        return values;
-    };
-    let Ok(manifest) = TemplateManifest::from_str(text) else {
+    let Some(manifest) = template_manifest(files) else {
         return values;
     };
 
@@ -329,8 +446,9 @@ mod tests {
         );
     }
 
-    /// Generates `demo` from the embedded general template under a fully
-    /// isolated environment and hands the project directory to `body`.
+    /// Runs `texforge new` on `demo` with the embedded general template in a
+    /// fully isolated environment and returns the command result plus the
+    /// temporary root (so a failing test can check what was left behind).
     ///
     /// - `HOME` / `XDG_CONFIG_HOME` point at a fresh tempdir: empty texforge
     ///   config and empty template cache, nothing from the developer's real
@@ -339,12 +457,19 @@ mod tests {
     ///   the developer's real git identity cannot leak in.
     /// - With `Some(name)`, the tempdir becomes a git repo whose local
     ///   `user.name` is that value.
-    /// - The download override makes the network step of
-    ///   `templates::resolve("general")` fail deterministically, so the
-    ///   embedded template is used even when the sandbox has network.
+    /// - With `Some(files)`, the download override serves those template files
+    ///   instead of the network; without it the override fails
+    ///   deterministically, so the embedded template is used even when the
+    ///   sandbox has network.
+    /// - With `Some((file_name, content))`, that values file is written in the
+    ///   temp root and passed as `--values`.
     ///
     /// Lock order stays ENV then CWD, matching the rest of the suite.
-    fn with_generated_project(git_name: Option<&str>, body: impl FnOnce(&Path)) {
+    fn run_new(
+        git_name: Option<&str>,
+        files: Option<HashMap<String, Vec<u8>>>,
+        values: Option<(&str, &str)>,
+    ) -> (Result<()>, tempfile::TempDir) {
         let _env = crate::test_sync::ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -371,21 +496,73 @@ mod tests {
             run_git(&["config", "user.name", git_name], root.path());
         }
 
+        let values_path = values.map(|(file_name, content)| {
+            let path = root.path().join(file_name);
+            std::fs::write(&path, content).unwrap();
+            path
+        });
+
         let _cwd = crate::test_sync::CWD_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(root.path()).unwrap();
-        crate::templates::set_download_override(|_| {
-            Err(anyhow::anyhow!("network disabled in tests"))
-        });
-        let result = execute("demo", Some("general"));
+        match files {
+            Some(files) => crate::templates::set_download_override(move |_| Ok(files.clone())),
+            None => crate::templates::set_download_override(|_| {
+                Err(anyhow::anyhow!("network disabled in tests"))
+            }),
+        }
+        let result = execute("demo", Some("general"), values_path.as_deref());
         crate::templates::clear_download_override();
         std::env::set_current_dir(orig).unwrap();
 
+        (result, root)
+    }
+
+    /// Runs `new` successfully on the embedded general template and hands the
+    /// generated project directory to `body`.
+    fn with_generated_project(git_name: Option<&str>, body: impl FnOnce(&Path)) {
+        let (result, root) = run_new(git_name, None, None);
         result.unwrap();
         body(&root.path().join("demo"));
     }
+
+    /// Template files for a `contract` template declaring `placeholders`
+    /// (manifest snippets) and no `main.tex` tokens.
+    fn contract_template(placeholders: &str) -> HashMap<String, Vec<u8>> {
+        let manifest = format!(
+            r#"
+id = "contract"
+version = "0.1.0"
+display_name = "Contract"
+description = "A contract generated from data"
+
+{placeholders}
+"#
+        );
+        let mut files = HashMap::new();
+        files.insert("template.toml".to_string(), manifest.into_bytes());
+        files.insert(
+            "main.tex".to_string(),
+            b"\\documentclass{article}\n\\begin{document}\nok\n\\end{document}\n".to_vec(),
+        );
+        files
+    }
+
+    const TWO_REQUIRED: &str = r#"
+[[placeholders]]
+name = "client"
+type = "string"
+description = "Client legal name"
+required = true
+
+[[placeholders]]
+name = "reference"
+type = "string"
+description = "Contract reference"
+required = true
+"#;
 
     #[test]
     fn generated_general_project_inputs_body_without_inputenc() {
@@ -433,6 +610,246 @@ mod tests {
                     entry.path().display()
                 );
             }
+        });
+    }
+
+    #[test]
+    fn toml_and_yaml_values_generate_the_same_main_tex() {
+        let toml = "title = \"Contract\"\nauthor = \"Acme Ltd\"\nlanguage = \"english\"\n";
+        let yaml = "title: Contract\nauthor: Acme Ltd\nlanguage: english\n";
+        let (toml_result, toml_root) = run_new(None, None, Some(("client.toml", toml)));
+        let (yaml_result, yaml_root) = run_new(None, None, Some(("client.yaml", yaml)));
+        toml_result.unwrap();
+        yaml_result.unwrap();
+
+        let from_toml = std::fs::read_to_string(toml_root.path().join("demo/main.tex")).unwrap();
+        let from_yaml = std::fs::read_to_string(yaml_root.path().join("demo/main.tex")).unwrap();
+        assert_eq!(from_toml, from_yaml);
+        assert!(
+            from_toml.contains("\\title{Contract}"),
+            "the values file must fill the title:\n{from_toml}"
+        );
+        assert!(
+            from_toml.contains("\\author{Acme Ltd}"),
+            "the values file must fill the author:\n{from_toml}"
+        );
+    }
+
+    #[test]
+    fn values_file_wins_over_the_template_default() {
+        let (result, root) = run_new(
+            None,
+            None,
+            Some(("client.toml", "language = \"spanish\"\n")),
+        );
+        result.unwrap();
+        let main = std::fs::read_to_string(root.path().join("demo/main.tex")).unwrap();
+        assert!(
+            main.contains("\\usepackage[spanish]{babel}"),
+            "the file value must beat the template default 'english':\n{main}"
+        );
+    }
+
+    #[test]
+    fn title_key_in_the_values_file_overrides_the_project_name() {
+        let (result, root) = run_new(
+            None,
+            None,
+            Some(("client.toml", "title = \"Service Agreement\"\n")),
+        );
+        result.unwrap();
+        let main = std::fs::read_to_string(root.path().join("demo/main.tex")).unwrap();
+        assert!(
+            main.contains("\\title{Service Agreement}"),
+            "the values file title must override the project name:\n{main}"
+        );
+        assert!(
+            !main.contains("\\title{demo}"),
+            "the project name must not win over the values file:\n{main}"
+        );
+    }
+
+    #[test]
+    fn latex_characters_in_a_value_reach_the_output_unchanged() {
+        let (result, root) = run_new(
+            None,
+            None,
+            Some((
+                "client.toml",
+                "title = \"A \\\\& B 50\\\\% \\\\textbf{x}_{y} {braces}\"\n",
+            )),
+        );
+        result.unwrap();
+        let main = std::fs::read_to_string(root.path().join("demo/main.tex")).unwrap();
+        assert!(
+            main.contains("\\title{A \\& B 50\\% \\textbf{x}_{y} {braces}}"),
+            "values are LaTeX source and must pass through verbatim:\n{main}"
+        );
+    }
+
+    /// A LaTeX `author` reaches `main.tex` verbatim *and* leaves a parsable
+    /// `project.toml`: interpolating it raw yields an unreadable manifest that
+    /// breaks every later `texforge build`.
+    #[test]
+    fn latex_author_keeps_project_toml_parsable() {
+        let (result, root) = run_new(
+            None,
+            None,
+            Some(("client.toml", "author = \"A \\\\& \\\"B\\\" \"\n")),
+        );
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["author"].as_str(),
+            Some("A \\& \"B\" "),
+            "the author must survive into project.toml:\n{manifest}"
+        );
+        let main = std::fs::read_to_string(project.join("main.tex")).unwrap();
+        assert!(
+            main.contains("\\author{A \\& \"B\" }"),
+            "the author must reach main.tex verbatim:\n{main}"
+        );
+    }
+
+    #[test]
+    fn values_title_reaches_project_toml() {
+        let (result, root) = run_new(
+            None,
+            None,
+            Some(("client.toml", "title = \"My \\\"Great\\\" Report\"\n")),
+        );
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["title"].as_str(),
+            Some("My \"Great\" Report"),
+            "the values title must reach project.toml:\n{manifest}"
+        );
+    }
+
+    #[test]
+    fn project_toml_title_defaults_to_the_project_name() {
+        let (result, root) = run_new(None, None, None);
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["title"].as_str(),
+            Some("demo"),
+            "without a values title the project name is the title:\n{manifest}"
+        );
+    }
+
+    #[test]
+    fn title_with_a_backslash_round_trips_into_project_toml() {
+        let (result, root) = run_new(None, None, Some(("client.toml", "title = \"A \\\\ B\"\n")));
+        result.unwrap();
+        let project = root.path().join("demo");
+        let manifest = std::fs::read_to_string(project.join("project.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&manifest).unwrap_or_else(|error| {
+            panic!("project.toml must parse ({error}):\n{manifest}");
+        });
+        assert_eq!(
+            parsed["document"]["title"].as_str(),
+            Some("A \\ B"),
+            "a backslash title must round-trip through project.toml:\n{manifest}"
+        );
+    }
+
+    #[test]
+    fn unknown_values_key_lists_the_unknown_and_declared_names_and_creates_no_directory() {
+        let (result, root) = run_new(None, None, Some(("client.toml", "client = \"Acme\"\n")));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("client"), "{error}");
+        assert!(
+            error.contains("title"),
+            "declared names must be listed: {error}"
+        );
+        assert!(
+            error.contains("language"),
+            "declared names must be listed: {error}"
+        );
+        assert!(
+            !root.path().join("demo").exists(),
+            "no project directory may be created for an unknown key"
+        );
+    }
+
+    #[test]
+    fn a_template_without_a_manifest_declares_no_known_key() {
+        let mut files = HashMap::new();
+        files.insert("main.tex".to_string(), b"\\documentclass{article}".to_vec());
+        let (result, root) = run_new(None, Some(files), Some(("client.toml", "title = \"X\"\n")));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("title"), "{error}");
+        assert!(error.contains("none"), "{error}");
+        assert!(!root.path().join("demo").exists());
+    }
+
+    #[test]
+    fn two_missing_required_placeholders_are_both_reported_and_the_directory_removed() {
+        let (result, root) = run_new(None, Some(contract_template(TWO_REQUIRED)), None);
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("client"), "{error}");
+        assert!(error.contains("Client legal name"), "{error}");
+        assert!(error.contains("reference"), "{error}");
+        assert!(error.contains("Contract reference"), "{error}");
+        assert!(
+            !root.path().join("demo").exists(),
+            "the directory created by this run must be removed"
+        );
+    }
+
+    #[test]
+    fn required_placeholders_satisfied_by_the_values_file_pass() {
+        let values = "client = \"Acme Ltd\"\nreference = \"C-2026-001\"\n";
+        let (result, root) = run_new(
+            None,
+            Some(contract_template(TWO_REQUIRED)),
+            Some(("client.toml", values)),
+        );
+        result.unwrap();
+        assert!(root.path().join("demo/main.tex").is_file());
+    }
+
+    #[test]
+    fn values_toml_is_written_sorted_with_the_header_and_escaped_lines() {
+        let values = "title = \"Contract\"\nauthor = \"Ada \\\"A\\\" \\\\ Co\"\n";
+        let (result, root) = run_new(None, None, Some(("client.toml", values)));
+        result.unwrap();
+        let written = std::fs::read_to_string(root.path().join("demo/values.toml")).unwrap();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(
+            lines[0],
+            "# Values used by texforge new; run texforge new with --values on this file to regenerate."
+        );
+        assert_eq!(lines[1], "author = \"Ada \\\"A\\\" \\\\ Co\"");
+        assert_eq!(lines[2], "title = \"Contract\"");
+        assert_eq!(
+            lines.len(),
+            3,
+            "only the values file keys are written:\n{written}"
+        );
+    }
+
+    #[test]
+    fn no_values_toml_without_the_flag() {
+        with_generated_project(None, |project| {
+            assert!(
+                !project.join("values.toml").exists(),
+                "values.toml must only exist when --values is used"
+            );
         });
     }
 }

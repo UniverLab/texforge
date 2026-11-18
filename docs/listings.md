@@ -38,6 +38,8 @@ pass writes nothing and documents compile exactly as before.
 | `pos` | `H` (inline, the default), `h`, `t`, `b`, `p` | `H` — the listing stays where it is written and may break across pages |
 | `size` | `scriptsize`, `footnotesize`, `small`, `normalsize` | `small` (today's size); any other value warns and uses `small` |
 | `style` | `light`, `light-mono`, `dark`, `dark-mono` (see [Styles](#styles)) | `[highlight.by_lang]` for that language, else `[highlight] style`, else `light`; any other value fails the build |
+| `file` | path to a project file, relative to the project root (never absolute, never escaping with `..`) | _(none)_ — the block renders its own body |
+| `lines` | `10-40`, `10-`, `-40`, or `25` (1-based, inclusive) | the whole file; requires `file=` |
 
 An unknown `lang` never fails the build: the block renders monochrome and
 `texforge build` warns, naming the language and pointing at
@@ -51,7 +53,7 @@ theme = "github"     # "github" (default) or "one-light"
 style = "light"      # "light" (default), "light-mono", "dark", "dark-mono"
 lstlisting = true    # also rewrite \begin{lstlisting} blocks (default false)
 numbers = true       # number every block unless it says otherwise
-font = "inconsolata" # typewriter family for code blocks (default "document")
+font = "document"    # typewriter family for code blocks (default "dejavu-sans-mono" when absent and project sources do not load fontspec)
 # caption_name = "Listing"        # override the language's listing name
 # list_name = "List of Listings"  # override the list-of-listings heading
 
@@ -59,20 +61,58 @@ font = "inconsolata" # typewriter family for code blocks (default "document")
 bash = "dark"        # shell commands in a terminal-dark frame
 ```
 
+## Including a file
+
+Instead of pasting a script, take the block from a file of the project —
+the `\lstinputlisting` / `\inputminted` shape, without their costs:
+
+```latex
+\begin{code}[lang=python, file=scripts/07_probar_modelo.py, lines=10-40]
+\end{code}
+```
+
+With `file=`, the block body is ignored and the file is read at build time;
+`lines=` keeps a 1-based inclusive range (`10-40`, `10-` to the end,
+`-40` from the start, `25` for one line). The same options apply
+(`numbers`, `caption`, `label`, `pos`, `size`, `style`), and with `numbers`
+the gutter shows the file's own line numbers — a listing of lines 10–40 is
+numbered 10…40. Without `lang=`, the language is inferred from the file
+extension; an unknown extension renders a plain monospace block.
+
+The file's text is read at build time and embedded in the generated LaTeX,
+so the document stays self-contained: no `\inputminted`,
+`\lstinputlisting`, or shell-escape is ever emitted, and no external file
+is needed at compile time.
+
+A missing or unreadable file, a malformed range, a range past the end, an
+escaping path, or `lines=` without `file=` fails the build, naming the
+block's source file and line, the `file=` path, and the cause. `texforge
+check` reports the same problems without building, and warns when a block
+carries both `file=` and a body.
+
 ## Font
 
-The `[highlight] font` key sets the document's **typewriter family** (`\ttfamily`) so
-inline `\texttt{}` matches the code blocks. The value must be one of the monospace
-families shipped in the Tectonic bundle:
+By default, code listings use DejaVu Sans Mono when `[highlight] font` is not
+set and the project sources do not visibly load fontspec. Set `font` under
+`[highlight]` to choose a different typewriter family, or `font = "document"`
+to keep the preamble's own `\ttfamily`.
+
+The value must be one of the monospace families shipped in the Tectonic bundle:
 
 | value | family |
 |---|---|
-| `document` (default) | whatever the preamble sets — Latin Modern Mono in the bundled templates |
+| `document` | whatever the preamble sets — Latin Modern Mono in the bundled templates |
 | `inconsolata` | Inconsolata (with `varqu`/`varl` for straight quotes and distinguishable `l`) |
 | `source-code-pro` | Source Code Pro |
-| `dejavu-sans-mono` | DejaVu Sans Mono |
+| `dejavu-sans-mono` | DejaVu Sans Mono (the default when absent and fontspec is not loaded) |
 | `plex-mono` | IBM Plex Mono |
 | `fira-mono` | Fira Mono |
+
+If `[highlight] font` is not set and the project sources visibly load fontspec
+(by `\usepackage{fontspec}` or a `\setmainfont`/`\setsansfont`/`\setmonofont`/
+`\newfontfamily`/`\setmathfont` command in the project sources; a class that
+loads it is not detected), texforge keeps the document font unless a font is
+set explicitly.
 
 The chosen package is loaded once, guarded by `\@ifpackageloaded`, so a document
 that already loads the same package is not loaded twice. Because the injection
@@ -82,11 +122,14 @@ value and listing the six valid ones.
 
 **Caveat — `fontspec` preambles.** A preamble that loads `fontspec` (directly,
 or through an OpenType package such as `FiraMono`) switches the document to TU
-encoding, where the Type 1–based values (`inconsolata`, `dejavu-sans-mono`)
-have no font files: typewriter text then falls back to the document's serif
+encoding, where a Type 1–based value such as `inconsolata`
+has no font files: typewriter text then falls back to the document's serif
 font instead of the chosen family. In such documents pick one of the
 OpenType-backed values (`source-code-pro`, `plex-mono`, `fira-mono`), which
-apply in both encodings, or leave the key at `document`.
+apply in both encodings, or set `font = "document"` (and rely on your own
+`\setmonofont`). The default `dejavu-sans-mono` is exempt: when fontspec is
+loaded the injection re-selects T1 with the installed family, so listings
+still embed DejaVu Sans Mono.
 
 ## Captions, labels and the list of listings
 
@@ -156,7 +199,7 @@ are conveniences for the spellings authors actually type.
 
 ## Styles
 
-Four styles, and you can mix them in one document — Python in the light
+Five styles, and you can mix them in one document — Python in the light
 palette, shell commands in a terminal-dark one, a monochrome block for the
 print edition:
 
@@ -166,11 +209,14 @@ print edition:
 | `light-mono` | greys only — keywords bold, comments italic | `#f6f6f6` |
 | `dark` | the dark twin of the theme: GitHub Dark Dimmed or One Dark | `#22272e`, `#282c34` |
 | `dark-mono` | greys only, on a dark frame | `#2b2b2b` |
+| `ink` | black on white with grey gutter numbers — bold keywords and numbers, bold-italic names, italic comments | `#ffffff` |
 
 `theme` still picks the *palette family* (`github` / `one-light`) and `style`
 picks light vs dark vs monochrome; a `dark` block takes its colours from the
 dark twin of the theme. The two `-mono` styles ignore `theme`: with hue gone
-there is nothing left for the family to decide. An unknown style name fails
+there is nothing left for the family to decide. `ink` is meant for
+single-ink printing and likewise ignores `theme`; gutter line numbers render
+in grey (`#8a8a8a`) so they do not compete with the code. An unknown style name fails
 the build, naming the value and listing the valid ones.
 
 The style of a block is resolved most-specific-first:
@@ -220,11 +266,18 @@ lets one document mix styles.
 The frame is painted per line with zero-size overlays, so page breaking
 works exactly as without it and a block split across pages stays open at
 the break: the first fragment has no bottom border, the second no top
-border, and both keep their side borders and tint.
+border, and both keep their side borders and tint. Consecutive line
+backgrounds overlap slightly, so the tint reads as one continuous
+background with no hairline between lines, on dark styles and light ones
+alike.
 
 With `numbers`, the gutter sits inside the frame: numbers right-aligned in
 the palette's comment colour, separated from the code by a 0.3pt rule in the
-border colour.
+border colour. Each number is wrapped in an empty PDF `ActualText` span, so
+selecting and copying the block in viewers that honour `ActualText` copies
+the code without the line numbers, while the numbers still print on the page.
+`numbers=false` removes the gutter everywhere, and viewers that ignore
+`ActualText` may still copy the digits.
 
 Vertical rhythm is `\medskip` before and after every inline block; a floated
 one (`pos=` other than `H`) has left the text flow, so it adds none. The

@@ -1,0 +1,92 @@
+% Capitulo 2: flujo de trabajo y comandos, con la tabla de comandos.
+\section{El flujo de trabajo}\label{sec:flujo}
+
+Un proyecto texforge es un directorio con un \texttt{project.toml} que nombra
+la entrada y la bibliografía. Se empieza con \texttt{texforge new
+  mi-documento}, que genera el esqueleto, o con \texttt{texforge init} dentro
+de un proyecto \LaTeX{} existente, que detecta el \texttt{main.tex} y la
+bibliografía y escribe el \texttt{project.toml} por ti. A partir de ahí
+el ciclo es corto: escribir, revisar con \texttt{check}, formatear con
+\texttt{fmt} y componer con \texttt{build}. \texttt{texforge clean} retira el
+directorio \texttt{build/} cuando quieres empezar la composición desde
+cero, y \texttt{texforge outline} muestra el árbol de secciones del
+documento para comprobar la estructura sin abrir el PDF.
+
+\subsection{Inspeccionar el resultado}
+
+Componer no es el último paso: el PDF también se lee desde la terminal.
+\texttt{texforge pdf text} vuelca el texto tal como lo vería un lector de
+pantalla o un sistema de selección de personal, con las ligaduras
+normalizadas y las palabras partidas al final de línea ya reunidas, así
+que es la prueba real de accesibilidad del documento. \texttt{texforge pdf
+  info} informa de las páginas, de las fuentes y de si van embebidas, y de
+los metadatos que viajarán con el archivo. \texttt{texforge pdf pages}
+dice qué sección abre cada página en un formato pensado para comparar
+compilaciones línea a línea, y \texttt{texforge pdf check} comprueba que
+cada palabra significativa del fuente haya sobrevivido a la composición:
+si una ligadura o una codificación se come una palabra, el aviso aparece
+aquí y no en la imprenta. Para mirar el resultado con los ojos,
+\texttt{texforge preview} convierte el PDF en imágenes sin salir de la
+terminal. Y cuando el corrector duda de una palabra, \texttt{texforge spell}
+decide: las palabras personales, como apellidos o tecnologías, se aceptan
+una vez para todos los proyectos, y las de un documento concreto se guardan
+con \texttt{-{}-local} en el propio proyecto, en \texttt{.texforge/spell-words}.
+La lista de este documento, sin ir más lejos, guarda los nombres de las
+herramientas y los términos técnicos que el diccionario no trae, para que
+\texttt{check} revise prosa y no vocabulario.
+
+\subsection{Los comandos}
+
+La tabla~\ref{tab:comandos} resume los comandos, incluidos los que llegaron
+con la versión 1.0. Las novedades de la versión se describen con calma en
+el capítulo~\ref{sec:novedades}; aquí basta saber que el flujo diario
+cabe en \texttt{new}, \texttt{build}, \texttt{check} y \texttt{fmt}, y que el
+resto aparece cuando el documento crece: plantillas, ortografía,
+diagnóstico y lectura del PDF.
+
+\begin{table}[H]
+  \centering
+  \caption{Comandos de texforge, con las novedades de la versión 1.0}
+  \label{tab:comandos}
+  \begin{tabularx}{\linewidth}{@{}lX@{}}
+    \toprule
+    \sffamily\small\bfseries Comando & \sffamily\small\bfseries Qué hace \\
+    \midrule
+    \texttt{new -t -{}-values} & Crea un proyecto rellenando la plantilla desde un fichero de valores, que queda guardado como \texttt{values.toml}. \\
+    \texttt{template add} & Añade una carpeta local como plantilla, con \texttt{-{}-force} para reemplazarla. \\
+    \texttt{skill} & Muestra la destreza de agente que viaja dentro del binario. \\
+    \texttt{doctor} & Diagnostica el entorno y actualiza el Tectonic gestionado; avisa si el de \texttt{PATH} es más viejo. \\
+    \texttt{update} & Actualiza texforge verificando la firma minisign del paquete. \\
+    \texttt{outline} & Muestra el árbol de secciones del documento. \\
+    \texttt{pdf text} & Imprime el texto del PDF como lo vería un lector o un sistema de selección. \\
+    \texttt{pdf info} & Informa de páginas, fuentes embebidas y metadatos. \\
+    \texttt{pdf pages} & Dice qué sección abre cada página, en un formato apto para comparar compilaciones. \\
+    \texttt{pdf check} & Comprueba que las palabras del fuente sobrevivieron a la composición. \\
+    \texttt{build} & Compone \texttt{main.tex} a PDF en \texttt{build/}. \\
+    \texttt{check} & Revisa citas, etiquetas y ortografía sin compilar. \\
+    \texttt{fmt} & Formatea los \texttt{.tex} y los \texttt{.bib}. \\
+    \texttt{init} & Migra un proyecto \LaTeX{} existente o guía uno nuevo. \\
+    \texttt{clean} & Retira el directorio \texttt{build/}. \\
+    \texttt{stats} & Cuenta palabras por sección o por archivo. \\
+    \texttt{preview} & Convierte el PDF en imágenes para revisarlo. \\
+    \texttt{config} & Lee y escribe la configuración global. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{novabox}
+  \texttt{outline} y los cuatro subcomandos de \texttt{pdf} son nuevos en la
+  1.0: antes la estructura y el PDF resultante solo se veían abriendo el
+  PDF; ahora se inspeccionan desde la terminal.
+\end{novabox}
+
+Revisar antes de componer ahorra tiempo. \texttt{texforge check} encuentra
+archivos \texttt{\textbackslash input} que faltan, imágenes ausentes,
+citas sin entrada en el \texttt{.bib} y pares \texttt{\textbackslash ref} y
+\texttt{\textbackslash label} rotos, incluidos los \texttt{label=} de los
+diagramas. El corrector ortográfico respeta el idioma declarado con
+\texttt{babel} y acepta el vocabulario propio con \texttt{texforge spell}:
+las palabras personales viven en el diccionario global y las de un documento
+concreto se guardan con \texttt{-{}-local} en el proyecto. \texttt{texforge
+  fmt} deja la indentación y los \texttt{.bib} en forma canónica, y
+\texttt{fmt -{}-check} lo verifica en integración continua sin tocar nada.

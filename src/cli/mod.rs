@@ -25,9 +25,12 @@ enum Commands {
     New {
         /// Project name
         name: String,
-        /// Template name (default: basic)
+        /// Template name (default: general)
         #[arg(short, long)]
         template: Option<String>,
+        /// Fill template placeholders from a .toml, .yaml or .yml file
+        #[arg(long, value_name = "FILE")]
+        values: Option<PathBuf>,
     },
     /// Compile project to PDF
     Build {
@@ -113,6 +116,15 @@ enum Commands {
     },
     /// Diagnose the managed environment (Tectonic, cache, fonts, dictionaries, project)
     Doctor,
+    /// Print the agent skill embedded in this binary
+    Skill {
+        /// Also print the bundled reference files
+        #[arg(long, conflicts_with = "list")]
+        references: bool,
+        /// List the bundled reference file names, one per line
+        #[arg(long)]
+        list: bool,
+    },
     /// Update texforge to the latest stable release (always asks first)
     ///
     /// Exit codes: 0 = up to date (or update installed / declined /
@@ -210,8 +222,14 @@ enum TemplateAction {
         #[arg(long)]
         local: bool,
     },
-    /// Add a template from URL or registry
-    Add { source: String },
+    /// Add a template from the registry or from a local folder
+    Add {
+        /// Registry template name, or a path to a template folder
+        source: String,
+        /// Replace a template that is already installed
+        #[arg(long)]
+        force: bool,
+    },
     /// Remove a template
     Remove { name: String },
     /// Validate template compatibility
@@ -228,7 +246,11 @@ impl Cli {
         match self.command {
             Commands::Clean => commands::clean::execute(),
             Commands::Init => commands::init::execute(),
-            Commands::New { name, template } => commands::new::execute(&name, template.as_deref()),
+            Commands::New {
+                name,
+                template,
+                values,
+            } => commands::new::execute(&name, template.as_deref(), values.as_deref()),
             Commands::Build {
                 watch,
                 delay,
@@ -264,7 +286,7 @@ impl Cli {
             }
             Commands::Template { action } => match action {
                 TemplateAction::List { local } => commands::template::list(!local),
-                TemplateAction::Add { source } => commands::template::add(&source),
+                TemplateAction::Add { source, force } => commands::template::add(&source, force),
                 TemplateAction::Remove { name } => commands::template::remove(&name),
                 TemplateAction::Validate { name } => commands::template::validate(&name),
                 TemplateAction::Refresh { name } => commands::template::refresh(name.as_deref()),
@@ -294,6 +316,7 @@ impl Cli {
                 commands::spell::execute(action)
             }
             Commands::Doctor => commands::doctor::execute(),
+            Commands::Skill { references, list } => commands::skill::execute(list, references),
             Commands::Update { check, yes } => {
                 // `update` reports status through exit codes — 0 up to date,
                 // 1 update available (`--check`), 2 the check itself could not
@@ -410,6 +433,33 @@ mod tests {
                 assert!(yes);
             }
             _ => panic!("`texforge update --yes` must parse into Commands::Update"),
+        }
+    }
+
+    /// `texforge new --values` must reach the command with the path intact.
+    #[test]
+    fn new_accepts_a_values_file() {
+        let cli = Cli::try_parse_from([
+            "texforge",
+            "new",
+            "demo",
+            "-t",
+            "contract",
+            "--values",
+            "client.toml",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::New {
+                name,
+                template,
+                values,
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(template.as_deref(), Some("contract"));
+                assert_eq!(values.as_deref(), Some(std::path::Path::new("client.toml")));
+            }
+            _ => panic!("`texforge new` must parse into Commands::New"),
         }
     }
 

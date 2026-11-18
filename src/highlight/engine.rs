@@ -146,6 +146,14 @@ pub fn language_key(lang: &str) -> String {
         .unwrap_or(lower)
 }
 
+/// The syntax name for a file extension through the embedded syntax set
+/// (`None` when no shipped syntax claims it — the caller renders plain
+/// monospace). Case-insensitive, like the syntax set itself.
+pub fn language_for_extension(ext: &str) -> Option<&'static str> {
+    let set = syntax_set().ok()?;
+    set.find_syntax_by_extension(ext).map(|s| s.name.as_str())
+}
+
 fn syntax_set() -> Result<&'static SyntaxSet> {
     let loaded = SYNTAX_SET.get_or_init(|| {
         syntect::dumps::from_reader(Cursor::new(SYNTAXES)).map_err(|e| {
@@ -598,6 +606,13 @@ mod tests {
             Rgb::new(0x12, 0x34, 0x56).over_white(0),
             Rgb::new(255, 255, 255)
         );
+    }
+
+    #[test]
+    fn extension_maps_to_a_shipped_syntax_or_nothing() {
+        assert_eq!(language_for_extension("rs"), Some("Rust"));
+        assert_eq!(language_for_extension("py"), Some("Python"));
+        assert_eq!(language_for_extension("nope"), None);
     }
 
     #[test]

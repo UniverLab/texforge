@@ -21,7 +21,8 @@ const MAX_LEVEL: u8 = 4;
 pub struct OutlineSection {
     /// Section level (`0` = part, ..., `4` = subsubsection).
     pub level: u8,
-    /// Dotted section number (`1`, `1.1`, `2.1.1`).
+    /// Dotted section number (`1`, `1.1`, `2.1.1`); empty for a starred
+    /// section, which LaTeX leaves unnumbered.
     pub number: String,
     /// Resolved section title: wrapping macros (`\textit`, `\href`,
     /// `\textcolor`, ...) are stripped down to their text.
@@ -79,6 +80,16 @@ pub fn build_outline(document: &str, root: &Path, entry: &str) -> DocumentOutlin
     }
 }
 
+/// The outline number for a section: starred sections are unnumbered in
+/// LaTeX, so they keep an empty number and consume none.
+fn section_number(tracker: &mut SectionTracker, level: u8, starred: bool) -> String {
+    if starred {
+        String::new()
+    } else {
+        tracker.enter(level)
+    }
+}
+
 /// Walk one file's token stream, recursing into `\input` targets in place.
 fn walk(
     file: &Path,
@@ -100,8 +111,13 @@ fn walk(
 
     for spanned in tokens {
         match &spanned.token {
-            Token::Section { level, title, .. } => {
-                let number = tracker.enter(*level);
+            Token::Section {
+                level,
+                starred,
+                title,
+                ..
+            } => {
+                let number = section_number(tracker, *level, *starred);
                 if *level <= MAX_LEVEL {
                     sections.push(OutlineSection {
                         level: *level,
@@ -171,12 +187,23 @@ pub fn execute(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Human-readable tree, indented by level.
-fn print_human(outline: &DocumentOutline) {
-    println!("{}", outline.document);
+/// Human-readable tree lines: the document name, then one line per section,
+/// indented by level and carrying its number followed by two spaces and the
+/// title. A starred section's number is empty, so its title starts where the
+/// number column ends and no number precedes it.
+fn human_lines(outline: &DocumentOutline) -> Vec<String> {
+    let mut lines = vec![outline.document.clone()];
     for section in &outline.sections {
         let indent = "  ".repeat(section.level as usize);
-        println!("{}{}  {}", indent, section.number, section.title);
+        lines.push(format!("{indent}{}  {}", section.number, section.title));
+    }
+    lines
+}
+
+/// Human-readable tree, indented by level.
+fn print_human(outline: &DocumentOutline) {
+    for line in human_lines(outline) {
+        println!("{line}");
     }
 }
 
@@ -396,5 +423,72 @@ mod tests {
         let result = execute(false);
         std::env::set_current_dir(&orig).unwrap();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn starred_sections_are_unnumbered() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\chapter*{\\abstractname}\n\\chapter{Intro}\n\\section{A}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(numbers(&outline), vec!["", "1", "1.1"]);
+        assert_eq!(titles(&outline), vec!["Abstract", "Intro", "A"]);
+
+        let json = serde_json::to_value(&outline).unwrap();
+        assert_eq!(json["sections"][0]["number"], "", "starred number is empty");
+        assert_eq!(json["sections"][0]["title"], "Abstract");
+        assert_eq!(json["sections"][1]["number"], "1");
+    }
+
+    /// The human tree prints the starred title where the number column ends:
+    /// no leading number, the same two spaces every other entry gets after its
+    /// number, and the usual level indentation.
+    #[test]
+    fn human_output_prints_starred_sections_without_a_number() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\chapter*{\\abstractname}\n\\chapter{Intro}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(
+            human_lines(&outline),
+            vec!["Doc", "    Abstract", "  1  Intro"]
+        );
+    }
+
+    #[test]
+    fn starred_section_between_numbered_ones_consumes_no_number() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\section{A}\n\\subsection{A1}\n\\section*{Notes}\n\\section{B}\n\\subsection{B1}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(numbers(&outline), vec!["1", "1.1", "", "2", "2.1"]);
+        assert_eq!(titles(&outline), vec!["A", "A1", "Notes", "B", "B1"]);
+    }
+
+    /// A starred section at one level leaves the counters at that level and
+    /// below untouched, so the next numbered sibling continues the sequence
+    /// instead of starting after the starred one.
+    #[test]
+    fn starred_section_does_not_reset_deeper_counters() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\section{A}\n\\subsection{A1}\n\\subsection*{Aside}\n\\subsection{A2}\n\\section{B}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(numbers(&outline), vec!["1", "1.1", "", "1.2", "2"]);
+    }
+
+    #[test]
+    fn preamble_titlesec_adds_no_outline_sections() {
+        let dir = write(&[(
+            "main.tex",
+            "\\titleformat{\\section}{}{}{}{}\n\\titleformat{\\subsection}{}{}{}{}\n\\titlespacing*{\\section}{0pt}{1ex}{1ex}\n\\begin{document}\n\\section{Introduction}\n\\subsection{Background}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(titles(&outline), vec!["Introduction", "Background"]);
+        assert_eq!(numbers(&outline), vec!["1", "1.1"]);
     }
 }

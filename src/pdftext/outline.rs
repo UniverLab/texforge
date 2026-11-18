@@ -236,8 +236,8 @@ pub fn page_breaks_from_outline(
         // A page is attributed to the FIRST section that opens it, never the
         // last — the rule `4947308` established for the text-matching path and
         // that this one must honour too. Several sections routinely start on
-        // one page: in the capabilities example, page 2 opens sections 1, 1.1,
-        // 1.2, 2, 2.1, 2.2 and 2.3, and the answer is 1. Later entries on the
+        // one page: in the capabilities example, page 4 opens sections 2,
+        // 2.1 and 2.2, and the answer is 2. Later entries on the
         // same page are still consumed, just not reported.
         let mut opened_here = false;
         while let Some((page, num, title)) = pending.peek() {
@@ -325,8 +325,8 @@ mod tests {
     #[test]
     fn page_breaks_from_outline_reports_the_first_section_on_a_page() {
         // Ground truth read from the capabilities PDF's own table of contents:
-        // page 2 opens 1, 1.1, 1.2, 2, 2.1, 2.2 and 2.3. The answer is 1.
-        // Before this was fixed the outline path reported 2.3 — the last
+        // page 4 opens 2, 2.1 and 2.2. The answer is 2.
+        // Before this was fixed the outline path reported 2.2 — the last
         // entry on the page — contradicting the rule the text-matching path
         // has followed since `4947308`.
         let e = |title: &str, page: usize, level: usize| PdfOutlineEntry {
@@ -335,24 +335,26 @@ mod tests {
             level,
         };
         let entries = vec![
-            e("Introduccion", 2, 0),
-            e("Antecedentes", 2, 1),
-            e("Objetivos", 2, 1),
-            e("Diagramas", 2, 0),
-            e("Mermaid", 2, 1),
-            e("Graphviz", 2, 1),
-            e("D2", 2, 1),
-            e("Estilos", 5, 1),
+            e("Qué es texforge", 3, 0),
+            e("El flujo de trabajo", 4, 0),
+            e("Inspeccionar el resultado", 4, 1),
+            e("Los comandos", 4, 1),
+            e("Diagramas", 6, 0),
+            e("Mermaid", 6, 1),
+            e("Graphviz", 6, 1),
+            e("D2", 7, 1),
         ];
-        let breaks = page_breaks_from_outline(&entries, 5);
+        let breaks = page_breaks_from_outline(&entries, 7);
 
         assert_eq!(breaks[0].section, None, "page 1 is front matter");
-        assert_eq!(breaks[1].section.as_deref(), Some("1"));
-        assert_eq!(breaks[1].title.as_deref(), Some("Introduccion"));
-        // Pages 3 and 4 open nothing: they carry the last opened section.
+        assert_eq!(breaks[1].section, None, "page 2 is front matter");
         assert_eq!(breaks[2].section.as_deref(), Some("1"));
-        assert_eq!(breaks[3].section.as_deref(), Some("1"));
-        assert_eq!(breaks[4].section.as_deref(), Some("2.4"));
+        assert_eq!(breaks[2].title.as_deref(), Some("Qué es texforge"));
+        // Page 5 opens nothing: it carries the last opened section.
+        assert_eq!(breaks[3].section.as_deref(), Some("2"));
+        assert_eq!(breaks[4].section.as_deref(), Some("2"));
+        assert_eq!(breaks[5].section.as_deref(), Some("3"));
+        assert_eq!(breaks[6].section.as_deref(), Some("3.3"));
     }
 
     #[test]
@@ -538,8 +540,8 @@ mod tests {
         let from_bytes = read_pdf_outline_from_bytes(CAPABILITIES_PDF).unwrap();
         assert_eq!(from_path, from_bytes);
         let (entries, page_count) = from_path.expect("capabilities PDF must have an outline");
-        assert_eq!(page_count, 10, "fixture page count");
-        assert_eq!(entries.len(), 22, "fixture outline entry count");
+        assert_eq!(page_count, 19, "fixture page count");
+        assert_eq!(entries.len(), 28, "fixture outline entry count");
     }
 
     /// Exact pages, titles and nesting from the capabilities PDF's own
@@ -553,27 +555,24 @@ mod tests {
         assert_eq!(
             entries[0],
             PdfOutlineEntry {
-                title: "Introducción".into(),
-                page: 2,
+                title: "Qué es texforge".into(),
+                page: 3,
                 level: 0,
             }
         );
         assert_eq!(
-            entries[7],
+            entries[8],
             PdfOutlineEntry {
-                title: "Estilos de Diagrama (style)".into(),
-                page: 5,
+                title: "D2".into(),
+                page: 9,
                 level: 1,
             }
         );
         assert_eq!(
-            entries[21],
+            entries[27],
             PdfOutlineEntry {
                 title: "Conclusión".into(),
-                // The caption, the listing index and the labelled listing push
-                // the last section onto the final page of the 10-page
-                // capabilities document.
-                page: 10,
+                page: 19,
                 level: 0,
             }
         );
@@ -582,8 +581,8 @@ mod tests {
             "the outline must nest: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.page == 9),
-            "some entry must resolve past page 1: {entries:?}"
+            entries.iter().any(|e| e.page > 9),
+            "some entry must resolve past page 9: {entries:?}"
         );
     }
 

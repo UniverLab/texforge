@@ -55,22 +55,22 @@ impl DiagramStyle {
     fn palette(self) -> Option<Palette> {
         match self {
             Self::Default => None,
-            // texforge's own editorial palette, the one its page on
-            // univerlab.org is typeset in (`data-surface='paper'`). The accent
-            // is the proofreader's vermilion change-bar, and the surface
-            // comment there states the rule this preset follows: it is used
-            // once. `background` stays pure white rather than taking the
-            // page's warm tint, because a diagram sits *on* the printed page —
-            // tinting its canvas would paint a visible grey panel on white
-            // paper. The tint becomes the node fill instead, so boxes read as
-            // paper stock raised off the sheet.
+            // The palette of the `article` and `workshop` templates: ink
+            // `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`.
+            // The one-accent rule holds: the accent is used once, for what
+            // connects the shapes. `background` stays pure white rather than
+            // taking the page's warm tint, because a diagram sits *on* the
+            // printed page — tinting its canvas would paint a visible panel
+            // on white paper. The tint becomes the node fill instead, so
+            // boxes read as paper stock raised off the sheet.
             Self::Editorial => Some(Palette {
                 background: "#FFFFFF",
-                foreground: "#1B1B1A",
-                neutral: "#54514C",
-                neutral_light: "#F5F5F3",
-                accent: Some("#B2362C"),
+                foreground: "#1D1510",
+                neutral: "#6B5A43",
+                neutral_light: "#F6F1E8",
+                accent: Some("#87222C"),
                 monospace: false,
+                font_family: "'EB Garamond', Garamond, 'Times New Roman', serif",
             }),
             Self::Monochrome => Some(Palette {
                 background: "#FFFFFF",
@@ -79,6 +79,7 @@ impl DiagramStyle {
                 neutral_light: "#E8E8E8",
                 accent: None,
                 monospace: false,
+                font_family: "'Latin Modern Roman', 'Times New Roman', serif",
             }),
             Self::Technical => Some(Palette {
                 background: "#FFFFFF",
@@ -88,8 +89,33 @@ impl DiagramStyle {
                 neutral_light: "#FFFFFF",
                 accent: None,
                 monospace: true,
+                font_family: "'Courier New', 'DejaVu Sans Mono', ui-monospace, monospace",
             }),
         }
+    }
+
+    /// Hash of every palette field for this preset, so the render cache
+    /// notices a palette change. `Default` carries no palette and hashes
+    /// the constant `0`.
+    pub(crate) fn fingerprint(self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        match self.palette() {
+            None => {
+                0u8.hash(&mut hasher);
+            }
+            Some(p) => {
+                p.background.hash(&mut hasher);
+                p.foreground.hash(&mut hasher);
+                p.neutral.hash(&mut hasher);
+                p.neutral_light.hash(&mut hasher);
+                p.accent.hash(&mut hasher);
+                p.monospace.hash(&mut hasher);
+                p.font_family.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 }
 
@@ -105,8 +131,14 @@ struct Palette {
     /// presets (`monochrome`, `technical`), so every field below falls back
     /// to a neutral and the output stays saturation-free.
     accent: Option<&'static str>,
-    /// Whether labels should render in a monospaced face.
+    /// Whether labels should render in a monospaced face. Only the D2
+    /// branch reads this (as its `theme-id`); Mermaid and Graphviz fonts
+    /// come from `font_family` below.
     monospace: bool,
+    /// The Mermaid font stack for this preset. D2 fixes its own faces and
+    /// `layout-rs` never reads `fontname`, so for those two engines only
+    /// colours change; see `docs/diagrams.md`.
+    font_family: &'static str,
 }
 
 impl Palette {
@@ -128,11 +160,7 @@ pub fn mermaid_options(style: DiagramStyle) -> mermaid_rs_renderer::RenderOption
     };
 
     let accent = p.accent_or_neutral();
-    let font_family = if p.monospace {
-        "'Courier New', 'DejaVu Sans Mono', ui-monospace, monospace".to_string()
-    } else {
-        "'Helvetica Neue', Helvetica, Arial, sans-serif".to_string()
-    };
+    let font_family = p.font_family.to_string();
     let pie_colors: [String; 12] = {
         let cycle = [
             p.background,
@@ -384,5 +412,102 @@ mod tests {
         assert!(injected.contains("node [style=filled"));
         assert!(injected.contains("edge [color="));
         assert!(injected.trim_end().ends_with("}"));
+    }
+
+    #[test]
+    fn editorial_mermaid_uses_template_palette() {
+        let opts = mermaid_options(DiagramStyle::Editorial);
+        assert_eq!(opts.theme.line_color, "#87222C");
+        assert_eq!(opts.theme.text_color, "#1D1510");
+        assert!(
+            opts.theme.font_family.starts_with("'EB Garamond'"),
+            "font family: {}",
+            opts.theme.font_family
+        );
+    }
+
+    #[test]
+    fn editorial_d2_prefix_has_accent_and_ink() {
+        let prefix = d2_prefix(DiagramStyle::Editorial);
+        assert!(prefix.contains("#87222C"), "prefix: {prefix}");
+        assert!(prefix.contains("#1D1510"), "prefix: {prefix}");
+    }
+
+    #[test]
+    fn editorial_graphviz_injection_has_accent() {
+        let injected = graphviz_inject("digraph G { A -> B }", DiagramStyle::Editorial);
+        assert!(injected.contains("#87222C"), "injected: {injected}");
+    }
+
+    #[test]
+    fn monochrome_mermaid_uses_latin_modern_stack() {
+        let opts = mermaid_options(DiagramStyle::Monochrome);
+        assert!(
+            opts.theme.font_family.starts_with("'Latin Modern Roman'"),
+            "font family: {}",
+            opts.theme.font_family
+        );
+    }
+
+    #[test]
+    fn fingerprints_differ_across_all_four_presets() {
+        let prints = [
+            DiagramStyle::Default.fingerprint(),
+            DiagramStyle::Editorial.fingerprint(),
+            DiagramStyle::Monochrome.fingerprint(),
+            DiagramStyle::Technical.fingerprint(),
+        ];
+        for i in 0..prints.len() {
+            for j in (i + 1)..prints.len() {
+                assert_ne!(prints[i], prints[j], "presets {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
+    fn fingerprint_stable_across_calls() {
+        for style in [
+            DiagramStyle::Default,
+            DiagramStyle::Editorial,
+            DiagramStyle::Monochrome,
+            DiagramStyle::Technical,
+        ] {
+            assert_eq!(style.fingerprint(), style.fingerprint());
+        }
+    }
+
+    #[test]
+    fn technical_outputs_pinned() {
+        let opts = mermaid_options(DiagramStyle::Technical);
+        assert_eq!(
+            opts.theme.font_family,
+            "'Courier New', 'DejaVu Sans Mono', ui-monospace, monospace"
+        );
+        let prefix = d2_prefix(DiagramStyle::Technical);
+        assert!(prefix.contains("theme-id: 301"), "prefix: {prefix}");
+        let injected = graphviz_inject("digraph G { A -> B }", DiagramStyle::Technical);
+        assert!(
+            injected.contains(
+                "node [style=filled, fillcolor=\"#FFFFFF\", color=\"#555555\", fontsize=12];"
+            ),
+            "injected: {injected}"
+        );
+        assert!(
+            injected.contains("edge [color=\"#555555\"];"),
+            "injected: {injected}"
+        );
+    }
+
+    #[test]
+    fn default_outputs_pinned() {
+        let opts = mermaid_options(DiagramStyle::Default);
+        let base = mermaid_rs_renderer::RenderOptions::default();
+        assert_eq!(opts.theme.font_family, base.theme.font_family);
+        assert_eq!(opts.theme.line_color, base.theme.line_color);
+        assert_eq!(opts.theme.text_color, base.theme.text_color);
+        assert_eq!(opts.layout.node_spacing, base.layout.node_spacing);
+        assert_eq!(d2_prefix(DiagramStyle::Default), "");
+        let src = "digraph G { A -> B }";
+        assert_eq!(graphviz_inject(src, DiagramStyle::Default), src);
     }
 }

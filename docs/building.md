@@ -8,7 +8,10 @@ order: 4
 
 ## `texforge build`
 
-Compiles the project to `<title>.pdf` in the project root:
+Compiles the project to `<title>.pdf` in the project root. The file name is the
+`[document] title` in lowercase with every run of characters other than letters
+and digits replaced by one hyphen, and no leading or trailing hyphen, so
+`My Thesis: Final Version` becomes `my-thesis-final-version.pdf`:
 
 1. Copies sources into a temporary build directory (originals are never
    modified).
@@ -18,7 +21,10 @@ Compiles the project to `<title>.pdf` in the project root:
    project root.
 
 On the first run texforge downloads the Tectonic binary into
-`~/.texforge/bin/` automatically.
+`~/.texforge/bin/` automatically. On the next build (or `texforge doctor`)
+an outdated managed copy is updated to the supported version automatically;
+when the Tectonic that runs is older than the supported version — for
+example one earlier in `PATH` — the build warns about it and continues.
 
 ## Reproducible builds
 
@@ -56,7 +62,10 @@ texforge build --watch --delay 5  # custom debounce delay in seconds
 ```
 
 The terminal shows a live session timer, build count and the result of the
-last build. Press `Ctrl+C` to stop.
+last build. Press `Ctrl+C` to stop. The header banner follows the terminal
+width — the large font at 82 columns or wider, the compact one below that.
+When stdout is not a TTY no banner is printed. See the
+[CLI reference](cli-reference.md#startup-banner).
 
 ## Cleaning
 
