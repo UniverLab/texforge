@@ -1,2 +1,43 @@
 minisign
 skill
+# Terminos reales del documento que el diccionario no trae.
+tectonic
+graphviz
+tikz
+dejavu
+bibtex
+inkscape
+miktex
+tex
+live
+gauss
+euler
+fibonacci
+preprocesador
+preajuste
+subcomandos
+sans
+build
+check
+dot
+amsmath
+cachés
+default
+diagrams
+monochrome
+preajustes
+project
+style
+technical
+indentación
+microtipografía
+paginación
+# Palabras clave de los cuerpos de diagrama y TikZ, que el corrector lee
+# como texto aunque sean sintaxis de Mermaid, Graphviz y TikZ.
+sequencediagram
+participant
+digraph
+rankdir
+label
+rectangle
+yshift

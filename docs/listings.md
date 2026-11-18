@@ -122,12 +122,14 @@ value and listing the six valid ones.
 
 **Caveat — `fontspec` preambles.** A preamble that loads `fontspec` (directly,
 or through an OpenType package such as `FiraMono`) switches the document to TU
-encoding, where the Type 1–based values (`inconsolata`, `dejavu-sans-mono`)
-have no font files: typewriter text then falls back to the document's serif
+encoding, where a Type 1–based value such as `inconsolata`
+has no font files: typewriter text then falls back to the document's serif
 font instead of the chosen family. In such documents pick one of the
 OpenType-backed values (`source-code-pro`, `plex-mono`, `fira-mono`), which
 apply in both encodings, or set `font = "document"` (and rely on your own
-`\setmonofont`).
+`\setmonofont`). The default `dejavu-sans-mono` is exempt: when fontspec is
+loaded the injection re-selects T1 with the installed family, so listings
+still embed DejaVu Sans Mono.
 
 ## Captions, labels and the list of listings
 

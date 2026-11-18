@@ -297,8 +297,10 @@ mod tests {
         // section has already opened on an earlier page (`current` is
         // already `Some`), which is the actual shape of the bug: a
         // first-page-with-any-match short-circuit made this look fixed
-        // while the real failure (pages 4-6 of examples/texforge-capabilities,
-        // each carrying a section already open from before) went uncaught.
+        // while the real failure (later pages of
+        // examples/texforge-capabilities, each carrying a section already
+        // open from before, such as the pages the Listados chapter spills
+        // onto) went uncaught.
         let pages = vec![
             "Alpha\nBody under Alpha.".to_string(),
             "Leftover Alpha text spills here.\nBeta\nGamma\nMore body.".to_string(),
@@ -333,11 +335,9 @@ mod tests {
 
     #[test]
     fn line_is_section_heading_matches_dotted_numbering() {
-        // The real heading line from examples/texforge-capabilities.
-        assert!(line_is_section_heading(
-            "2.4. Estilos de Diagrama (style)",
-            "Estilos de Diagrama (style)"
-        ));
+        // The real heading line from examples/texforge-capabilities (the
+        // TikZ subsection of the new Diagramas chapter).
+        assert!(line_is_section_heading("3.4. TikZ", "TikZ"));
     }
 
     /// The prefix grammar, boundary by boundary: digits, dot-separated
@@ -401,17 +401,15 @@ mod tests {
         // but with dot leaders and a page number trailing it. That must not
         // match — a false match here is the same class of lie TE9 removed.
         assert!(!line_is_section_heading(
-            "2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . 3",
-            "Estilos de Diagrama (style)"
+            "3.4. TikZ . . . . . . . . . . . . . . . . . 7",
+            "TikZ"
         ));
     }
 
     #[test]
     fn line_is_section_heading_matches_unnumbered_heading() {
-        assert!(line_is_section_heading(
-            "Estilos de Diagrama (style)",
-            "Estilos de Diagrama (style)"
-        ));
+        // Unnumbered: the "De un vistazo" opener of the new example.
+        assert!(line_is_section_heading("De un vistazo", "De un vistazo"));
     }
 
     #[test]
@@ -421,18 +419,16 @@ mod tests {
         // heading (with dot leaders and a page number) must not be mistaken
         // for the heading itself, which appears later as its own line.
         let pages = vec![
-            "Table of Contents\n2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . 3"
-                .to_string(),
+            "Índice\n3.4. TikZ . . . . . . . . . . . . . . . . . 7".to_string(),
             "Some other page with no heading.".to_string(),
-            "2.4. Estilos de Diagrama (style)\nBody text about diagram styles follows."
-                .to_string(),
+            "3.4. TikZ\nBody text about TikZ follows.".to_string(),
         ];
-        let sections = vec![("2.4".into(), "Estilos de Diagrama (style)".into())];
+        let sections = vec![("3.4".into(), "TikZ".into())];
         let breaks = page_breaks(&pages, &sections);
         let formatted = format_page_breaks(&breaks);
         assert_eq!(
             formatted,
-            "page=1 section= title=\npage=2 section= title=\npage=3 section=2.4 title=Estilos de Diagrama (style)"
+            "page=1 section= title=\npage=2 section= title=\npage=3 section=3.4 title=TikZ"
         );
     }
 
@@ -442,7 +438,7 @@ mod tests {
         // *second* shape for top-level entries — no dot leaders at all,
         // just the title then a bare page number. `d9af352` only ever
         // tested the dot-leader shape; this must be rejected too.
-        assert!(!line_is_section_heading("3. Matemáticas 4", "Matemáticas"));
+        assert!(!line_is_section_heading("4. Matemáticas 9", "Matemáticas"));
     }
 
     #[test]
@@ -460,16 +456,16 @@ mod tests {
         // examples/texforge-capabilities — a leaderless top-level TOC entry
         // must not be mistaken for the heading itself.
         let pages = vec![
-            "Table of Contents\n3. Matemáticas 4".to_string(),
+            "Índice\n4. Matemáticas 9".to_string(),
             "Some other page with no heading.".to_string(),
-            "3. Matemáticas\nBody text about equations follows.".to_string(),
+            "4. Matemáticas\nBody text about equations follows.".to_string(),
         ];
-        let sections = vec![("3".into(), "Matemáticas".into())];
+        let sections = vec![("4".into(), "Matemáticas".into())];
         let breaks = page_breaks(&pages, &sections);
         let formatted = format_page_breaks(&breaks);
         assert_eq!(
             formatted,
-            "page=1 section= title=\npage=2 section= title=\npage=3 section=3 title=Matemáticas"
+            "page=1 section= title=\npage=2 section= title=\npage=3 section=4 title=Matemáticas"
         );
     }
 
@@ -483,90 +479,90 @@ mod tests {
         // filler is what a prior attempt's fixture omitted: without it every
         // heading happens to be the first line of its page, so a page's only
         // match always "opens" the page and both defects stay hidden. Pages
-        // 4-6 additionally carry more than one matched heading, so this
+        // 2, 4 and 6 additionally carry more than one matched heading, so this
         // fixture alone would have caught both defect 1 (last match wins,
         // should be first) and defect 2 (a single non-opening match was
         // dropped in favor of carrying the previous section forward).
         let pages = vec![
-            "1. Introducción 2\n\
-             1.1. Antecedentes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2\n\
-             2. Diagramas Embebidos 2\n\
-             2.4. Estilos de Diagrama (style) . . . . . . . . . . . . . . . . . . . . . . . . . . 3\n\
-             3. Matemáticas 4\n\
-             3.1. Ecuaciones en línea . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4\n\
-             3.3. Matrices . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4\n\
-             4. Citas Bibliográficas 5\n\
-             5. Listados de Código 5\n\
-             5.2. LaTeX . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6\n\
-             6. Tablas 6\n\
-             7. Comandos de Texforge 7"
+            "1. Qué es texforge 3\n\
+             2. El flujo de trabajo 4\n\
+             2.2. Los comandos . . . . . . . . . . . . . . . . . . . . . . . . . 4\n\
+             3. Diagramas 6\n\
+             3.3. D2 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7\n\
+             3.4. TikZ . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8\n\
+             4. Matemáticas 9\n\
+             4.3. Matrices . . . . . . . . . . . . . . . . . . . . . . . . . . . 9\n\
+             5. Listados de código 10\n\
+             5.7. Pies y etiquetas . . . . . . . . . . . . . . . . . . . . . . 12\n\
+             6. Bibliografía 13\n\
+             7. Novedades de la 1.0 14"
                 .to_string(),
-            "1. Introducción\nTexforge simplifica el flujo de trabajo académico.\n\
-             1.1. Antecedentes\nLa edición de documentos académicos en LATEX requiere ...\n\
-             2. Diagramas Embebidos\nTexforge renderiza diagramas directamente."
+            "1. Qué es texforge\ntexforge compila documentos sin TeX Live.\n\
+             2. El flujo de trabajo\nUn proyecto texforge es un directorio."
                 .to_string(),
             // Real garbled text from the Mermaid diagram (Figura 1) spills
-            // onto the top of the page before the 2.4 heading — this is the
+            // onto the top of the page before the 3.3 heading — this is the
             // exact shape of defect 2.
-            "l o o p [ D i a g r a m a s   e m b e b i d o s ]\n\
-             Figura 1: Secuencia de compilación de Texforge\n\
-             2.4. Estilos de Diagrama (style)\n\
-             Los tres entornos aceptan también un atributo style."
+            "U s u a r i o   F o r j a   T a l l e r   M o t o r\n\
+             Figura 1: Secuencia de una compilación con texforge\n\
+             3.3. D2\n\
+             Tres líneas bastan para dibujarla."
                 .to_string(),
-            // Real garbled preset-diagram text before three headings — the
-            // shape of defect 1: must report the first (3), not the last
-            // (3.3).
-            "l o p [ D i D a [ g r m s g   D e b i D\n\
-             El preset editorial sirve para documentos que se leen en pantalla.\n\
-             3. Matemáticas\n\
-             3.1. Ecuaciones en línea\n\
-             La fórmula cuadrática se expresa como sigue.\n\
-             3.3. Matrices\n\
-             A ="
-                .to_string(),
-            "C ó d i g o   L a T e X\n\
-             Figura 3: Pipeline de renderizado\n\
-             4. Citas Bibliográficas\n\
-             Texforge gestiona automáticamente las referencias.\n\
-             5. Listados de Código\n\
+            // Real garbled TikZ text before three headings — the
+            // shape of defect 1: must report the first (4), not the last
+            // (4.3).
+            "C a b e c e r a   T i t u l a r   T e x t o\n\
+             Figura 4: Esquema de la página editorial dibujado con TikZ\n\
+             4. Matemáticas\n\
+             4.1. Ecuaciones numeradas\n\
+             La integral de Gauss tiene valor exacto.\n\
+             4.3. Matrices\n\
+             I ="
+            .to_string(),
+            "F i b o n a c c i   e n   R u s t\n\
+             Listado 2: Fibonacci en Rust\n\
+             5. Listados de código\n\
+             Los listados llevan pie y etiqueta.\n\
              5.1. Python"
                 .to_string(),
-            "5.2. LaTeX\n\
-             Listing 2: Estructura básica de Texforge\n\
-             6. Tablas\n\
-             Comparación de motores de renderizado."
+            "5.7. Pies y etiquetas\n\
+             Todo bloque puede llevar pie y etiqueta.\n\
+             6. Bibliografía\n\
+             Las citas viven en bib/references.bib."
                 .to_string(),
-            "7. Comandos de Texforge\n\
-             Cuadro 2: Resumen de comandos principales.\n\
-             8. Conclusión\n\
-             Texforge demuestra ser una herramienta completa."
+            "7. Novedades de la 1.0\n\
+             La versión 1.0 redondea el flujo.\n\
+             8. Listas\n\
+             Cada lista tiene su oficio."
                 .to_string(),
         ];
         let sections = vec![
-            ("1".into(), "Introducción".into()),
-            ("1.1".into(), "Antecedentes".into()),
-            ("2".into(), "Diagramas Embebidos".into()),
-            ("2.4".into(), "Estilos de Diagrama (style)".into()),
-            ("3".into(), "Matemáticas".into()),
-            ("3.1".into(), "Ecuaciones en línea".into()),
-            ("3.3".into(), "Matrices".into()),
-            ("4".into(), "Citas Bibliográficas".into()),
-            ("5".into(), "Listados de Código".into()),
-            ("5.2".into(), "LaTeX".into()),
-            ("6".into(), "Tablas".into()),
-            ("7".into(), "Comandos de Texforge".into()),
+            ("1".into(), "Qué es texforge".into()),
+            ("2".into(), "El flujo de trabajo".into()),
+            ("2.2".into(), "Los comandos".into()),
+            ("3".into(), "Diagramas".into()),
+            ("3.3".into(), "D2".into()),
+            ("3.4".into(), "TikZ".into()),
+            ("4".into(), "Matemáticas".into()),
+            ("4.1".into(), "Ecuaciones numeradas".into()),
+            ("4.3".into(), "Matrices".into()),
+            ("5".into(), "Listados de código".into()),
+            ("5.1".into(), "Python".into()),
+            ("5.7".into(), "Pies y etiquetas".into()),
+            ("6".into(), "Bibliografía".into()),
+            ("7".into(), "Novedades de la 1.0".into()),
         ];
         let breaks = page_breaks(&pages, &sections);
         let formatted = format_page_breaks(&breaks);
         assert_eq!(
             formatted,
             "page=1 section= title=\n\
-             page=2 section=1 title=Introducción\n\
-             page=3 section=2.4 title=Estilos de Diagrama (style)\n\
-             page=4 section=3 title=Matemáticas\n\
-             page=5 section=4 title=Citas Bibliográficas\n\
-             page=6 section=5.2 title=LaTeX\n\
-             page=7 section=7 title=Comandos de Texforge"
+             page=2 section=1 title=Qué es texforge\n\
+             page=3 section=3.3 title=D2\n\
+             page=4 section=4 title=Matemáticas\n\
+             page=5 section=5 title=Listados de código\n\
+             page=6 section=5.7 title=Pies y etiquetas\n\
+             page=7 section=7 title=Novedades de la 1.0"
         );
     }
 
@@ -597,35 +593,34 @@ mod tests {
 
     #[test]
     fn page_breaks_defect_2_regression_heading_preceded_by_diagram_junk() {
-        // Regression for defect 2: `2.4. Estilos de Diagrama (style)` is a
-        // real heading line from examples/texforge-capabilities (page 3 of
-        // the compiled PDF), but it is preceded by the garbled letter-spaced
-        // text `pdf-extract` produces for the Mermaid diagram rendered at
-        // the top of that page ("l o o p [ D i a g r a m a s ... ]", the
+        // Regression for defect 2: `3.3. D2` is a real heading line from
+        // examples/texforge-capabilities, but it is preceded by the garbled
+        // letter-spaced text `pdf-extract` produces for the Mermaid diagram
+        // rendered at the top of that page ("U s u a r i o ...", the
         // literal extracted text of Figura 1). The buggy code required a
         // page's first matched heading to be the very first non-blank line
         // on the page or fall back to carrying the previous section forward;
         // since nothing else on the page matched, it kept reporting the
-        // prior section ("1 Introducción") instead of "2.4". The fix: a
+        // prior section ("1 Qué es texforge") instead of "3.3". The fix: a
         // page's first matched heading opens it regardless of what
         // (non-section) text precedes it.
         let pages = vec![
-            "1. Introducción\nTexforge simplifica el flujo de trabajo académico.".to_string(),
-            "l o o p [ D i a g r a m a s   e m b e b i d o s ]\n\
-             Figura 1: Secuencia de compilación de Texforge\n\
-             2.4. Estilos de Diagrama (style)\n\
-             Los tres entornos aceptan también un atributo style."
+            "1. Qué es texforge\ntexforge compila documentos sin TeX Live.".to_string(),
+            "U s u a r i o   F o r j a   T a l l e r   M o t o r\n\
+             Figura 1: Secuencia de una compilación con texforge\n\
+             3.3. D2\n\
+             Tres líneas bastan para dibujarla."
                 .to_string(),
         ];
         let sections = vec![
-            ("1".into(), "Introducción".into()),
-            ("2.4".into(), "Estilos de Diagrama (style)".into()),
+            ("1".into(), "Qué es texforge".into()),
+            ("3.3".into(), "D2".into()),
         ];
         let breaks = page_breaks(&pages, &sections);
         let formatted = format_page_breaks(&breaks);
         assert_eq!(
             formatted,
-            "page=1 section=1 title=Introducción\npage=2 section=2.4 title=Estilos de Diagrama (style)"
+            "page=1 section=1 title=Qué es texforge\npage=2 section=3.3 title=D2"
         );
     }
 }

@@ -1,0 +1,48 @@
+% Capitulo 8: listas con proposito.
+\section{Listas}\label{sec:listas}
+
+Tres entornos bastan para casi todo lo que hay que enumerar, y este capítulo los
+usa a los tres en el orden en que conviene aprenderlos: primero lo que no
+tiene orden, luego lo que sí lo tiene y por último lo que necesita nombre.
+Cada lista tiene su oficio. La viñeta enumera, la numerada ordena y la de
+descripción define; usar cada una para lo suyo es lo que separa un
+documento legible de un amasijo de puntos.
+
+Lo que texforge evita instalar cabe en una viñeta, porque el orden no
+importa y la lista puede crecer sin reescribir nada:
+
+\begin{itemize}
+  \item ni TeX Live ni MiKTeX;
+  \item ni Inkscape ni Node para los diagramas;
+  \item ni \texttt{minted} ni \texttt{listings} para el código.
+\end{itemize}
+
+El ciclo de trabajo, en cambio, pide números, porque el orden sí
+importa y cada paso presupone el anterior:
+
+\begin{enumerate}
+  \item escribir el fuente en texto plano;
+  \item revisar con \texttt{texforge check};
+  \item formatear con \texttt{texforge fmt};
+  \item componer con \texttt{texforge build};
+  \item inspeccionar con \texttt{texforge pdf}.
+\end{enumerate}
+
+Y los conceptos con nombre propio piden una lista de descripción, donde el
+término manda y la definición sigue:
+
+\begin{description}
+  \item[Preámbulo] la cabecera del \texttt{.tex}: clase, paquetes,
+  paleta, cabeceras y cajas. Se escribe una vez y gobierna todo el
+  documento.
+  \item[Entorno] un bloque con sintaxis propia, como \texttt{mermaid} o
+  \texttt{code}: texforge lo detecta al compilar y lo dibuja.
+  \item[Etiqueta] el nombre que \texttt{\textbackslash label} o
+  \texttt{label=} da a una sección, figura, tabla, ecuación o
+  listado para citarlo con \texttt{\textbackslash ref}.
+\end{description}
+
+\begin{notebox}
+  La regla práctica: si reordenar los puntos cambia el sentido, numera;
+  si cada punto necesita su término, describe; en lo demás, viñetas.
+\end{notebox}

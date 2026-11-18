@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - Code listings default to DejaVu Sans Mono unless `[highlight] font` is set or project sources load fontspec; set `font = "document"` to keep the preamble's typewriter family.
+- The default DejaVu Sans Mono listing font now survives OpenType text packages (such as `ebgaramond`/`sourcesanspro`) that pull in fontspec: the injection re-selects T1 with the installed family when fontspec is loaded, so listings still embed DejaVu Sans Mono instead of falling back to Latin Modern.
 - Copying a numbered code listing in viewers that honour PDF `ActualText` skips the line numbers; they still print on the page, `numbers=false` removes them everywhere, and other viewers may still copy them.
 - The `ink` code-listing style now distinguishes keywords and numbers (bold), names (bold italic) and comments (italic), still black on white.
 - `outline`/`stats` no longer count `\section`/`\subsection` inside `\titleformat`/`\titlespacing*` args as empty sections.
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
 - `texforge check` resolves `\ref` to a `label=` option on `mermaid`, `d2` and `graphviz` blocks, with or without a `caption`.
 - The example directory was renamed to `texforge-capabilities` (the old name was misspelled).
+- The `texforge-capabilities` example was redone as an editorial document.
 
 ### Added
 

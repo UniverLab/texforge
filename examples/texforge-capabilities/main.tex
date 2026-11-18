@@ -1,373 +1,204 @@
-% General Article Template — Texforge Capabilities Demo
-\documentclass[a4paper,12pt]{article}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
+% Capacidades de texforge: documento de referencia editorial.
+% Compilado con texforge (motor tectonic embebido). Leer en UTF-8.
+\documentclass[11pt,a4paper]{article}
+
 \usepackage[spanish]{babel}
-\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage[lining]{ebgaramond}
+\usepackage[scale=0.92]{sourcesanspro}
+\usepackage{microtype}
+\usepackage[a4paper,left=27mm,right=24mm,top=30mm,bottom=32mm,
+  headheight=14pt,headsep=14mm,footskip=14mm]{geometry}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage{needspace}
+\usepackage{etoolbox}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
 \usepackage{float}
 \usepackage{graphicx}
+\usepackage{lastpage}
+\usepackage{tikz}
+\usepackage[most]{tcolorbox}
+\usepackage{amsmath,amssymb}
+\usepackage[hyphens]{url}
 \usepackage{hyperref}
-\usepackage{geometry}
-\usepackage{fancyhdr}
-\usepackage{booktabs}
-\usepackage{enumitem}
-\usepackage{listings}
-\usepackage{xcolor}
 
-\geometry{margin=2.5cm}
+% Paleta definida una sola vez: tonos del laboratorio y un unico acento.
+\definecolor{benchparchment}{HTML}{F4F0EA}
+\definecolor{benchdeep}{HTML}{EEE7DC}
+\definecolor{benchlamp}{HTML}{F6ECD2}
+\definecolor{benchink}{HTML}{1D1510}
+\definecolor{benchsepia}{HTML}{6B5A43}
+\definecolor{benchgraphite}{HTML}{5D5852}
+\definecolor{benchbrass}{HTML}{8A6A2C}
+\definecolor{benchcopper}{HTML}{9A5530}
+\definecolor{benchgarnet}{HTML}{87222C}
+\definecolor{benchslate}{HTML}{222928}
+\colorlet{docink}{benchink}
+\definecolor{docaccent}{HTML}{87222C}
+\colorlet{docmuted}{benchsepia}
+\colorlet{docrule}{benchsepia!35!white}
+\colorlet{docwarn}{benchgarnet}
+\hypersetup{colorlinks=true,linkcolor=docink,urlcolor=docaccent,
+  citecolor=docaccent,breaklinks=true,
+  pdftitle={Capacidades de texforge},pdfauthor={Jheison M}}
+\urlstyle{sf}
 
-\pagestyle{fancy}
-\fancyhf{}
-\cfoot{\thepage}
+% Etiquetas fijas en espanol.
+\newcommand{\lblVersion}{Versión}
+\newcommand{\lblDate}{Fecha}
+\newcommand{\lblAuthor}{Autor}
+\newcommand{\lblOrganization}{Organización}
+\newcommand{\lblNote}{Nota}
+\newcommand{\lblNews}{Novedad 1.0}
+\newcommand{\lblPage}{Página}
+\newcommand{\lblOf}{de}
 
-\lstset{
-  basicstyle=\ttfamily\small,
-  breaklines=true,
-  frame=single,
-  backgroundcolor=\color{gray!10}
-}
+% Metadatos del documento, usados por la portada y el encabezado.
+\newcommand{\DocTitle}{Capacidades de texforge}
+\newcommand{\DocSubtitle}{Lo que el compilador hace por tus documentos, contado en un documento hecho con él}
+\newcommand{\DocOrg}{UniverLab}
+\newcommand{\DocOwner}{Jheison M}
+\newcommand{\DocVersion}{Versión 1.0}
+\newcommand{\DocDate}{18 de noviembre de 2026}
 
-\title{Demostración de Capacidades de Texforge}
-\author{Jheison M}
-\date{\today}
+% Sin soporte para xetex: las versalitas llevan el enfasis.
+\renewcommand{\textls}[2][]{#2}
+\newcommand{\caps}[1]{{\sffamily\scshape #1}}
+\newcommand{\metalabel}[1]{{\sffamily\scriptsize\scshape\textls[90]{\color{docmuted}#1}}}
+
+% Cabecera y pie: organizacion y titulo arriba, pagina abajo.
+\fancypagestyle{doc}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\caps{\DocOrg}}
+  \fancyhead[R]{\small\itshape\DocTitle}
+  \fancyfoot[L]{\small\caps{\DocVersion}}
+  \fancyfoot[R]{\small\sffamily\lblPage\ \thepage\ \lblOf\ \pageref{LastPage}}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0.4pt}
+  \renewcommand{\headrule}{\hbox to\headwidth{\color{docrule}\leaders\hrule height \headrulewidth\hfill}}
+  \renewcommand{\footrule}{\hbox to\headwidth{\color{docrule}\leaders\hrule height \footrulewidth\hfill}}}
+\pagestyle{doc}
+\fancypagestyle{plain}{\pagestyle{doc}}
+
+% Titulos: seccion Garamond con numero en acento y regla, subseccion sans.
+\titleformat{\section}{\normalfont\fontsize{20}{24}\selectfont\color{docink}}
+{\textcolor{docaccent}{\thesection}}{0.7em}{}[{\vspace{3pt}\color{docrule}\titlerule}]
+\titlespacing*{\section}{0pt}{2.2\baselineskip}{1\baselineskip}
+\titleformat{\subsection}{\sffamily\bfseries\normalsize\color{docink}}
+{\textcolor{docaccent}{\thesubsection}}{0.7em}{}
+\titlespacing*{\subsection}{0pt}{1.4\baselineskip}{0.4\baselineskip}
+\titleformat{\subsubsection}{\normalfont\itshape\color{docink}}{}{0pt}{}
+\titlespacing*{\subsubsection}{0pt}{1\baselineskip}{0.2\baselineskip}
+
+% Indice con tocloft.
+\renewcommand{\cftsecfont}{\normalfont\bfseries}
+\renewcommand{\cftsecpagefont}{\normalfont\bfseries}
+\renewcommand{\cftsubsecfont}{\normalfont}
+\renewcommand{\cftsecdotsep}{\cftnodots}
+\renewcommand{\cftsubsecdotsep}{\cftdotsep}
+\setlength{\cftbeforesecskip}{0.7em}
+\setlength{\cftbeforesubsecskip}{0.15em}
+\renewcommand{\cftdotsep}{2}
+\renewcommand{\cfttoctitlefont}{\normalfont\fontsize{20}{24}\selectfont\color{docink}}
+\setlength{\cftaftertoctitleskip}{1.2em}
+
+\frenchspacing
+\let\origsection\section
+\renewcommand{\section}{\needspace{8\baselineskip}\origsection}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6\baselineskip}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.25}
+\setlist{leftmargin=1.5em,itemsep=2pt,topsep=3pt,parsep=0pt}
+\setlist[itemize]{label={\color{docaccent}\textbullet}}
+
+% Longitudes de la portada: definidas aqui para que el cuerpo solo nombre comandos.
+\newlength{\covertopskip}\setlength{\covertopskip}{2mm}
+\newlength{\covermidskip}\setlength{\covermidskip}{18pt}
+\newlength{\coversmallskip}\setlength{\coversmallskip}{2pt}
+
+% Franja de la portada, como las plantillas: texto en el preambulo.
+\newcommand{\DocKicker}{Documento de referencia \textperiodcentered\ Versión 1.0}
+\newcommand{\coverbands}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \node[anchor=north west,inner sep=0pt,fill=benchgarnet,minimum width=\paperwidth,
+      minimum height=2.4mm] at ([yshift=-22mm]current page.north west) {};
+    \node[anchor=north west,inner sep=0pt,fill=benchgarnet,minimum width=\paperwidth,
+      minimum height=0.9mm] at ([yshift=-132mm]current page.north west) {};
+    \node[anchor=north west,inner sep=0pt,fill=benchgarnet,minimum width=\paperwidth,
+      minimum height=0.35mm] at ([yshift=-134mm]current page.north west) {};
+  \end{tikzpicture}}
+
+% Cajas: panel tintado con barra de acento y rotulo en versalitas.
+\tcbset{docbox/.style={enhanced,breakable,colback=#1!6,colframe=#1!6,
+    boxrule=0pt,arc=0pt,outer arc=0pt,borderline west={2.4pt}{0pt}{#1},
+    left=11pt,right=10pt,top=7pt,bottom=7pt,before skip=9pt,after skip=9pt,
+    fonttitle=\sffamily\scriptsize\scshape\bfseries,coltitle=#1,
+    attach boxed title to top left={xshift=-1pt,yshift=-1pt},
+    boxed title style={empty,left=0pt,top=0pt,bottom=0pt}}}
+\newtcolorbox{notebox}[1][]{docbox=docmuted,title={\textls[90]{\lblNote}},#1}
+\newtcolorbox{novabox}[1][]{docbox=docaccent,title={\textls[90]{\lblNews}},#1}
 
 \begin{document}
 
-  \maketitle
+  % Portada: titulo y datos en un bloque enmarcado por reglas granate.
+  \begingroup
+  \thispagestyle{empty}
+  \noindent\begin{minipage}[t][\dimexpr\textheight-2\baselineskip\relax][t]{\textwidth}
+    \coverbands\par\nointerlineskip
+    \raggedright\color{docink}
+    \vspace*{\covertopskip}
+    {\large\color{docmuted}\caps{\DocOrg}\par}
+    \vspace{18mm}
+    {\sffamily\small\scshape\color{docaccent}\DocKicker\par}
+    \vspace{4mm}
+    {\fontsize{38}{42}\selectfont\DocTitle\par}
+    \vspace{6mm}
+    {\fontsize{16}{20}\selectfont\itshape\color{docmuted}\DocSubtitle\par}
+    \vspace{42mm}\color{docink}
+    \begin{tabular}{@{}p{5.6cm}p{5.6cm}@{}}
+      \metalabel{\lblVersion} & \metalabel{\lblDate} \\[\coversmallskip]
+      \DocVersion & \DocDate \\[\covermidskip]
+      \metalabel{\lblAuthor} & \metalabel{\lblOrganization} \\[\coversmallskip]
+      \DocOwner & \DocOrg \\
+    \end{tabular}
+    \vfill
+    {\color{docmuted}\small Compilado con texforge, sin TeX Live ni MiKTeX\par}
+  \end{minipage}
+  \endgroup
+  \clearpage
 
-  \begin{abstract}
-    Este documento demuestra las capacidades principales de \textbf{texforge},
-    un compilador LaTeX que utiliza tectonic como motor interno, eliminando la
-    necesidad de instalar TeX Live o MiKTeX. Se presentan diagramas embebidos
-    (Mermaid, Graphviz y D2), citas bibliográficas, referencias cruzadas,
-    matemáticas, listados de código, tablas y más.
-  \end{abstract}
+  \section*{De un vistazo}
+  \begin{tcolorbox}[docbox=docaccent,title={\textls[90]{De un vistazo}}]
+    Este documento demuestra todo lo que texforge sabe componer: diagramas
+    Mermaid, Graphviz y D2 generados durante la compilación, un esquema
+    TikZ dibujado a mano, matemáticas con referencias cruzadas, listados de
+    código en cuatro lenguajes con el estilo \texttt{ink} y numeración que
+    no se copia, citas BibTeX, dos tablas \texttt{booktabs} y listas con
+    propósito. Todo lo que ves salió de \texttt{texforge build}.
+  \end{tcolorbox}
 
   \tableofcontents
-  \newpage
-
-  % -------------------------------------------------------
-  \section{Introducción}\label{sec:intro}
-
-  Texforge simplifica el flujo de trabajo académico al compilar documentos
-  LaTeX directamente a PDF sin distribuciones externas~\cite{example}. En
-  esta sección se describen los antecedentes y motivaciones del proyecto.
-
-  \subsection{Antecedentes}
-
-  La edición de documentos académicos en \LaTeX{} requiere tradicionalmente
-  instalaciones pesadas como TeX Live o MiKTeX. Texforge elimina esa
-  barrera~\cite{example2}, ofreciendo una experiencia de línea de comandos
-  ligera y moderna.
-
-  \subsection{Objetivos}
-
-  Los objetivos de este documento son:
-
-  \begin{enumerate}[label=(\roman*)]
-    \item Demostrar diagramas embebidos en tres formatos distintos.
-    \item Mostrar la integración bibliográfica con BibTeX.
-    \item Ejemplificar referencias cruzadas entre secciones.
-    \item Presentar ecuaciones matemáticas complejas.
-    \item Incluir listados de código fuente.
-  \end{enumerate}
-
-  % -------------------------------------------------------
-  \section{Diagramas Embebidos}\label{sec:diagramas}
-
-  Texforge renderiza diagramas directamente desde el código fuente LaTeX
-  sin herramientas externas como Inkscape o Node.js.
-
-  \subsection{Mermaid}
-
-  El siguiente diagrama de secuencia muestra la interacción entre los
-  componentes de Texforge:
-
-  \begin{mermaid}[caption=Secuencia de compilación de Texforge, height=10cm, pos=t]
-    sequenceDiagram
-    actor User as Usuario
-    participant CLI as texforge
-    participant PRE as Pre-procesador
-    participant TEC as tectonic
-
-    User->>CLI: texforge build
-    CLI->>PRE: parsea .tex y detecta diagramas
-    loop Diagramas embebidos
-    PRE->>CLI: Mermaid / Graphviz / D2
-    CLI-->>PRE: imagen PNG generada
-    end
-    CLI->>TEC: main.tex + imágenes
-    TEC-->>User: PDF final
-  \end{mermaid}
-
-  \subsection{Graphviz / DOT}
-
-  También se pueden crear diagramas directed-Graph con Graphviz:
-
-  \begin{graphviz}[caption=Arquitectura de Texforge, width=0.8\linewidth, pos=t]
-    digraph G {
-      rankdir=LR
-      node [shape=box style="rounded,filled" fillcolor="#E8F4FD"]
-
-      CLI [label="CLI\ntexforge"]
-      Parser [label="Parser\nLaTeX"]
-      MermaidEngine [label="Mermaid\nRenderer"]
-      GraphvizEngine [label="Graphviz\nRenderer"]
-      D2Engine [label="D2\nRenderer"]
-      Tectonic [label="tectonic\nEngine"]
-      PDF [label="Output\nPDF"]
-
-      CLI -> Parser
-      Parser -> MermaidEngine
-      Parser -> GraphvizEngine
-      Parser -> D2Engine
-      MermaidEngine -> Tectonic
-      GraphvizEngine -> Tectonic
-      D2Engine -> Tectonic
-      Tectonic -> PDF
-    }
-  \end{graphviz}
-
-  \subsection{D2}
-
-  El diagrama D2 es otro formato soportado nativamente:
-
-  \begin{d2}[caption=Pipeline de renderizado, height=14cm, pos=t]
-    source: "Código LaTeX" {
-      shape: document
-    }
-    preprocessor: "Pre-procesador" {
-      shape: hexagon
-    }
-    engines: "Engines de diagramas" {
-      shape: package
-    }
-    pdf: "PDF final" {
-      shape: page
-    }
-
-    source -> preprocessor: "lex & parse"
-    preprocessor -> engines: "diagramas detectados"
-    engines -> pdf: "tectonic"
-  \end{d2}
-
   \clearpage
-  \subsection{Estilos de Diagrama (\texttt{style})}\label{sec:estilos}
 
-  Los tres entornos aceptan también un atributo \texttt{style}, combinable
-  con \texttt{width}, \texttt{pos} y \texttt{caption}. Un diagrama de tres
-  cajas apenas ejercita un relleno y un color de borde, así que en vez de
-  eso el mismo diagrama de secuencia --- con participantes, una nota, un
-  bloque \texttt{alt} y una barra de activación --- se repite a
-  continuación una vez por preset, para que la diferencia se vea en mucha
-  más superficie:
+  \input{sections/01-que-es}
+  \input{sections/02-flujo}
+  \input{sections/03-diagramas}
+  \input{sections/04-matematicas}
+  \input{sections/05-codigo}
+  \input{sections/06-bibliografia}
+  \input{sections/07-novedades}
+  \input{sections/08-listas}
+  \input{sections/09-conclusion}
 
-  \begin{mermaid}[style=editorial, width=0.85\linewidth, caption={Preset \texttt{editorial}: participantes y nota en tono papel con tinta oscura; el acento vermellón vive solo en las flechas de mensaje, nunca en el relleno de una caja}, pos=H]
-    sequenceDiagram
-    participant U as Usuario
-    participant CLI as texforge
-    participant V as Validador
-    participant M as Motor
-
-    U->>CLI: build
-    CLI->>V: valida sintaxis
-    alt sintaxis valida
-    V-->>CLI: ok
-    Note over CLI,M: cache de tectonic reutilizada
-    CLI->>M: compila
-    activate M
-    M-->>CLI: PDF generado
-    deactivate M
-    else error de sintaxis
-    V-->>CLI: linea N invalida
-    end
-    CLI-->>U: resultado
-  \end{mermaid}
-
-  \begin{mermaid}[style=monochrome, width=0.85\linewidth, caption={Preset \texttt{monochrome}: el mismo diagrama sin un solo color, apto para impresión en blanco y negro}, pos=H]
-    sequenceDiagram
-    participant U as Usuario
-    participant CLI as texforge
-    participant V as Validador
-    participant M as Motor
-
-    U->>CLI: build
-    CLI->>V: valida sintaxis
-    alt sintaxis valida
-    V-->>CLI: ok
-    Note over CLI,M: cache de tectonic reutilizada
-    CLI->>M: compila
-    activate M
-    M-->>CLI: PDF generado
-    deactivate M
-    else error de sintaxis
-    V-->>CLI: linea N invalida
-    end
-    CLI-->>U: resultado
-  \end{mermaid}
-
-  \begin{mermaid}[style=technical, width=0.85\linewidth, caption={Preset \texttt{technical}: cajas sin relleno, trazo uniforme y etiquetas monoespaciadas, incluida la etiqueta del bloque \texttt{alt}}, pos=H]
-    sequenceDiagram
-    participant U as Usuario
-    participant CLI as texforge
-    participant V as Validador
-    participant M as Motor
-
-    U->>CLI: build
-    CLI->>V: valida sintaxis
-    alt sintaxis valida
-    V-->>CLI: ok
-    Note over CLI,M: cache de tectonic reutilizada
-    CLI->>M: compila
-    activate M
-    M-->>CLI: PDF generado
-    deactivate M
-    else error de sintaxis
-    V-->>CLI: linea N invalida
-    end
-    CLI-->>U: resultado
-  \end{mermaid}
-
-  El preset \texttt{editorial} sirve para documentos que se leen en pantalla
-  o se imprimen a color y buscan un acabado sobrio: las cajas de los
-  participantes, la nota y la barra de activación comparten un neutro
-  cálido, y el acento vermellón se reserva para las flechas de mensaje, sin
-  gastarse nunca en un relleno. El preset \texttt{technical} conviene a
-  diagramas que funcionan como planos o esquemas de referencia: sin
-  relleno, con peso de trazo uniforme y etiquetas monoespaciadas hasta en
-  el rótulo del bloque \texttt{alt}. El preset \texttt{monochrome} tiene una
-  razón menos obvia: existe para documentos que se imprimen en blanco y
-  negro, donde un diagrama a color puede perder significado, porque dos
-  colores que se distinguen en pantalla pueden reducirse al mismo gris al
-  imprimirse sin color; \texttt{monochrome} evita ese problema por
-  construcción, ya que nunca depende del color para distinguir nada --- ni
-  siquiera una llamada de una respuesta. Omitir \texttt{style} equivale a
-  \texttt{style=default}, el aspecto propio de cada motor, como en los
-  diagramas de las secciones anteriores.
-
-  También puede fijarse un preset por defecto para todo el documento en
-  \texttt{project.toml}, bajo \texttt{[diagrams]} con \texttt{style = "..."};
-  el atributo \texttt{style} de un entorno concreto, cuando está presente,
-  sobrescribe ese valor por defecto.
-
-  % -------------------------------------------------------
-  \input{sections/body}
-
-  % -------------------------------------------------------
-  \section{Matemáticas}\label{sec:matematicas}
-
-  \subsection{Ecuaciones en línea}
-
-  La fórmula cuadrática se expresa como $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$.
-
-  \subsection{Ecuaciones numeradas}
-
-  \begin{equation}\label{eq:gauss}
-    \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
-  \end{equation}
-
-  \begin{equation}\label{eq:euler}
-    e^{i\pi} + 1 = 0
-  \end{equation}
-
-  Como se demostró en la Ecuación~\ref{eq:gauss}, la integral de Gauss
-  tiene un valor exacto conocido.
-
-  \subsection{Matrices}
-
-  \begin{equation}\label{eq:matriz}
-    \mathbf{A} = \begin{pmatrix}
-      a_{11} & a_{12} & \cdots & a_{1n} \\
-      a_{21} & a_{22} & \cdots & a_{2n} \\
-      \vdots & \vdots & \ddots & \vdots \\
-      a_{n1} & a_{n2} & \cdots & a_{nn}
-    \end{pmatrix}
-  \end{equation}
-
-  % -------------------------------------------------------
-  \section{Citas Bibliográficas}\label{sec:bib}
-
-  Texforge gestiona automáticamente las referencias BibTeX. A continuación
-  se presentan tres tipos de cita:
-
-  \begin{itemize}
-    \item Artículos de revista~\cite{example}
-    \item Libros~\cite{example2}
-    \item Recursos en línea~\cite{example3}
-  \end{itemize}
-
-  La sección~\ref{sec:matematicas} muestra el uso de referencias cruzadas,
-  mientras que la sección~\ref{sec:diagramas} describe los formatos de
-  diagramas disponibles.
-
-  % -------------------------------------------------------
-  \section{Tablas}\label{sec:tablas}
-
-  \begin{table}[H]
-    \centering
-    \caption{Comparación de motores de renderizado de diagramas}
-    \label{tab:motores}
-    \begin{tabular}{@{}llcc@{}}
-      \toprule
-      \textbf{Formato} & \textbf{Motor} & \textbf{Externo?} & \textbf{Velocidad} \\
-      \midrule
-      Mermaid    & Rust puro         & No  & Rápido   \\
-      Graphviz   & layout-rs         & No  & Rápido   \\
-      D2         & d2-little         & No  & Rápido   \\
-      \bottomrule
-    \end{tabular}
-  \end{table}
-
-  Como se muestra en la Tabla~\ref{tab:motores}, todos los motores son
-  embebidos y no requieren binarios externos.
-
-  % -------------------------------------------------------
-  \section{Comandos de Texforge}\label{sec:comandos}
-
-  \begin{table}[H]
-    \centering
-    \caption{Resumen de comandos principales}
-    \label{tab:comandos}
-    \begin{tabular}{@{}lp{8cm}@{}}
-      \toprule
-      \textbf{Comando} & \textbf{Descripción} \\
-      \midrule
-      \texttt{texforge new}    & Crea un proyecto nuevo con un template. \\
-      \texttt{texforge init}   & Wizard interactivo para proyectos existentes. \\
-      \texttt{texforge build}  & Compila \texttt{main.tex} a PDF en \texttt{build/}. \\
-      \texttt{texforge check}  & Linter estático: valida archivos, citas y labels. \\
-      \texttt{texforge fmt}    & Formatea archivos \texttt{.tex}. \\
-      \texttt{texforge clean}  & Elimina el directorio \texttt{build/}. \\
-      \texttt{texforge template} & Gestiona templates instalados o remotos. \\
-      \texttt{texforge new -t --values} & Crea un proyecto con \texttt{-t <plantilla>} y \texttt{--values valores.toml} (copiados a \texttt{values.toml}). \\
-      \texttt{texforge template add} & Añade una carpeta local como template (\texttt{--force} para reemplazar). \\
-      \texttt{texforge skill} & Muestra la skill de agente embebida en el binario. \\
-      \texttt{texforge doctor} & Diagnostica el entorno; actualiza el Tectonic gestionado y avisa si el de \texttt{PATH} es más viejo. \\
-      \texttt{texforge update} & Actualiza texforge verificando la firma minisign. \\
-      \texttt{texforge outline} & Muestra el árbol de secciones del documento. \\
-      \texttt{texforge pdf} & Inspecciona el PDF: \texttt{text}, \texttt{info}, \texttt{pages}, \texttt{check}. \\
-      \bottomrule
-    \end{tabular}
-  \end{table}
-
-  % -------------------------------------------------------
-  \section{Conclusión}\label{sec:conclusion}
-
-  Texforge demuestra ser una herramienta completa para la edición de
-  documentos académicos en \LaTeX{}. Sus ventajas principales son:
-
-  \begin{itemize}
-    \item \textbf{Sin dependencias externas:} no requiere TeX Live ni MiKTeX.
-    \item \textbf{Diagramas embebidos:} Mermaid, Graphviz y D2 renderizados en Rust puro.
-    \item \textbf{Linter integrado:} detección temprana de errores con \texttt{texforge check}.
-    \item \textbf{Templates:} soporte para APA, IEEE, cartas y documentos generales.
-  \end{itemize}
-
-  Como se demostró en este documento, la combinación de diagramas
-  (Sección~\ref{sec:diagramas}), ecuaciones (Sección~\ref{sec:matematicas}),
-  citas (Sección~\ref{sec:bib}) y código (Sección~\ref{sec:codigo}) permite
-  crear publicaciones académicas de alta calidad con un mínimo esfuerzo.
-
+  % La última entrada cabe en la página anterior con una línea de más.
+  \enlargethispage{\baselineskip}
   \bibliographystyle{plain}
   \bibliography{bib/references}
 

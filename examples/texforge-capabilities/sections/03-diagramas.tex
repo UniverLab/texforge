@@ -1,0 +1,131 @@
+% Capitulo 3: los cuatro diagramas, cada uno con pie, etiqueta y referencia.
+\section{Diagramas}\label{sec:diagramas}
+
+texforge compone diagramas descritos como texto dentro del propio fuente,
+sin Inkscape, sin Node y sin binarios externos: al compilar, cada entorno se
+se compone en Rust puro y el resultado entra al PDF como una figura más.
+Los tres motores entienden las mismas opciones --- \texttt{width},
+\texttt{pos}, \texttt{caption} y \texttt{label} --- y el estilo visual se
+fija una vez en \texttt{project.toml} bajo \texttt{[diagrams]}, aquí el
+preajuste \texttt{editorial}, de modo que los tres dibujos comparten tinta,
+acento y aire aunque los dibujen motores distintos; la familia tipográfica
+llega hasta donde cada motor la deja elegir.
+
+\subsection{Mermaid}
+
+La figura~\ref{fig:secuencia} muestra la secuencia de una compilación: el
+preprocesador detecta los diagramas, los motores los dibujan y tectonic
+compone el PDF. El lenguaje es Mermaid~\cite{mermaid}, el de los diagramas
+de secuencia y de flujo que ya se escriben en la documentación técnica: los
+participantes se declaran con una palabra, los mensajes con flechas y el
+texto de cada flecha viaja sobre ella sin sintaxis adicional.
+
+\begin{mermaid}[width=0.85\linewidth, caption={Secuencia de una compilación con texforge}, label={fig:secuencia}, pos=H]
+  sequenceDiagram
+  actor Usuario
+  participant Forja
+  participant Taller
+  participant Motor
+
+  Usuario->>Forja: texforge build
+  Forja->>Taller: analiza el fuente
+  Taller->>Forja: diagramas listos
+  Forja->>Motor: fuente y figuras
+  Motor-->>Usuario: PDF final
+\end{mermaid}
+
+\subsection{Graphviz}
+
+La figura~\ref{fig:arquitectura} dibuja la arquitectura como un grafo
+dirigido con Graphviz~\cite{graphviz}: el proyecto entra por la interfaz de
+línea de comandos, el preprocesador reparte cada diagrama a su motor y el
+conjunto llega a tectonic, que produce el PDF. Cada nodo nombra una pieza
+y cada flecha una dependencia, con el rango de izquierda a derecha marcando
+el avance del documento hacia su salida.
+
+\begin{graphviz}[width=0.8\linewidth, caption={Arquitectura de texforge}, label={fig:arquitectura}, pos=H]
+  digraph Arquitectura {
+    rankdir=LR
+    Forja [label=texforge]
+    Taller [label=Preprocesador]
+    Mago [label=Mermaid]
+    Grafo [label=Graphviz]
+    Tubo [label=D2]
+    Motor [label=tectonic]
+    Libro [label=PDF]
+    Forja -> Taller
+    Taller -> Mago
+    Taller -> Grafo
+    Taller -> Tubo
+    Mago -> Motor
+    Grafo -> Motor
+    Tubo -> Motor
+    Motor -> Libro
+  }
+\end{graphviz}
+
+\subsection{D2}
+
+La figura~\ref{fig:pipeline} resume el trabajo en forma de tubería con la
+sintaxis de D2: escribir, revisar, componer e inspeccionar. Cada etapa usa
+el comando que le corresponde y el documento solo avanza hacia la derecha.
+Tres líneas bastan para dibujarla, porque en D2 una conexión es una flecha
+con su etiqueta y nada más.
+
+\begin{d2}[height=6cm, caption={Tubería de trabajo, de la escritura a la inspección}, label={fig:pipeline}, pos=H]
+  escribir -> revisar: texforge check
+  revisar -> componer: texforge build
+  componer -> inspeccionar: texforge pdf
+\end{d2}
+
+\begin{notebox}
+  Los tres entornos aceptan \texttt{label=} con o sin \texttt{caption}, y
+  \texttt{texforge check} resuelve \texttt{\textbackslash ref} contra esas
+  etiquetas. Si una figura pierde su etiqueta, el error aparece antes de
+  compilar, no como una referencia sin resolver en el PDF.
+\end{notebox}
+
+\subsection{TikZ}
+
+Para lo que ningún motor describe, el TikZ de siempre sigue disponible. La
+figura~\ref{fig:pagina} es un esquema de esta misma página: cabecera con el
+título, bloque de texto con un titular de sección y pie con la
+paginación, dibujados a mano con rectángulos y etiquetas.
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[scale=0.9]
+    \draw[fill=benchdeep] (0,0) rectangle (6,8);
+    \draw[fill=white] (0.7,0.7) rectangle (5.3,7.3);
+    \draw[docaccent, thick] (0.7,6.9) -- (5.3,6.9);
+    \node[anchor=west, font=\small\sffamily] at (0.7,7.1) {Cabecera};
+    \draw[fill=docaccent] (0.9,5.9) rectangle (3.4,6.4);
+    \node[anchor=west, font=\small\sffamily] at (3.6,6.15) {Titular};
+    \draw[benchsepia] (0.9,4.2) -- (5.1,4.2);
+    \draw[benchsepia] (0.9,3.7) -- (5.1,3.7);
+    \draw[benchsepia] (0.9,3.2) -- (4.2,3.2);
+    \node[anchor=west, font=\small\sffamily] at (0.9,2.5) {Texto};
+    \draw[docaccent, thick] (0.7,1.1) -- (5.3,1.1);
+    \node[anchor=west, font=\small\sffamily] at (0.7,0.9) {Pie y página};
+  \end{tikzpicture}
+  \caption{Esquema de la página editorial dibujado con TikZ}
+  \label{fig:pagina}
+\end{figure}
+
+\subsection{El preajuste editorial}
+
+Sin estilo declarado, cada motor dibuja con su aspecto propio: un Mermaid y
+un D2 del mismo documento parecerían hechos con herramientas distintas. El
+atributo style aplica uno de los cuatro preajustes con el mismo criterio en
+los tres motores, y este documento usa el editorial en todo su recorrido:
+paleta sobria con la tinta y el granate del laboratorio, un solo color de
+acento, trazos finos, aire generoso y la Garamond del texto donde el motor
+admite elegir familia: Mermaid, que expone un tema completo, la aplica
+entera; D2 fija sus propias caras y Graphviz solo hereda los colores. El
+valor se fija una vez en project.toml, bajo [diagrams], y cada entorno puede
+cambiarlo con su propio style cuando una figura lo pida. Los otros preajustes
+cubren el resto de los casos: monochrome dibuja solo en grises para los
+documentos que se imprimen en blanco y negro, y technical viste los
+diagramas de plano o esquema, sin rellenos y con etiquetas de ancho fijo.
+El valor por defecto, default, conserva el aspecto nativo de cada motor para
+no cambiar ningún documento existente.

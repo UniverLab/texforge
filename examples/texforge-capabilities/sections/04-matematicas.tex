@@ -1,0 +1,73 @@
+% Capitulo 4: matematicas con referencias cruzadas y derivacion.
+\section{Matemáticas}\label{sec:matematicas}
+
+La composición matemática es la de \LaTeX{} de siempre, con
+\texttt{amsmath} cargado en el preámbulo. En línea, la fórmula
+cuadrática $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$ aparece dentro del
+párrafo sin romper el ritmo, y la identidad de Euler $e^{i\pi} + 1 = 0$
+recuerda que cinco constantes caben en una línea. La varianza de una
+muestra, $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(x_i - \mu)^2$, conecta este
+capítulo con el guion de estadística del capítulo~\ref{sec:codigo}.
+
+\subsection{Ecuaciones numeradas}
+
+La integral de Gauss tiene valor exacto conocido, recogido en la
+ecuación~\eqref{eq:gauss}. Su demostración clásica eleva la integral al
+cuadrado y cambia a coordenadas polares; el resultado, $\sqrt{\pi}$,
+reaparece cada vez que una normal necesita normalizarse.
+
+\begin{equation}\label{eq:gauss}
+  \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+\end{equation}
+
+Junto a ella, la fórmula de Euler relaciona la exponencial compleja con el
+seno y el coseno, como muestra la ecuación~\eqref{eq:euler}. Entre la
+ecuación~\eqref{eq:gauss} y la ecuación~\eqref{eq:euler} queda
+demostrado que las referencias cruzadas con \texttt{\textbackslash eqref}
+funcionan: cada número entre paréntesis enlaza con su ecuación y
+\texttt{texforge check} protesta si la etiqueta no existe.
+
+\begin{equation}\label{eq:euler}
+  e^{ix} = \cos x + i\,\sin x
+\end{equation}
+
+\subsection{Una derivación}
+
+La media aritmética minimiza la suma de desvíos al cuadrado, y la
+derivación cabe en un entorno \texttt{align} con una sola línea
+numerada. Derivar respecto de $\mu$ e igualar a cero da directamente el
+estimador, como se ve en la ecuación~\eqref{eq:derivacion}.
+
+\begin{align}
+  S(\mu) &= \sum_{i=1}^{n}(x_i - \mu)^2 \nonumber \\
+  \frac{dS}{d\mu} &= -2\sum_{i=1}^{n}(x_i - \mu) \nonumber \\
+  \hat{\mu} &= \frac{1}{n}\sum_{i=1}^{n}x_i \label{eq:derivacion}
+\end{align}
+
+La ecuación~\eqref{eq:derivacion} es la misma media que calcula la
+función \texttt{mean} del listado~\ref{lst:archivo}: la teoría de este
+capítulo y el código del capítulo~\ref{sec:codigo} cuentan la misma
+historia por dos caminos, y ambos llegaron al PDF desde texto plano.
+
+\subsection{Matrices}
+
+Los vectores y las matrices se componen con los entornos de amsmath, y las
+referencias funcionan igual que con las ecuaciones: la matriz identidad de
+la ecuación~\eqref{eq:identidad} reaparece cada vez que un sistema lineal
+necesita su elemento neutro.
+
+\begin{equation}\label{eq:identidad}
+  \mathbf{I} = \begin{pmatrix}
+    1 & 0 & \cdots & 0 \\
+    0 & 1 & \cdots & 0 \\
+    \vdots & \vdots & \ddots & \vdots \\
+    0 & 0 & \cdots & 1
+  \end{pmatrix}
+\end{equation}
+
+La ecuación~\eqref{eq:identidad} multiplica sin cambiar, como el uno de la
+aritmética: para toda matriz cuadrada vale que el producto con la identidad
+devuelve la matriz intacta. Entre la integral de Gauss de la
+ecuación~\eqref{eq:gauss} y esta identidad queda cubierto lo esencial:
+integrales, exponenciales complejas, derivaciones alineadas y álgebra lineal
+conviven en el mismo documento sin paquetes adicionales.

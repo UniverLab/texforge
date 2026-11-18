@@ -101,7 +101,21 @@ impl ListingFont {
         let Some(FontLoad { package, line }) = self.load() else {
             return String::new();
         };
-        format!("\\makeatletter\n\\@ifpackageloaded{{{package}}}{{}}{{{line}}}%\n\\makeatother\n")
+        let mut out = format!("\\makeatletter\n\\@ifpackageloaded{{{package}}}{{}}{{{line}}}%\n");
+        if self == Self::DejaVuSansMono {
+            // Packages such as `ebgaramond`/`sourcesanspro` pull in fontspec
+            // under XeTeX, switching the default encoding to TU where the
+            // T1-only `DejaVuSansMono-TLF` family has no definition:
+            // `\ttfamily` then silently falls back to Latin Modern and no
+            // DejaVu font is embedded. Re-select T1 with the family the
+            // package installed (`\ttdefault`) whenever fontspec is loaded,
+            // so listings still embed DejaVu Sans Mono.
+            out.push_str(
+                "\\@ifpackageloaded{fontspec}{\\renewcommand{\\ttfamily}{\\fontencoding{T1}\\fontfamily{\\ttdefault}\\selectfont}}{}%\n",
+            );
+        }
+        out.push_str("\\makeatother\n");
+        out
     }
 }
 pub(crate) const BEGIN_MARKER: &str =
@@ -882,6 +896,41 @@ mod tests {
             assert_eq!(
                 line_count, 1,
                 "{font:?} load line must appear once:\n{block}"
+            );
+        }
+    }
+
+    /// `DejaVu` re-selects T1 with the installed family when fontspec is
+    /// loaded: OpenType text packages (`ebgaramond`/`sourcesanspro`) switch
+    /// the default encoding to TU, where the T1-only `DejaVuSansMono-TLF`
+    /// family would otherwise fall back to Latin Modern and embed no
+    /// `DejaVu` font.
+    #[test]
+    fn dejavu_stanza_pins_ttfamily_under_fontspec() {
+        let block = injected_block(
+            &BTreeSet::new(),
+            false,
+            false,
+            HighlightTheme::Github,
+            ListingFont::DejaVuSansMono,
+        );
+        assert!(
+            block.contains(
+                "\\@ifpackageloaded{fontspec}{\\renewcommand{\\ttfamily}{\\fontencoding{T1}\\fontfamily{\\ttdefault}\\selectfont}}{}%"
+            ),
+            "dejavu stanza must pin ttfamily under fontspec:\n{block}"
+        );
+        for font in [
+            ListingFont::Inconsolata,
+            ListingFont::SourceCodePro,
+            ListingFont::PlexMono,
+            ListingFont::FiraMono,
+        ] {
+            let other =
+                injected_block(&BTreeSet::new(), false, false, HighlightTheme::Github, font);
+            assert!(
+                !other.contains("\\renewcommand{\\ttfamily}"),
+                "{font:?} must not touch \\ttfamily:\n{other}"
             );
         }
     }

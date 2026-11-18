@@ -13,7 +13,11 @@ def variance(valores):
 
 def summary(valores):
     """Devuelve un dict con cuenta, media y varianza."""
-    return {"n": len(valores), "media": mean(valores), "varianza": variance(valores)}
+    return {
+        "n": len(valores),
+        "media": mean(valores),
+        "varianza": variance(valores),
+    }
 
 if __name__ == "__main__":
     datos = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
