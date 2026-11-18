@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- Code listings default to DejaVu Sans Mono unless `[highlight] font` is set or project sources load fontspec; set `font = "document"` to keep the preamble's typewriter family.
 - Copying a numbered code listing in viewers that honour PDF `ActualText` skips the line numbers; they still print on the page, `numbers=false` removes them everywhere, and other viewers may still copy them.
 - The `ink` code-listing style now distinguishes keywords and numbers (bold), names (bold italic) and comments (italic), still black on white.
 - `outline`/`stats` no longer count `\section`/`\subsection` inside `\titleformat`/`\titlespacing*` args as empty sections.

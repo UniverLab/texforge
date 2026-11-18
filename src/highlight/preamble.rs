@@ -124,7 +124,9 @@ pub(crate) const END_MARKER: &str = "% ---- end texforge code listings ----";
 /// * `caption_names` — `Some` when at least one block carries `caption=`;
 ///   appends the listing counter, the chapter-aware numbering and
 ///   `\listoflistings`.
-/// * `font` — the typewriter family for code blocks; `Document` injects nothing.
+/// * `font` — the resolved typewriter family for code blocks; `Document`
+///   injects nothing (explicit, or resolved when project sources load
+///   fontspec).
 pub(crate) fn injected_block(
     colors: &BTreeSet<Rgb>,
     has_gutter: bool,

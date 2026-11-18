@@ -53,7 +53,7 @@ theme = "github"     # "github" (default) or "one-light"
 style = "light"      # "light" (default), "light-mono", "dark", "dark-mono"
 lstlisting = true    # also rewrite \begin{lstlisting} blocks (default false)
 numbers = true       # number every block unless it says otherwise
-font = "inconsolata" # typewriter family for code blocks (default "document")
+font = "document"    # typewriter family for code blocks (default "dejavu-sans-mono" when absent and project sources do not load fontspec)
 # caption_name = "Listing"        # override the language's listing name
 # list_name = "List of Listings"  # override the list-of-listings heading
 
@@ -92,18 +92,27 @@ carries both `file=` and a body.
 
 ## Font
 
-The `[highlight] font` key sets the document's **typewriter family** (`\ttfamily`) so
-inline `\texttt{}` matches the code blocks. The value must be one of the monospace
-families shipped in the Tectonic bundle:
+By default, code listings use DejaVu Sans Mono when `[highlight] font` is not
+set and the project sources do not visibly load fontspec. Set `font` under
+`[highlight]` to choose a different typewriter family, or `font = "document"`
+to keep the preamble's own `\ttfamily`.
+
+The value must be one of the monospace families shipped in the Tectonic bundle:
 
 | value | family |
 |---|---|
-| `document` (default) | whatever the preamble sets — Latin Modern Mono in the bundled templates |
+| `document` | whatever the preamble sets — Latin Modern Mono in the bundled templates |
 | `inconsolata` | Inconsolata (with `varqu`/`varl` for straight quotes and distinguishable `l`) |
 | `source-code-pro` | Source Code Pro |
-| `dejavu-sans-mono` | DejaVu Sans Mono |
+| `dejavu-sans-mono` | DejaVu Sans Mono (the default when absent and fontspec is not loaded) |
 | `plex-mono` | IBM Plex Mono |
 | `fira-mono` | Fira Mono |
+
+If `[highlight] font` is not set and the project sources visibly load fontspec
+(by `\usepackage{fontspec}` or a `\setmainfont`/`\setsansfont`/`\setmonofont`/
+`\newfontfamily`/`\setmathfont` command in the project sources; a class that
+loads it is not detected), texforge keeps the document font unless a font is
+set explicitly.
 
 The chosen package is loaded once, guarded by `\@ifpackageloaded`, so a document
 that already loads the same package is not loaded twice. Because the injection
@@ -117,7 +126,8 @@ encoding, where the Type 1–based values (`inconsolata`, `dejavu-sans-mono`)
 have no font files: typewriter text then falls back to the document's serif
 font instead of the chosen family. In such documents pick one of the
 OpenType-backed values (`source-code-pro`, `plex-mono`, `fira-mono`), which
-apply in both encodings, or leave the key at `document`.
+apply in both encodings, or set `font = "document"` (and rely on your own
+`\setmonofont`).
 
 ## Captions, labels and the list of listings
 

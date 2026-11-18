@@ -81,8 +81,8 @@ fn resolve_highlight(project: &Project) -> Result<highlight::Settings> {
         caption_name: section.caption_name.clone(),
         list_name: section.list_name.clone(),
         font: match section.font.as_deref() {
-            Some(name) => ListingFont::parse(name)?,
-            None => ListingFont::default(),
+            Some(name) => Some(ListingFont::parse(name)?),
+            None => None,
         },
         fallback_language: None,
     })
@@ -706,30 +706,29 @@ mod tests {
 
     /// Font parsing and defaults.
     #[test]
-    fn highlight_font_parses_and_defaults_to_document() {
+    fn highlight_font_parses_and_defaults() {
         let mut project = project_with_highlight(Some("github"), None, None, None, None);
         project.config.highlight.as_mut().unwrap().font = Some("inconsolata".to_string());
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Inconsolata);
+        assert_eq!(settings.font, Some(ListingFont::Inconsolata));
 
-        // Absent section → Document
+        // Absent section → None (absent key)
         let mut project = project_with_highlight(None, None, None, None, None);
         project.config.highlight = None;
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Document);
+        assert_eq!(settings.font, None);
 
-        // Present section, absent key → Document
+        // Present section, absent key → None
         let mut project = project_with_highlight(None, None, None, None, None);
         project.config.highlight.as_mut().unwrap().font = None;
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Document);
+        assert_eq!(settings.font, None);
 
-        // Explicit "document" → Document (the same variant the absent key
-        // resolves to, which is what makes its output byte-identical)
+        // Explicit "document" → Some(Document)
         let mut project = project_with_highlight(None, None, None, None, None);
         project.config.highlight.as_mut().unwrap().font = Some("document".to_string());
         let settings = resolve_highlight(&project).unwrap();
-        assert_eq!(settings.font, ListingFont::Document);
+        assert_eq!(settings.font, Some(ListingFont::Document));
     }
 
     /// Invalid font fails naming the value and all six valid names.

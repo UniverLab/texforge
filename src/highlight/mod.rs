@@ -22,6 +22,7 @@ use crate::texutil;
 mod caption;
 mod emit;
 mod engine;
+mod fontspec_scan;
 mod ink;
 mod linemap;
 mod palette;
@@ -81,8 +82,8 @@ pub struct Settings {
     pub numbers: bool,
     pub caption_name: Option<String>,
     pub list_name: Option<String>,
-    /// Typewriter family for code blocks; `Document` (default) injects nothing.
-    pub font: ListingFont,
+    /// Typewriter family. `None`: `Document` if fontspec is visible, else `DejaVuSansMono`.
+    pub font: Option<ListingFont>,
     /// Global `defaults.language`; `None` → english (spell-checker precedence).
     pub fallback_language: Option<String>,
 }
@@ -97,7 +98,7 @@ impl Default for Settings {
             numbers: false,
             caption_name: None,
             list_name: None,
-            font: ListingFont::Document,
+            font: None,
             fallback_language: None,
         }
     }
@@ -242,6 +243,11 @@ fn run_inner(
 
     if rewritten_any {
         let color_loaded = preamble::color_pkg_visible_load(&sources);
+        let effective_font = font.unwrap_or(if fontspec_scan::fontspec_visible_load(&sources) {
+            ListingFont::Document
+        } else {
+            ListingFont::DejaVuSansMono
+        });
         let block = if has_caption {
             preamble::injected_block_with_caption(
                 &colors,
@@ -249,10 +255,10 @@ fn run_inner(
                 Some(&names),
                 color_loaded,
                 theme,
-                font,
+                effective_font,
             )
         } else {
-            preamble::injected_block(&colors, has_gutter, color_loaded, theme, font)
+            preamble::injected_block(&colors, has_gutter, color_loaded, theme, effective_font)
         };
         let (anchor, entry_lines) = preamble::inject_entry(&build_dir.join(entry), &block)?;
         line_map.shift_for_injection(entry, anchor, block.lines().count(), entry_lines);
@@ -2443,17 +2449,14 @@ mod tests {
     /// Font setting reaches the injected preamble exactly once.
     #[test]
     fn font_setting_reaches_the_injected_preamble_once() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("main.tex"),
-            "\\documentclass{article}\n\\begin{document}\n\
-             \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n",
-        )
-        .unwrap();
+        let doc = "\\documentclass{article}\n\\begin{document}\n\
+                   \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n";
 
         // With Inconsolata font, the load line and its guard must appear once.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.tex"), doc).unwrap();
         let cfg = Settings {
-            font: ListingFont::Inconsolata,
+            font: Some(ListingFont::Inconsolata),
             ..Settings::default()
         };
         run(dir.path(), "main.tex", cfg).unwrap();
@@ -2466,44 +2469,99 @@ mod tests {
             "load line appears once:\n{out}"
         );
 
-        // With default Document font, no font line is injected (existing
-        // snapshots pin byte-identity, so this is a sanity check).
+        // Absent font with plain sources injects DejaVuSansMono inside the guard.
         let dir2 = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir2.path().join("main.tex"),
-            "\\documentclass{article}\n\\begin{document}\n\
-             \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\\end{document}\n",
-        )
-        .unwrap();
+        std::fs::write(dir2.path().join("main.tex"), doc).unwrap();
         run(dir2.path(), "main.tex", Settings::default()).unwrap();
         let out2 = std::fs::read_to_string(dir2.path().join("main.tex")).unwrap();
+        let dejavu_guard = r"\@ifpackageloaded{DejaVuSansMono}{}{\usepackage{DejaVuSansMono}}%";
         assert!(
-            !out2.contains("inconsolata"),
-            "Document font injects nothing:\n{out2}"
+            out2.contains(dejavu_guard),
+            "absent font with plain sources injects DejaVuSansMono:\n{out2}"
         );
+
+        // Some(Document) injects nothing (byte-identical to today's explicit
+        // document behavior).
+        let dir3 = tempfile::tempdir().unwrap();
+        std::fs::write(dir3.path().join("main.tex"), doc).unwrap();
+        let cfg = Settings {
+            font: Some(ListingFont::Document),
+            ..Settings::default()
+        };
+        run(dir3.path(), "main.tex", cfg).unwrap();
+        let out3 = std::fs::read_to_string(dir3.path().join("main.tex")).unwrap();
+        for pkg in [
+            "inconsolata",
+            "sourcecodepro",
+            "DejaVuSansMono",
+            "plex-mono",
+            "FiraMono",
+        ] {
+            assert!(
+                !out3.contains(pkg),
+                "Some(Document) must inject nothing ({pkg}):\n{out3}"
+            );
+        }
+
+        // Absent font with a source containing \usepackage{fontspec} injects nothing.
+        let dir4 = tempfile::tempdir().unwrap();
+        let fontspec_doc = "\\documentclass{article}\n\\usepackage{fontspec}\n\
+                            \\begin{document}\n\\begin{code}[lang=rust]\nfn main() {}\n\
+                            \\end{code}\n\\end{document}\n";
+        std::fs::write(dir4.path().join("main.tex"), fontspec_doc).unwrap();
+        run(dir4.path(), "main.tex", Settings::default()).unwrap();
+        let out4 = std::fs::read_to_string(dir4.path().join("main.tex")).unwrap();
         assert!(
-            !out2.contains("sourcecodepro"),
-            "Document font injects nothing:\n{out2}"
+            !out4.contains("DejaVuSansMono"),
+            "absent font with fontspec source must not inject DejaVuSansMono:\n{out4}"
         );
+
+        // The same with Some(FiraMono) injects the Fira stanza.
+        let dir5 = tempfile::tempdir().unwrap();
+        std::fs::write(dir5.path().join("main.tex"), fontspec_doc).unwrap();
+        let cfg = Settings {
+            font: Some(ListingFont::FiraMono),
+            ..Settings::default()
+        };
+        run(dir5.path(), "main.tex", cfg).unwrap();
+        let out5 = std::fs::read_to_string(dir5.path().join("main.tex")).unwrap();
+        let fira_guard = r"\@ifpackageloaded{FiraMono}{}{\usepackage{FiraMono}}%";
         assert!(
-            !out2.contains("DejaVuSansMono"),
-            "Document font injects nothing:\n{out2}"
+            out5.contains(fira_guard),
+            "explicit font must inject even with fontspec source:\n{out5}"
         );
+
+        // A commented-out or verbatim-quoted \usepackage{fontspec} does not count.
+        let dir6 = tempfile::tempdir().unwrap();
+        let commented = "\\documentclass{article}\n% \\usepackage{fontspec}\n\
+                         \\begin{document}\n\\begin{code}[lang=rust]\nfn main() {}\n\
+                         \\end{code}\n\\end{document}\n";
+        std::fs::write(dir6.path().join("main.tex"), commented).unwrap();
+        run(dir6.path(), "main.tex", Settings::default()).unwrap();
+        let out6 = std::fs::read_to_string(dir6.path().join("main.tex")).unwrap();
         assert!(
-            !out2.contains("plex-mono"),
-            "Document font injects nothing:\n{out2}"
+            out6.contains(dejavu_guard),
+            "commented fontspec must not count:\n{out6}"
         );
+
+        let dir7 = tempfile::tempdir().unwrap();
+        let verbatim = "\\documentclass{article}\n\\begin{document}\n\
+                        \\begin{verbatim}\n\\usepackage{fontspec}\n\\end{verbatim}\n\
+                        \\begin{code}[lang=rust]\nfn main() {}\n\\end{code}\n\
+                        \\end{document}\n";
+        std::fs::write(dir7.path().join("main.tex"), verbatim).unwrap();
+        run(dir7.path(), "main.tex", Settings::default()).unwrap();
+        let out7 = std::fs::read_to_string(dir7.path().join("main.tex")).unwrap();
         assert!(
-            !out2.contains("FiraMono"),
-            "Document font injects nothing:\n{out2}"
+            out7.contains(dejavu_guard),
+            "verbatim-quoted fontspec must not count:\n{out7}"
         );
     }
 
-    /// The explicit `font = "document"` value and an absent key produce
-    /// byte-identical rewrites — the same guarantee the golden snapshot pins
-    /// for the default, here compared directly against each other.
+    /// Absent font and explicit `font = "document"` now legitimately differ on
+    /// plain sources (absent defaults to `DejaVuSansMono`).
     #[test]
-    fn explicit_document_font_is_byte_identical_to_the_default() {
+    fn absent_font_differs_from_explicit_document_on_plain_sources() {
         let doc = "\\documentclass{article}\n\\begin{document}\n\
                    \\section{Demo}\n\
                    \\begin{code}[lang=python, numbers=true]\n\
@@ -2518,23 +2576,24 @@ mod tests {
         let explicit = tempfile::tempdir().unwrap();
         std::fs::write(explicit.path().join("main.tex"), doc).unwrap();
         let cfg = Settings {
-            font: ListingFont::Document,
+            font: Some(ListingFont::Document),
             ..Settings::default()
         };
         run(explicit.path(), "main.tex", cfg).unwrap();
 
-        let absent_bytes = std::fs::read(absent.path().join("main.tex")).unwrap();
-        let explicit_bytes = std::fs::read(explicit.path().join("main.tex")).unwrap();
-        // Sanity first: the pass really rewrote and injected, so the two
-        // files compared below are not both untouched copies of the source.
-        let absent_text = String::from_utf8(absent_bytes.clone()).unwrap();
+        let absent_out = std::fs::read_to_string(absent.path().join("main.tex")).unwrap();
+        let explicit_out = std::fs::read_to_string(explicit.path().join("main.tex")).unwrap();
         assert!(
-            absent_text.contains("texforge code listings"),
-            "fixture must contain a rewritten block:\n{absent_text}"
+            absent_out.contains("DejaVuSansMono"),
+            "absent font must inject DejaVuSansMono:\n{absent_out}"
         );
-        assert_eq!(
-            absent_bytes, explicit_bytes,
-            "font = \"document\" must be byte-identical to an absent key"
+        assert!(
+            !explicit_out.contains("DejaVuSansMono"),
+            "explicit document must not inject DejaVuSansMono:\n{explicit_out}"
+        );
+        assert_ne!(
+            absent_out, explicit_out,
+            "absent font and explicit document now legitimately differ"
         );
     }
 

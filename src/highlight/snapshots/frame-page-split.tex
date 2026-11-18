@@ -3,6 +3,9 @@
 \makeatletter
 \@ifpackageloaded{color}{}{\@ifpackageloaded{xcolor}{}{\usepackage{color}}}%
 \makeatother
+\makeatletter
+\@ifpackageloaded{DejaVuSansMono}{}{\usepackage{DejaVuSansMono}}%
+\makeatother
 \newcommand{\tfxcodestyle}{\ttfamily\small\setlength{\parindent}{0pt}\setlength{\parskip}{0pt}}
 \newcommand{\tfxsmash}[1]{\setbox0=\hbox{#1}\ht0=0pt\dp0=0pt\box0}
 \newcommand{\tfxsp}{\nobreakspace{}}
