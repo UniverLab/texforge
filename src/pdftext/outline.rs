@@ -540,8 +540,8 @@ mod tests {
         let from_bytes = read_pdf_outline_from_bytes(CAPABILITIES_PDF).unwrap();
         assert_eq!(from_path, from_bytes);
         let (entries, page_count) = from_path.expect("capabilities PDF must have an outline");
-        assert_eq!(page_count, 17, "fixture page count");
-        assert_eq!(entries.len(), 27, "fixture outline entry count");
+        assert_eq!(page_count, 22, "fixture page count");
+        assert_eq!(entries.len(), 28, "fixture outline entry count");
     }
 
     /// Exact pages, titles and nesting from the capabilities PDF's own
@@ -561,18 +561,18 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[7],
+            entries[8],
             PdfOutlineEntry {
                 title: "D2".into(),
-                page: 7,
+                page: 12,
                 level: 1,
             }
         );
         assert_eq!(
-            entries[26],
+            entries[27],
             PdfOutlineEntry {
                 title: "Conclusión".into(),
-                page: 17,
+                page: 22,
                 level: 0,
             }
         );

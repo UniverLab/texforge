@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 
 use crate::texutil;
 
+mod aspect;
 mod fonts;
 mod latex_escapes;
 mod preamble;
@@ -276,32 +277,9 @@ fn build_figure_environment(
     filename: &str,
 ) -> Result<String> {
     let pos = opts.get("pos").map(String::as_str);
-    let width = opts.get("width").map(String::as_str);
-    let height = opts.get("height").map(String::as_str);
-    let scale = opts.get("scale").map(String::as_str);
-    let keepaspectratio = opts.contains_key("keepaspectratio");
     let label = opts.get("label").map(String::as_str);
     let rel_path = format!("diagrams/{}", filename);
-
-    let mut include_opts = Vec::new();
-    if let Some(s) = scale {
-        include_opts.push(format!("scale={s}"));
-    } else {
-        if let Some(w) = width {
-            include_opts.push(format!("width={w}"));
-        }
-        if let Some(h) = height {
-            include_opts.push(format!("height={h}"));
-        }
-    }
-    if keepaspectratio {
-        include_opts.push("keepaspectratio".to_string());
-    }
-    let include_str = if include_opts.is_empty() {
-        "width=\\linewidth".to_string()
-    } else {
-        include_opts.join(",")
-    };
+    let include_str = aspect::includegraphics_options(opts);
 
     let pos_str = pos.map(|p| format!("[{p}]")).unwrap_or_default();
     let mut fig = format!(
