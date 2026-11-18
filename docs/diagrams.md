@@ -78,14 +78,20 @@ normal in the surrounding LaTeX.
 
 | Option | Default | Description |
 |---|---|---|
-| `width` | `\linewidth` | Image width (ignored when `scale` is set) |
+| `width` | `\linewidth` | Image width (ignored when `scale` is set); when given without `height`, the figure keeps its natural aspect ratio |
 | `height` | _(none)_ | Image height (ignored when `scale` is set) |
 | `scale` | _(none)_ | Scale factor — overrides `width`/`height` when set |
-| `keepaspectratio` | _(off)_ | Keep the aspect ratio; only meaningful with both `width` and `height` |
+| `keepaspectratio` | _(auto with width only)_ | Keep the aspect ratio. Added automatically when `width` is set without `height`; set it explicitly to keep the proportions when you give both `width` and `height` |
 | `pos` | _(none — floats)_ | Figure placement (`H`, `t`, `b`, `h`, `p`); omit it to let LaTeX place the figure like any other image, `H` keeps it exactly where it is written |
 | `caption` | _(none)_ | Figure caption |
 | `label` | _(none)_ | `\label{…}` placed after the caption, for `\ref` |
 | `style` | `default` | Editorial style preset — see below |
+
+A figure given only `width=` keeps the rendered artefact's natural
+proportions: texforge adds `keepaspectratio` for you, so the image is never
+stretched or squashed. Give both `width` and `height` to fix both dimensions,
+and add `keepaspectratio` yourself if you want the image scaled to fit that
+box without distortion; `scale=` overrides both dimensions.
 
 Every diagram becomes a `figure`. Without `pos` it floats like any other
 image; `pos=H` keeps it exactly where it is written; `caption` adds a
