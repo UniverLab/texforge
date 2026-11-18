@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Diagram figures given only `width=` now keep their natural aspect ratio instead of being distorted.
+- `texforge check` and `texforge spell` no longer report words from `mermaid`, `d2` or `graphviz` diagram bodies as unknown prose.
 
 ### Notes
 

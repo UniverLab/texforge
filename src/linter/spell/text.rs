@@ -8,6 +8,11 @@ use super::accents::{
     is_accent_command, is_transparent_command, try_resolve_accent, AccentBaseSource,
 };
 
+/// Diagram environments whose bodies are source, not prose, so they must not be
+/// spell-checked. Kept here (not in `VERBATIM_ENVIRONMENTS`) so other lints
+/// still see their contents.
+const DIAGRAM_ENVS: &[&str] = &["mermaid", "d2", "graphviz"];
+
 /// 1-based line number of a byte offset.
 pub(super) fn line_of(source: &str, offset: usize) -> usize {
     let offset = offset.min(source.len());
@@ -22,6 +27,7 @@ pub(super) fn build_spell_text(
     let mut line_chunks: Vec<(usize, usize)> = Vec::new();
     let mut pending_text_skip: usize = 0;
     let mut tokens_to_skip: usize = 0;
+    let mut diagram_depth: usize = 0;
 
     // The cursor is the iterator itself: accent macros that must swallow the
     // following tokens express that as a bounded skip counter instead of
@@ -29,6 +35,24 @@ pub(super) fn build_spell_text(
     for (i, spanned) in tokens.iter().enumerate() {
         if tokens_to_skip > 0 {
             tokens_to_skip -= 1;
+            continue;
+        }
+        if let Token::Environment { name } = &spanned.token {
+            if DIAGRAM_ENVS.contains(&name.as_str()) {
+                let tag = format!("\\begin{{{name}}}");
+                if source[spanned.start..].starts_with(&tag) {
+                    diagram_depth += 1;
+                } else {
+                    diagram_depth = diagram_depth.saturating_sub(1);
+                }
+                out.push(' ');
+                pending_text_skip = 0;
+                continue;
+            }
+        }
+        if diagram_depth > 0 {
+            out.push(' ');
+            pending_text_skip = 0;
             continue;
         }
         match &spanned.token {
@@ -347,6 +371,121 @@ mod tests {
             assert_eq!(
                 zzzword.line, 2,
                 "zzzword is on source line 2, after the skipped newline: {findings:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn d2_body_words_are_not_spell_checked() {
+        let src = "\\begin{d2}\n\
+                   classes: {\n  etapa: { style.border-radius: 4 }\n}\n\
+                   flujo: Tubería {\n  escribir: \"Escribir\" { shape: document }\n}\n\
+                   \\end{d2}\n";
+        run_with_home("", "known\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert!(
+                findings.is_empty(),
+                "d2 body words must not be spell-checked: {findings:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn graphviz_body_words_are_not_spell_checked() {
+        let src = "\\begin{graphviz}\n\
+                   digraph G {\n  a [shape=doublecircle, class=foo]\n}\n\
+                   \\end{graphviz}\n";
+        run_with_home("", "known\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert!(
+                findings.is_empty(),
+                "graphviz body words must not be spell-checked: {findings:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn mermaid_body_words_are_not_spell_checked() {
+        let src = "\\begin{mermaid}\n\
+                   flowchart LR\n  A[border radius] --> B(doublecircle)\n\
+                   \\end{mermaid}\n";
+        run_with_home("", "known\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert!(
+                findings.is_empty(),
+                "mermaid body words must not be spell-checked: {findings:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn diagram_body_words_in_prose_are_still_flagged() {
+        let src =
+            "\\begin{document}\nborder radius class classes document doublecircle\n\\end{document}";
+        run_with_home("", "known\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            for word in [
+                "border",
+                "radius",
+                "class",
+                "classes",
+                "document",
+                "doublecircle",
+            ] {
+                assert!(
+                    findings
+                        .iter()
+                        .any(|f| f.message.contains(&format!("'{word}'"))),
+                    "word '{word}' in prose must be flagged: {findings:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn misspelled_prose_after_diagram_block_reports_its_own_line() {
+        let src = "\\begin{d2}\n\
+                   border radius\n\
+                   \\end{d2}\n\
+                   zzznotaword\n";
+        run_with_home("", "known\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            let hit = findings
+                .iter()
+                .find(|f| f.message.contains("zzznotaword"))
+                .expect("misspelled prose after a diagram block must be flagged");
+            assert_eq!(
+                hit.line, 4,
+                "word on the line after \\end{{d2}} must keep its own line: {findings:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn d2_body_with_multiline_options_is_not_spell_checked() {
+        let src = "\\begin{d2}[\n\
+                   width=0.9\\linewidth,\n\
+                   caption={A caption}\n\
+                   ]\n\
+                   border radius class classes document doublecircle\n\
+                   \\end{d2}\n";
+        run_with_home("", "known\n", || {
+            let files = vec![("main.tex".to_string(), src.to_string())];
+            let root = TempDir::new().unwrap();
+            let findings = lint_files(&files, root.path(), Some("english")).unwrap();
+            assert!(
+                findings.is_empty(),
+                "d2 body with multi-line options must not be spell-checked: {findings:?}"
             );
         });
     }
