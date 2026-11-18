@@ -75,6 +75,34 @@ def sumar(numeros):  # solo grises: apto para B/N
     return sum(numeros)
 \end{code}
 
+\subsection{Código desde un archivo}
+
+El Listado~\ref{lst:archivo} se lee de un archivo del proyecto con
+\texttt{file} y un rango con \texttt{lines}: los números son los del
+archivo, y un archivo ausente o un rango inválido falla la compilación
+y \texttt{texforge check}.
+
+\begin{code}[lang=python, file=scripts/stats.py, lines=5-20, numbers=true, caption={Funciones leídas del archivo}, label={lst:archivo}]
+\end{code}
+
+\subsection{Estilo ink}
+
+El mismo archivo con \texttt{style=ink} usa solo negro: distingue los
+elementos por peso y forma, con palabras clave y números en negrita,
+nombres en negrita cursiva y comentarios en cursiva.
+
+\begin{code}[lang=python, file=scripts/stats.py, lines=5-20, numbers=true, style=ink]
+\end{code}
+
+\subsection{Copiar sin números}
+
+Los números se omiten al copiar en visores que respetan el
+\texttt{ActualText} del PDF, y \texttt{numbers=false} los quita en
+todas partes.
+
+\begin{code}[lang=python, file=scripts/stats.py, lines=5-20, numbers=false]
+\end{code}
+
 \subsection{TOML}
 
 La configuración del propio proyecto se muestra con el mismo entorno:

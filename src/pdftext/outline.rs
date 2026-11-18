@@ -538,8 +538,8 @@ mod tests {
         let from_bytes = read_pdf_outline_from_bytes(CAPABILITIES_PDF).unwrap();
         assert_eq!(from_path, from_bytes);
         let (entries, page_count) = from_path.expect("capabilities PDF must have an outline");
-        assert_eq!(page_count, 10, "fixture page count");
-        assert_eq!(entries.len(), 22, "fixture outline entry count");
+        assert_eq!(page_count, 13, "fixture page count");
+        assert_eq!(entries.len(), 25, "fixture outline entry count");
     }
 
     /// Exact pages, titles and nesting from the capabilities PDF's own
@@ -554,7 +554,7 @@ mod tests {
             entries[0],
             PdfOutlineEntry {
                 title: "Introducción".into(),
-                page: 2,
+                page: 3,
                 level: 0,
             }
         );
@@ -562,18 +562,15 @@ mod tests {
             entries[7],
             PdfOutlineEntry {
                 title: "Estilos de Diagrama (style)".into(),
-                page: 5,
+                page: 6,
                 level: 1,
             }
         );
         assert_eq!(
-            entries[21],
+            entries[24],
             PdfOutlineEntry {
                 title: "Conclusión".into(),
-                // The caption, the listing index and the labelled listing push
-                // the last section onto the final page of the 10-page
-                // capabilities document.
-                page: 10,
+                page: 13,
                 level: 0,
             }
         );
@@ -582,8 +579,8 @@ mod tests {
             "the outline must nest: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.page == 9),
-            "some entry must resolve past page 1: {entries:?}"
+            entries.iter().any(|e| e.page > 9),
+            "some entry must resolve past page 9: {entries:?}"
         );
     }
 
