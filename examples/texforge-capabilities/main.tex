@@ -20,6 +20,21 @@
 \usepackage{array}
 \usepackage{tabularx}
 \usepackage{float}
+\usepackage{placeins}
+% Las figuras del capitulo de diagramas son altas: dejan que una figura
+% ocupe casi toda la pagina y que quepan unas lineas de texto a su lado,
+% en vez de empujarla a una pagina propia.
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.85}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.85}
+% Las figuras del capitulo de diagramas van seguidas unas de otras: el aire
+% por defecto entre figura y texto deja huecos que empujan una figura a la
+% pagina siguiente.
+\setlength{\textfloatsep}{11pt plus 2pt minus 2pt}
+\setlength{\intextsep}{9pt plus 2pt minus 2pt}
+\setlength{\floatsep}{11pt plus 2pt minus 2pt}
+\setlength{\abovecaptionskip}{6pt}
 \usepackage{graphicx}
 \usepackage{lastpage}
 \usepackage{tikz}
@@ -91,12 +106,12 @@
 % Titulos: seccion Garamond con numero en acento y regla, subseccion sans.
 \titleformat{\section}{\normalfont\fontsize{20}{24}\selectfont\color{docink}}
 {\textcolor{docaccent}{\thesection}}{0.7em}{}[{\vspace{3pt}\color{docrule}\titlerule}]
-\titlespacing*{\section}{0pt}{2.2\baselineskip}{1\baselineskip}
+\titlespacing*{\section}{0pt}{1.6\baselineskip}{0.7\baselineskip}
 \titleformat{\subsection}{\sffamily\bfseries\normalsize\color{docink}}
 {\textcolor{docaccent}{\thesubsection}}{0.7em}{}
-\titlespacing*{\subsection}{0pt}{1.4\baselineskip}{0.4\baselineskip}
+\titlespacing*{\subsection}{0pt}{1.0\baselineskip}{0.3\baselineskip}
 \titleformat{\subsubsection}{\normalfont\itshape\color{docink}}{}{0pt}{}
-\titlespacing*{\subsubsection}{0pt}{1\baselineskip}{0.2\baselineskip}
+\titlespacing*{\subsubsection}{0pt}{0.8\baselineskip}{0.2\baselineskip}
 
 % Indice con tocloft.
 \renewcommand{\cftsecfont}{\normalfont\bfseries}
@@ -104,20 +119,20 @@
 \renewcommand{\cftsubsecfont}{\normalfont}
 \renewcommand{\cftsecdotsep}{\cftnodots}
 \renewcommand{\cftsubsecdotsep}{\cftdotsep}
-\setlength{\cftbeforesecskip}{0.7em}
-\setlength{\cftbeforesubsecskip}{0.15em}
+\setlength{\cftbeforesecskip}{0.5em}
+\setlength{\cftbeforesubsecskip}{0.1em}
 \renewcommand{\cftdotsep}{2}
 \renewcommand{\cfttoctitlefont}{\normalfont\fontsize{20}{24}\selectfont\color{docink}}
-\setlength{\cftaftertoctitleskip}{1.2em}
+\setlength{\cftaftertoctitleskip}{0.8em}
 
 \frenchspacing
 \let\origsection\section
 \renewcommand{\section}{\needspace{8\baselineskip}\origsection}
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{0.6\baselineskip}
+\setlength{\parskip}{0.4\baselineskip}
 \setlength{\emergencystretch}{2em}
 \renewcommand{\arraystretch}{1.25}
-\setlist{leftmargin=1.5em,itemsep=2pt,topsep=3pt,parsep=0pt}
+\setlist{leftmargin=1.5em,itemsep=1pt,topsep=2pt,parsep=0pt}
 \setlist[itemize]{label={\color{docaccent}\textbullet}}
 
 % Longitudes de la portada: definidas aqui para que el cuerpo solo nombre comandos.
@@ -140,7 +155,7 @@
 % Cajas: panel tintado con barra de acento y rotulo en versalitas.
 \tcbset{docbox/.style={enhanced,breakable,colback=#1!6,colframe=#1!6,
     boxrule=0pt,arc=0pt,outer arc=0pt,borderline west={2.4pt}{0pt}{#1},
-    left=11pt,right=10pt,top=7pt,bottom=7pt,before skip=9pt,after skip=9pt,
+    left=11pt,right=10pt,top=6pt,bottom=6pt,before skip=7pt,after skip=7pt,
     fonttitle=\sffamily\scriptsize\scshape\bfseries,coltitle=#1,
     attach boxed title to top left={xshift=-1pt,yshift=-1pt},
     boxed title style={empty,left=0pt,top=0pt,bottom=0pt}}}

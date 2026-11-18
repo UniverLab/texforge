@@ -56,14 +56,12 @@ texto de cada flecha viaja sobre ella sin sintaxis adicional.
 
 \subsubsection{El mismo diagrama en los cuatro preajustes}
 
-El atributo \texttt{style} aplica uno de los cuatro preajustes con el mismo
-criterio en los tres motores. La secuencia anterior se repite a continuación
-una vez por preajuste --- figuras \ref{fig:secuencia-editorial},
+El atributo \texttt{style} aplica uno de los cuatro preajustes; la misma
+secuencia se repite abajo, figuras \ref{fig:secuencia-editorial},
 \ref{fig:secuencia-monochrome}, \ref{fig:secuencia-technical} y
-\ref{fig:secuencia-default} --- para comparar cómo cambia la misma
-información.
+\ref{fig:secuencia-default}.
 
-\begin{mermaid}[style=editorial, width=0.9\linewidth, caption={Preajuste \texttt{editorial}: paleta sobria con tinta y granate, un solo acento y aire generoso; conviene a documentos que se leen en pantalla o se imprimen a color}, label={fig:secuencia-editorial}, pos=H]
+\begin{mermaid}[style=editorial, width=0.62\linewidth, caption={\texttt{editorial}: paleta sobria con un solo acento}, label={fig:secuencia-editorial}, pos=t]
   sequenceDiagram
   autonumber
   actor Usuario
@@ -96,7 +94,7 @@ información.
   deactivate texforge
 \end{mermaid}
 
-\begin{mermaid}[style=monochrome, width=0.9\linewidth, caption={Preajuste \texttt{monochrome}: solo grises, sin depender del color para distinguir nada; es el indicado para documentos que se imprimen en blanco y negro}, label={fig:secuencia-monochrome}, pos=H]
+\begin{mermaid}[style=monochrome, width=0.62\linewidth, caption={\texttt{monochrome}: solo grises, para blanco y negro}, label={fig:secuencia-monochrome}, pos=t]
   sequenceDiagram
   autonumber
   actor Usuario
@@ -129,7 +127,7 @@ información.
   deactivate texforge
 \end{mermaid}
 
-\begin{mermaid}[style=technical, width=0.9\linewidth, caption={Preajuste \texttt{technical}: trazo uniforme, sin rellenos y etiquetas de aspecto fijo; funciona como plano o esquema de referencia}, label={fig:secuencia-technical}, pos=H]
+\begin{mermaid}[style=technical, width=0.62\linewidth, caption={\texttt{technical}: trazo uniforme, sin rellenos}, label={fig:secuencia-technical}, pos=t]
   sequenceDiagram
   autonumber
   actor Usuario
@@ -162,7 +160,7 @@ información.
   deactivate texforge
 \end{mermaid}
 
-\begin{mermaid}[style=default, width=0.9\linewidth, caption={Preajuste \texttt{default}: el aspecto nativo de cada motor, sin alterar documentos existentes}, label={fig:secuencia-default}, pos=H]
+\begin{mermaid}[style=default, width=0.62\linewidth, caption={\texttt{default}: el aspecto nativo del motor}, label={fig:secuencia-default}, pos=t]
   sequenceDiagram
   autonumber
   actor Usuario
@@ -205,35 +203,37 @@ preajuste se fija una vez en \texttt{project.toml}, bajo \texttt{[diagrams]}
 con \texttt{style = "..."}, y cada entorno puede cambiarlo con su propio
 atributo \texttt{style}; omitir ambos equivale a \texttt{default}. Este
 documento usa \texttt{editorial} en todo su recorrido.
+\FloatBarrier
 
 \subsection{Graphviz}
 
 La figura~\ref{fig:arquitectura} dibuja la arquitectura como un grafo
 dirigido con Graphviz~\cite{graphviz}, organizada en tres etapas: la interfaz
 de línea de comandos, el preprocesador con sus tres motores y la salida que
-produce el PDF. Los bloques \texttt{subgraph cluster\ldots} agrupan el fuente
-por etapas; cada nodo nombra una pieza, las flechas marcan dependencias y la
-leyenda aclara el significado de los trazos.
+produce el PDF. El motor de composición es Rust puro: no dibuja cajas de
+\texttt{subgraph cluster}, así que las etapas se distinguen por el relleno de
+sus nodos y la leyenda, no por un recuadro. Cada nodo nombra una pieza y las
+flechas marcan dependencias.
 
-\begin{graphviz}[width=0.85\linewidth, caption={Arquitectura de texforge por etapas}, label={fig:arquitectura}, pos=H]
+\begin{graphviz}[width=1.0\linewidth, caption={Arquitectura de texforge: interfaz, preprocesador y salida}, label={fig:arquitectura}, pos=H]
   digraph Arquitectura {
     rankdir=LR
-    node [style=filled, fillcolor=linen, color=sienna]
-    edge [color=sienna]
+    node [style=filled, fillcolor=linen, color=sienna, fontsize=14]
+    edge [color=sienna, fontsize=12]
 
-    subgraph clusterfront {
+    subgraph front {
       CLI [label="texforge CLI", shape=box, fillcolor=antiquewhite]
     }
 
-    subgraph clusterpre {
+    subgraph pre {
       Mermaid [label="Mermaid", fillcolor=cornsilk]
       Graphviz [label="Graphviz", fillcolor=cornsilk]
       D2 [label="D2", fillcolor=cornsilk]
       { rank=same; Mermaid; Graphviz; D2; }
     }
 
-    subgraph clusterback {
-      Tectonic [label="tectonic", shape=box, fillcolor=antiquewhite]
+    subgraph back {
+      Tectonic [label="tectonic", shape=box, fillcolor=darkseagreen]
       PDF [label="PDF", shape=doublecircle, fillcolor=white]
       { rank=same; Tectonic; PDF; }
     }
@@ -246,14 +246,16 @@ leyenda aclara el significado de los trazos.
     D2 -> Tectonic [style=dashed, color=firebrick]
     Tectonic -> PDF [penwidth=2, color=firebrick, label="genera"]
 
-    subgraph clusterlegend {
-      E1 [label="origen", shape=box]
-      E2 [label="destino", shape=box]
+    subgraph legend {
+      E1 [label="origen: CLI", shape=box, fillcolor=antiquewhite]
+      E2 [label="motor", shape=box, fillcolor=cornsilk]
+      E3 [label="salida", shape=box, fillcolor=darkseagreen]
       E1 -> E2 [label="flujo", penwidth=2]
-      E2 -> E1 [label="genera", style=dashed, color=firebrick]
+      E2 -> E3 [label="genera", style=dashed, color=firebrick]
     }
   }
 \end{graphviz}
+\FloatBarrier
 
 \subsection{D2}
 
@@ -262,8 +264,8 @@ sintaxis de D2: escribir, revisar, componer e inspeccionar, cada etapa con
 su comando dentro de la caja, y el artefacto que produce la salida. La
 arista a trazos marca el paso de verificación.
 
-\begin{d2}[width=0.9\linewidth, caption={Tubería de trabajo, de la escritura a la inspección}, label={fig:pipeline}, pos=H]
-  direction: right
+\begin{d2}[width=1.0\linewidth, caption={Tubería de trabajo, de la escritura a la inspección}, label={fig:pipeline}, pos=H]
+  direction: down
 
   classes: {
     etapa: {
@@ -281,6 +283,7 @@ arista a trazos marca el paso de verificación.
   }
 
   flujo: Tubería {
+    grid-columns: 2
     escribir: "Escribir\nfuente .tex" {
       shape: document
       class: etapa
@@ -323,6 +326,7 @@ arista a trazos marca el paso de verificación.
     }
   }
 \end{d2}
+\FloatBarrier
 
 \begin{notebox}
   Los tres entornos aceptan \texttt{label=} con o sin \texttt{caption}, y
@@ -346,7 +350,7 @@ copiarse tal cual.
   \begin{tikzpicture}
     \begin{axis}[
         width=0.82\linewidth,
-        height=7cm,
+        height=4.9cm,
         axis lines=middle,
         axis line style={benchsepia},
         xlabel={$x$},
@@ -365,7 +369,7 @@ copiarse tal cual.
       \addplot[dashed, color=benchsepia, domain=-0.2:2.2] {exp(-0.5) - exp(-0.5)*(x-1)};
       \addplot[only marks, mark=*, mark size=2pt, color=benchink] coordinates {(1,{exp(-0.5)})};
       \node[anchor=south west, font=\small\sffamily, color=docink] at (axis cs:1.05,0.62) {tangente en $x=1$};
-      \node[anchor=north, font=\small\sffamily, color=benchsepia] at (axis cs:-1.4,0.35) {$f(x)=e^{-x^{2}/2}$};
+      \node[anchor=south, font=\small\sffamily, color=benchsepia] at (axis cs:1.35,0.95) {$f(x)=e^{-x^{2}/2}$};
     \end{axis}
   \end{tikzpicture}
   \caption{Curva gaussiana con sombreado y tangente dibujada con TikZ}
@@ -375,7 +379,7 @@ copiarse tal cual.
 \begin{code}[lang=latex, numbers=true, caption={Código fuente de la figura~\ref{fig:pagina}}, label={lst:tikz-curva}]
 \begin{tikzpicture}
   \begin{axis}[
-    width=0.82\linewidth, height=7cm,
+    width=0.82\linewidth, height=4.9cm,
     axis lines=middle, axis line style={benchsepia},
     xlabel={$x$}, ylabel={$f(x)$},
     xmin=-2.6, xmax=2.6, ymin=-0.15, ymax=1.25,
@@ -395,8 +399,8 @@ copiarse tal cual.
     \node[anchor=south west, font=\small\sffamily,
       color=docink] at (axis cs:1.05,0.62)
       {tangente en $x=1$};
-    \node[anchor=north, font=\small\sffamily,
-      color=benchsepia] at (axis cs:-1.4,0.35)
+    \node[anchor=south, font=\small\sffamily,
+      color=benchsepia] at (axis cs:1.35,0.95)
       {$f(x)=e^{-x^{2}/2}$};
   \end{axis}
 \end{tikzpicture}

@@ -540,7 +540,7 @@ mod tests {
         let from_bytes = read_pdf_outline_from_bytes(CAPABILITIES_PDF).unwrap();
         assert_eq!(from_path, from_bytes);
         let (entries, page_count) = from_path.expect("capabilities PDF must have an outline");
-        assert_eq!(page_count, 22, "fixture page count");
+        assert_eq!(page_count, 19, "fixture page count");
         assert_eq!(entries.len(), 28, "fixture outline entry count");
     }
 
@@ -564,7 +564,7 @@ mod tests {
             entries[8],
             PdfOutlineEntry {
                 title: "D2".into(),
-                page: 12,
+                page: 9,
                 level: 1,
             }
         );
@@ -572,7 +572,7 @@ mod tests {
             entries[27],
             PdfOutlineEntry {
                 title: "Conclusión".into(),
-                page: 22,
+                page: 19,
                 level: 0,
             }
         );
