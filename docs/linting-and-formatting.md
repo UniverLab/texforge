@@ -48,6 +48,10 @@ Language is detected from the document:
 - `\usepackage[polyglossia]{...}` — language extracted from polyglossia declaration
 - No declaration — falls back to `texforge config language` (default: `english`)
 
+Only prose is checked. The bodies of diagram environments (`mermaid`, `d2`,
+`graphviz`) are treated as diagram source, not prose, so they are not
+spell-checked.
+
 Dictionaries download automatically into `~/.texforge/dicts/` on first use.
 
 Manage custom words with `texforge spell`:
