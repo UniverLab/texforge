@@ -57,8 +57,14 @@ texforge new <name> [-t <template>] [--values <file>]
 
 | Flag | Value | Default |
 |---|---|---|
-| `--template`, `-t` | template name | `general` |
+| `--template`, `-t` | template name or path to a local template folder | `general` |
 | `--values` | path to a `.toml`, `.yaml` or `.yml` file | none |
+
+A `-t` value is a path when it starts with `./`, `../`, `/`, `~/` or is
+`.`/`..`, or when a directory of that exact name exists in the current
+directory and contains a `template.toml`; otherwise it is a template name.
+A trailing `/` is allowed. A local folder is used in place — nothing is
+installed — and the recorded template is the folder manifest's `id`.
 
 The `--values` file fills template placeholders; its keys are echoed into
 the project as `values.toml`. A `title` key also sets `[document] title`

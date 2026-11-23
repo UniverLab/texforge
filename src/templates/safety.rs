@@ -3,7 +3,7 @@
 /// True when `rel` names a file inside the template directory and nothing
 /// outside it: not empty, not absolute, no `..` component, no backslash and
 /// no Windows drive prefix.
-pub(super) fn is_safe_relative(rel: &str) -> bool {
+pub(crate) fn is_safe_relative(rel: &str) -> bool {
     if rel.is_empty() || rel.starts_with('/') || rel.contains('\\') {
         return false;
     }

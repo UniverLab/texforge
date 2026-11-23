@@ -10,6 +10,8 @@ use crate::placeholders::PlaceholderResolver;
 use crate::templates;
 use crate::values_file;
 
+use super::new_local;
+
 /// Resolve `-t` against installed templates plus every configured remote
 /// source: a bare name offered by more than one source fails naming every
 /// `source/name` candidate, and an unreachable source warns once and
@@ -59,9 +61,29 @@ pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -
         name, template_name
     );
 
+    if new_local::is_local_arg(template_name) {
+        let dir = new_local::resolve_dir(template_name);
+        let (files, local_name) = new_local::load_local(&dir)?;
+        return create_from_files(name, &local_name, &files, values_path);
+    }
+
     let template_ref = resolve_template_reference(template_name)?;
     let resolved = templates::resolve(&template_ref)?;
-    let manifest = template_manifest(&resolved.files);
+    create_from_files(name, template_name, &resolved.files, values_path)
+}
+
+/// Generate the project directory from already-loaded template `files`,
+/// recording `template_name` in `project.toml`. Shared by the installed and
+/// local-folder paths, so placeholder handling, `--values`, required keys
+/// and the safety checks behave exactly alike.
+fn create_from_files(
+    name: &str,
+    template_name: &str,
+    files: &HashMap<String, Vec<u8>>,
+    values_path: Option<&Path>,
+) -> Result<()> {
+    let project_dir = Path::new(name);
+    let manifest = template_manifest(files);
     let file_values = load_values(values_path, manifest.as_ref(), template_name)?;
 
     // Create the project directory before resolving placeholders: the author
@@ -80,7 +102,7 @@ pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -
     cli_args
         .entry("title".to_string())
         .or_insert_with(|| name.to_string());
-    let values = resolve_placeholder_values(&resolved.files, cli_args, project_dir);
+    let values = resolve_placeholder_values(files, cli_args, project_dir);
 
     // A required placeholder with no value fails generation instead of leaving
     // a raw `{{name}}` in the project. Remove the directory this run created.
@@ -95,7 +117,7 @@ pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -
         anyhow::bail!("Required placeholders have no value:\n{list}");
     }
 
-    write_project_files(&resolved.files, &values, project_dir)?;
+    write_project_files(files, &values, project_dir)?;
 
     if values_path.is_some() {
         std::fs::write(

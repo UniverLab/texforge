@@ -9,6 +9,7 @@ pub mod doctor;
 pub mod fmt;
 pub mod init;
 pub mod new;
+pub mod new_local;
 pub mod outline;
 pub mod pdf;
 pub mod preview;

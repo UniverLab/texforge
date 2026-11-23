@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- `texforge new -t` now also takes a path to a local template folder (`./my-template`), used in place without installing; the `template` recorded in `project.toml` is the folder manifest's `id`.
 - In the `ink` code-listing style, gutter line numbers now render in grey so they do not compete with the code.
 - The capabilities example regained the Mermaid preset comparison and got richer Graphviz, D2 and TikZ figures.
 - Code listings default to DejaVu Sans Mono unless `[highlight] font` is set or project sources load fontspec; set `font = "document"` to keep the preamble's typewriter family.

@@ -362,7 +362,7 @@ texforge template source list        # oficial primero (default) + configurados 
 texforge template source remove acme # quita el source (los templates instalados quedan)
 ```
 
-`template add` acepta un nombre del registry o una ruta a una carpeta local. Para conocer los templates disponibles, **siempre consultá la CLI** — no asumas una lista fija, el registry remoto se actualiza por separado. Cada entrada muestra nombre y descripción; usá ese nombre con `texforge new -t <nombre>` o `texforge template add <nombre>`.
+`template add` acepta un nombre del registry o una ruta a una carpeta local. Para conocer los templates disponibles, **siempre consultá la CLI** — no asumas una lista fija, el registry remoto se actualiza por separado. Cada entrada muestra nombre y descripción; usá ese nombre con `texforge new -t <nombre>` o `texforge template add <nombre>`. `texforge new -t` también acepta una ruta a una carpeta local (`./mi-template`), que se usa en el lugar sin instalar nada.
 
 ### `texforge update`
 

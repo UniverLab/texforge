@@ -15,8 +15,9 @@ mod safety;
 pub(crate) mod sources;
 
 pub(crate) use http::private_repo_message;
-pub(crate) use local::install_from_dir;
+pub(crate) use local::{install_from_dir, is_plain_name};
 pub(crate) use refs::{installed_candidates, resolve_in, union_candidates};
+pub(crate) use safety::is_safe_relative;
 pub(crate) use sources::{load_sources, TemplateSource, OFFICIAL_NAME};
 
 /// True when the installed template `name` came from a local folder.

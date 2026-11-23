@@ -109,6 +109,28 @@ the network** — `texforge template refresh` skips it, and `texforge new` uses
 its files exactly as they are on disk. Install it again with `--force` after
 editing the folder.
 
+## Using a local folder without installing
+
+To skip the install step, point `texforge new -t` at the folder directly:
+
+```bash
+texforge new mi-tesis -t ./my-template
+```
+
+The `-t` value is a path when it starts with `./`, `../`, `/`, `~/` or is
+`.`/`..`, or when a directory of that exact name exists in the current
+directory and contains a `template.toml` (a trailing `/` is allowed);
+otherwise it is a template name as before. The folder is used in place:
+nothing is copied into `~/.texforge/templates/`, no registry request is
+made, and the `template` recorded in `project.toml` is the folder
+manifest's `id`, never the path. Placeholders, `--values`, defaults,
+required keys and the folder safety checks behave exactly as with an
+installed template, and `[files]` include/exclude stays parsed but not
+enforced. A path that is not a directory, a directory without
+`template.toml`, a manifest without a usable `id`, or a folder without
+`main.tex` fails naming what is missing, before the project directory is
+created.
+
 ## Rate limits
 
 Downloads come from GitHub. If the registry refuses a request — usually
