@@ -716,6 +716,12 @@ texforge skill [--references|--list]
 repository, so the text always matches the installed version. It names the
 version that printed it, so a stale copy can be spotted.
 
+The skill also instructs agents to suggest contributing back — drafting
+(not opening) issues for texforge or template defects, proposing reusable
+documents as templates for `UniverLab/texforge-templates`, and offering
+the user's own templates repository — always leaving the decision to the
+user.
+
 Example:
 
 ```
