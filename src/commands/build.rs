@@ -29,7 +29,7 @@ pub struct LivePreview {
 /// Resolve the `SOURCE_DATE_EPOCH` value for a build. The CLI flag wins over
 /// `project.toml`; a flag with no value pins the fixed default epoch; a config
 /// value pins its own epoch or the default when enabled without one.
-fn resolve_epoch(cli: Option<Option<u64>>, config: Option<Reproducible>) -> Option<u64> {
+pub(crate) fn resolve_epoch(cli: Option<Option<u64>>, config: Option<Reproducible>) -> Option<u64> {
     match cli {
         Some(Some(epoch)) => Some(epoch),
         Some(None) => Some(compiler::DEFAULT_EPOCH),
@@ -109,23 +109,18 @@ fn resolve_highlight_settings(project: &Project) -> Result<highlight::Settings> 
     Ok(settings)
 }
 
-/// Compile project to PDF using a temp directory, output named after the document title.
-pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
-    let project = Project::load()?;
-    let titulo = &project.config.document.title;
-    println!("Building project: {titulo}");
-
-    let epoch = resolve_epoch(reproducible, project.config.build.reproducible);
-    if epoch.is_some() {
-        println!("  ◇ reproducible build (SOURCE_DATE_EPOCH pinned)");
-    }
-
-    let default_style = resolve_default_style(&project)?;
-    let highlight_cfg = resolve_highlight_settings(&project)?;
-
-    let temp_dir = tempfile::tempdir()?;
-    let build_dir = temp_dir.path();
-    println!("  ◇ temp: {}", build_dir.display());
+/// Run the diagrams + highlight + Tectonic pipeline for `project` with its
+/// sources copied into `build_dir`, returning the built PDF inside
+/// `build_dir`. Shared by the normal build and the template-folder build,
+/// which stages a rendered copy and points a [`Project`] at it.
+pub(crate) fn compile_project(
+    project: &Project,
+    build_dir: &Path,
+    verbose: bool,
+    epoch: Option<u64>,
+) -> Result<PathBuf> {
+    let default_style = resolve_default_style(project)?;
+    let highlight_cfg = resolve_highlight_settings(project)?;
 
     diagrams::process(
         &project.root,
@@ -147,14 +142,39 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
         .unwrap_or_else(|| project.config.build.entry.clone());
     compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map)?;
 
-    let pdf_name = format!("{}.pdf", sanitize_filename(titulo));
-    let pdf_dest = project.root.join(&pdf_name);
-    let pdf_src = build_dir.join(
+    Ok(build_dir.join(
         Path::new(&project.config.build.entry)
             .with_extension("pdf")
             .file_name()
             .unwrap(),
-    );
+    ))
+}
+
+/// Compile project to PDF using a temp directory, output named after the document title.
+pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
+    if !Path::new("project.toml").exists() && Path::new("template.toml").exists() {
+        anyhow::bail!(
+            "This folder is a template: `texforge build --values <file>` is needed \
+             to build a template folder"
+        );
+    }
+    let project = Project::load()?;
+    let titulo = project.config.document.title.clone();
+    println!("Building project: {titulo}");
+
+    let epoch = resolve_epoch(reproducible, project.config.build.reproducible);
+    if epoch.is_some() {
+        println!("  ◇ reproducible build (SOURCE_DATE_EPOCH pinned)");
+    }
+
+    let temp_dir = tempfile::tempdir()?;
+    let build_dir = temp_dir.path();
+    println!("  ◇ temp: {}", build_dir.display());
+
+    let pdf_src = compile_project(&project, build_dir, verbose, epoch)?;
+
+    let pdf_name = format!("{}.pdf", sanitize_filename(&titulo));
+    let pdf_dest = project.root.join(&pdf_name);
     std::fs::copy(&pdf_src, &pdf_dest)?;
     println!("  ◇ {}", pdf_dest.display());
 

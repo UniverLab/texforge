@@ -140,14 +140,14 @@ bibliography = "bib/references.bib"
 /// Parse a template's `template.toml`. Returns `None` when the file is
 /// absent, not UTF-8 or does not parse: such a template declares no
 /// placeholders at all.
-fn template_manifest(files: &HashMap<String, Vec<u8>>) -> Option<TemplateManifest> {
+pub(crate) fn template_manifest(files: &HashMap<String, Vec<u8>>) -> Option<TemplateManifest> {
     let text = std::str::from_utf8(files.get("template.toml")?).ok()?;
     TemplateManifest::from_str(text).ok()
 }
 
 /// Load the `--values` file, if any, and check its keys against the
 /// placeholders the template declares.
-fn load_values(
+pub(crate) fn load_values(
     values_path: Option<&Path>,
     manifest: Option<&TemplateManifest>,
     template_name: &str,
@@ -163,7 +163,7 @@ fn load_values(
 /// Every key of the values file must be a placeholder the template declares,
 /// otherwise it would silently do nothing. A template without a parsable
 /// manifest declares nothing, so every key is unknown there.
-fn validate_values_keys(
+pub(crate) fn validate_values_keys(
     manifest: Option<&TemplateManifest>,
     values: &BTreeMap<String, String>,
     template_name: &str,
@@ -196,7 +196,7 @@ fn validate_values_keys(
 
 /// The required placeholders left without a value after resolution, as
 /// `(name, description)` in declaration order.
-fn missing_required<'a>(
+pub(crate) fn missing_required<'a>(
     manifest: Option<&'a TemplateManifest>,
     values: &HashMap<String, String>,
 ) -> Vec<(&'a str, &'a str)> {
@@ -214,7 +214,7 @@ fn missing_required<'a>(
 /// Write all template files into the project directory, substituting
 /// `{{placeholder}}` tokens in `.tex` files only — other files (code samples,
 /// images) are copied verbatim.
-fn write_project_files(
+pub(crate) fn write_project_files(
     files: &HashMap<String, Vec<u8>>,
     values: &HashMap<String, String>,
     project_dir: &Path,
@@ -244,7 +244,7 @@ fn write_project_files(
 /// Returns an empty map for templates without a (valid) `template.toml` or
 /// without declared placeholders. `project_dir` is where the git identity
 /// fallback (`git config --get user.name`) runs.
-fn resolve_placeholder_values(
+pub(crate) fn resolve_placeholder_values(
     files: &HashMap<String, Vec<u8>>,
     cli_args: HashMap<String, String>,
     project_dir: &Path,
@@ -268,7 +268,7 @@ fn resolve_placeholder_values(
 /// tokens are left untouched (lenient — never fails generation); any
 /// remaining `{{user.*}}` / `{{institution.*}}` token is cleared to the
 /// empty string so no raw identity placeholder reaches a generated file.
-fn apply_substitutions(content: &str, values: &HashMap<String, String>) -> String {
+pub(crate) fn apply_substitutions(content: &str, values: &HashMap<String, String>) -> String {
     let mut out = content.to_string();
     for (key, value) in values {
         out = out.replace(&format!("{{{{{}}}}}", key), value);

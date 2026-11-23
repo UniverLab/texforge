@@ -112,6 +112,13 @@ pub struct Project {
 }
 
 impl Project {
+    /// Build a project from an explicit root and config. [`Project::load`]
+    /// delegates to this; template-folder builds stage a rendered copy and
+    /// run the pipeline on it through this constructor.
+    pub fn from_parts(root: PathBuf, config: ProjectConfig) -> Self {
+        Self { root, config }
+    }
+
     /// Load project from current directory.
     pub fn load() -> Result<Self> {
         let root = std::env::current_dir()?;
@@ -128,7 +135,7 @@ impl Project {
         let config: ProjectConfig =
             toml::from_str(&content).map_err(|e| toml_error(&config_path, &content, &e))?;
 
-        Ok(Self { root, config })
+        Ok(Self::from_parts(root, config))
     }
 }
 

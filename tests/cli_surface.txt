@@ -39,10 +39,12 @@ command template validate
 command uninstall
 command update
 flag build --delay value
+flag build --out value
 flag build --preview bool
 flag build --preview-out value
 flag build --preview-page value
 flag build --reproducible optional
+flag build --values value
 flag build --verbose bool
 flag build --watch bool
 flag check --deny-warnings bool

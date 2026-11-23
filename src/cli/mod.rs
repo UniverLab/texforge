@@ -34,6 +34,14 @@ enum Commands {
     },
     /// Compile project to PDF
     Build {
+        /// Fill template placeholders from a .toml, .yaml or .yml file
+        /// (only on a folder with a template.toml; staged to a temp copy)
+        #[arg(long, value_name = "FILE", conflicts_with = "watch")]
+        values: Option<PathBuf>,
+        /// PDF output path (requires --values; default: <folder-name>.pdf
+        /// in the parent directory)
+        #[arg(long, value_name = "PATH", requires = "values")]
+        out: Option<PathBuf>,
         /// Watch for file changes and rebuild automatically
         #[arg(long)]
         watch: bool,
@@ -288,6 +296,8 @@ impl Cli {
                 values,
             } => commands::new::execute(&name, template.as_deref(), values.as_deref()),
             Commands::Build {
+                values,
+                out,
                 watch,
                 delay,
                 verbose,
@@ -296,6 +306,14 @@ impl Cli {
                 preview_page,
                 preview_out,
             } => {
+                if values.is_some() {
+                    return commands::build_template::execute(
+                        values.as_deref(),
+                        out.as_deref(),
+                        verbose,
+                        reproducible,
+                    );
+                }
                 if watch {
                     let live_preview = preview.then_some(commands::build::LivePreview {
                         page: preview_page,

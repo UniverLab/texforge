@@ -1,6 +1,7 @@
 //! Command implementations.
 
 pub mod build;
+pub mod build_template;
 pub mod check;
 pub mod clean;
 pub mod config;

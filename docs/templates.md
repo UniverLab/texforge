@@ -164,6 +164,19 @@ sorted by key. Only the file's own keys are written — never values that came
 from your configuration. Keep the file with the document and pass it back to
 `texforge new --values` to regenerate from the same data.
 
+### Building a template folder directly
+
+A folder that already carries a `template.toml` — a reusable document such
+as a contract that is both a buildable project and an installable template —
+needs no `texforge new` step. Run from that folder:
+
+```bash
+texforge build --values client.toml --out ../contract-2026.pdf
+```
+
+The placeholders render into a temporary copy and the PDF is written without
+touching the folder; see [Building](building.md#building-a-template-folder).
+
 ## Writing your own template
 
 A template is a directory with a manifest describing its files and

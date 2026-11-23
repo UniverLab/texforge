@@ -26,6 +26,32 @@ an outdated managed copy is updated to the supported version automatically;
 when the Tectonic that runs is older than the supported version — for
 example one earlier in `PATH` — the build warns about it and continues.
 
+## Building a template folder
+
+A folder carrying a `template.toml` — with or without a `project.toml` —
+builds straight to a filled PDF, without creating a project first:
+
+```bash
+texforge build --values client.toml
+texforge build --values client.toml --out ../nda-acme.pdf
+```
+
+Placeholders are rendered into a temporary copy outside the folder, then the
+normal pipeline runs on that copy: the folder itself is never modified and
+nothing is ever written inside it. Only `.tex` files are substituted, with
+the same rules as `texforge new`; every other file is copied byte-for-byte,
+except `template.toml`, `.git/`, `build/`, `.texforge/`, the values file and
+`*.pdf`, which are skipped. A missing required placeholder fails the run
+naming each one and the values file, before anything compiles. When the
+folder also has a `project.toml`, its title, entry, bibliography, highlight,
+diagrams and reproducible settings apply; with only a `template.toml`, the
+entry is `main.tex` and the title is the manifest's display name. The PDF
+lands at `--out`, or at `<folder-name>.pdf` in the parent directory when
+`--out` is omitted — `--out` pointing inside the folder is an error, as is
+`--values` on a folder with no `template.toml`. Without `--values` the build
+is exactly a plain project build. `--values` cannot be combined with
+`--watch`.
+
 ## Reproducible builds
 
 By default a build embeds a current timestamp, so the same source produces a

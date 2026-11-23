@@ -97,6 +97,7 @@ Compile the project to PDF.
 ```
 texforge build [--watch] [--delay <s>] [--verbose] [--reproducible[=<epoch>]]
   [--preview] [--preview-page <n>] [--preview-out <path>]
+texforge build --values <file> [--out <path>]
 ```
 
 | Flag | Value | Default |
@@ -108,11 +109,18 @@ texforge build [--watch] [--delay <s>] [--verbose] [--reproducible[=<epoch>]]
 | `--preview` | none (switch): write a PNG of one page after each rebuild (requires `--watch`) | off |
 | `--preview-page` | page to rasterize, 1-based (requires `--preview`) | `1` |
 | `--preview-out` | fixed path for the preview PNG (requires `--preview`) | `preview.png` |
+| `--values` | path to a `.toml`, `.yaml` or `.yml` file filling the folder's template placeholders (requires a `template.toml`; conflicts with `--watch`) | none |
+| `--out` | PDF output path (requires `--values`; must not point inside the template folder) | `<folder-name>.pdf` in the parent directory |
+
+A folder with a `template.toml` builds to a filled PDF with `--values`;
+without `--values` the build is a plain project build, and a folder with
+only a `template.toml` fails telling you `--values` is needed.
 
 Example:
 
 ```
 texforge build --watch --delay 5 --preview
+texforge build --values client.toml --out ../nda-acme.pdf
 ```
 
 Exit codes: see the table.
