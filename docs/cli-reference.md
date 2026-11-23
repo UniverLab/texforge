@@ -110,7 +110,7 @@ texforge build --values <file> [--out <path>]
 | `--preview-page` | page to rasterize, 1-based (requires `--preview`) | `1` |
 | `--preview-out` | fixed path for the preview PNG (requires `--preview`) | `preview.png` |
 | `--values` | path to a `.toml`, `.yaml` or `.yml` file filling the folder's template placeholders (requires a `template.toml`; conflicts with `--watch`) | none |
-| `--out` | PDF output path (requires `--values`; must not point inside the template folder) | `<folder-name>.pdf` in the parent directory |
+| `--out` | PDF output path (requires `--values`; must not point inside the template folder — relative paths resolve against the current directory, so a bare file name is rejected, write `../name.pdf`) | `<folder-name>.pdf` in the parent directory |
 
 A folder with a `template.toml` builds to a filled PDF with `--values`;
 without `--values` the build is a plain project build, and a folder with
