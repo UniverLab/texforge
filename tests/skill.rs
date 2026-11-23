@@ -153,6 +153,32 @@ fn list_prints_exactly_the_reference_names_one_per_line() {
 }
 
 #[test]
+fn skill_contains_contributing_back() {
+    let text = stdout_of(&["skill"]);
+    assert!(
+        text.contains("## Contributing back"),
+        "the skill must have a `## Contributing back` section"
+    );
+    for phrase in [
+        "UniverLab/texforge",
+        "UniverLab/texforge-templates",
+        "{{name}}",
+        "texforge template add",
+        "texforge template source add",
+        "ghscaff",
+    ] {
+        assert!(
+            text.contains(phrase),
+            "the skill must mention `{phrase}` in the contributing guidance"
+        );
+    }
+    assert!(
+        text.starts_with("---\nname: texforge\n"),
+        "the frontmatter must stay unchanged"
+    );
+}
+
+#[test]
 fn references_and_list_cannot_be_combined() {
     let output = run(&["skill", "--references", "--list"]);
     assert!(

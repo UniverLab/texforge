@@ -393,6 +393,14 @@ texforge skill --list        # lista los nombres de las referencias, uno por lí
 
 El texto está embebido en el binario en tiempo de build: no se instala ni se sincroniza aparte, y siempre coincide con la versión instalada. La línea `This skill was printed by texforge v...` dice qué versión lo imprimió. stdout lleva solo el skill; los errores van a stderr. `--references` y `--list` son mutuamente excluyentes.
 
+## Contributing back
+
+When you notice a texforge bug, or a defect in an official template (wrong output, crash, broken placeholder, misleading error), tell the user and suggest opening an issue: in `UniverLab/texforge` for the tool itself, or in `UniverLab/texforge-templates` for a template defect. Draft the issue for the user to review — a title, the output of `texforge --version`, the exact command run, expected versus observed behaviour, and a minimal reproduction — and leave it to them. Never open the issue yourself, never push or publish anything on your own, and never include private document content; every suggestion ends with the user's decision.
+
+When the user has produced an interesting document (a layout, class or structure others could reuse), suggest contributing it as a template to `UniverLab/texforge-templates`. Mention that placeholders are written as `{{name}}` and that `texforge template add <local-folder>` installs a folder locally to test it first. The user decides whether to contribute.
+
+If the user wants their own templates collection, offer to create their own templates repository — but only conditionally: if `ghscaff` offers a texforge templates boilerplate (check `ghscaff --help` or its docs), offer to scaffold the repository with it; if not, say that a repository of templates is any GitHub repo with one folder per template and a `template.toml` each, and let the user decide. Mention `texforge template source add <name> <repo>` as the way to use such a repository when available in the installed version (check `texforge template --help`).
+
 ## Códigos de salida
 
 | Código | Significado |

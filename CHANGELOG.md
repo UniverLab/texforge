@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `texforge-capabilities` example was redone as an editorial document.
 - `~/.texforge/config.toml` accepts `[[template_sources]]` tables (`name`, `repo`, optional `ref` defaulting to `main`) for extra template repositories; the official registry stays always present and default, and requests to your own sources use `GITHUB_TOKEN` (else `gh auth token`) so private repos work.
 - `texforge template source add <name> <repo-or-url> [--ref <ref>] [--no-check]`, `texforge template source list [--json]` and `texforge template source remove <name>` manage those extra registries from the CLI instead of editing the config file by hand.
+- The embedded skill now guides agents to suggest contributing back: reporting texforge or official-template defects as drafted issues, offering good documents as templates, and offering the user's own templates repository.
 
 ### Added
 
