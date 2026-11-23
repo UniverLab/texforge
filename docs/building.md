@@ -48,9 +48,10 @@ diagrams and reproducible settings apply; with only a `template.toml`, the
 entry is `main.tex` and the title is the manifest's display name. The PDF
 lands at `--out`, or at `<folder-name>.pdf` in the parent directory when
 `--out` is omitted — `--out` pointing inside the folder is an error, as is
-`--values` on a folder with no `template.toml`. Without `--values` the build
-is exactly a plain project build. `--values` cannot be combined with
-`--watch`.
+`--values` on a folder with no `template.toml`. Without `--values`, a folder
+that also has a `project.toml` builds as a plain project; a folder with only
+a `template.toml` fails telling you `--values` is needed. `--values` cannot
+be combined with `--watch`.
 
 ## Reproducible builds
 
