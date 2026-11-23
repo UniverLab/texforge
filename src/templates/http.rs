@@ -6,7 +6,7 @@ const HINT: &str =
 /// Message for a 404/403 from a user-configured (non-official) source: the
 /// repo may be private. Names both ways to authenticate; the token itself is
 /// never part of any error string.
-pub(super) fn private_repo_message(repo: &str) -> String {
+pub(crate) fn private_repo_message(repo: &str) -> String {
     format!(
         "Template source '{repo}' returned HTTP 404 or 403; the repo may be private. \
          Set the GITHUB_TOKEN environment variable or run 'gh auth login' to authenticate."
@@ -18,7 +18,7 @@ pub(super) fn private_repo_message(repo: &str) -> String {
 /// Only 403 and 429 are treated as a refusal that is probably a rate limit;
 /// every other status returns `None` so the caller keeps its generic
 /// `Registry returned HTTP <status>` message.
-pub(super) fn refusal_message(
+pub(crate) fn refusal_message(
     status: u16,
     retry_after: Option<&str>,
     reset: Option<&str>,

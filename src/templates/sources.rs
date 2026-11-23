@@ -72,9 +72,8 @@ impl TemplateSource {
 /// badly shaped name or repo, an empty `ref` or a duplicate name is an error
 /// naming the entry and the rule, never a silent skip.
 ///
-/// Not called yet: the `template source` subcommands and listing by source are
-/// the next specs. Kept alive until then.
-#[allow(dead_code)]
+/// Called by the `template source` subcommands; listing by source is a later
+/// spec.
 pub fn load_sources() -> Result<Vec<TemplateSource>> {
     let mut sources = vec![TemplateSource::official()];
     let path = crate::config::config_file_path()?;
@@ -158,7 +157,7 @@ fn parse_entry(index: usize, entry: &toml::Value) -> Result<TemplateSource> {
 }
 
 /// Lowercase alphanumeric start, then lowercase alphanumeric or `-`.
-fn is_valid_name(name: &str) -> bool {
+pub(crate) fn is_valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => (),
@@ -168,7 +167,7 @@ fn is_valid_name(name: &str) -> bool {
 }
 
 /// Exactly one `/` with non-empty sides and no whitespace.
-fn is_valid_repo(repo: &str) -> bool {
+pub(crate) fn is_valid_repo(repo: &str) -> bool {
     if repo.chars().any(char::is_whitespace) {
         return false;
     }

@@ -15,5 +15,6 @@ pub mod skill;
 pub mod spell;
 pub mod stats;
 pub mod template;
+pub mod template_source;
 pub mod uninstall;
 pub mod update;

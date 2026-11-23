@@ -31,6 +31,10 @@ command template add
 command template list
 command template refresh
 command template remove
+command template source
+command template source add
+command template source list
+command template source remove
 command template validate
 command uninstall
 command update
@@ -62,6 +66,9 @@ flag stats --by value
 flag stats --json bool
 flag template add --force bool
 flag template list --local bool
+flag template source add --no-check bool
+flag template source add --ref value
+flag template source list --json bool
 flag uninstall --dry-run bool
 flag uninstall --include-spell-words bool
 flag uninstall --yes bool

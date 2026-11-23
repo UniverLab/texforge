@@ -184,7 +184,7 @@ Exit codes: see the table.
 Manage templates. Every action is a subcommand below.
 
 ```
-texforge template <list|add|remove|validate|refresh>
+texforge template <list|add|remove|validate|refresh|source>
 ```
 
 Example:
@@ -287,6 +287,78 @@ Example:
 
 ```
 texforge template refresh general
+```
+
+Exit codes: see the table.
+
+### texforge template source
+
+Manage extra template sources (registries). The official registry is always
+present and default; sources added here are stored as `[[template_sources]]`
+tables in the user config file.
+
+```
+texforge template source <add|list|remove>
+```
+
+### texforge template source add
+
+Add a template source from a GitHub repository. The reachability check runs
+unless `--no-check` is given; the config file is written only after it passes.
+
+```
+texforge template source add [--ref <ref>] [--no-check] <name> <repo-or-url>
+```
+
+`<repo-or-url>` is `owner/name`, `https://github.com/owner/name` or
+`https://github.com/owner/name.git` (all three become `owner/name`).
+`<name>` must match `[a-z0-9][a-z0-9-]*`; `official` is reserved.
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--ref` | git ref to use | `main` |
+| `--no-check` | skip the reachability check (for offline use) | off |
+
+Example:
+
+```
+texforge template source add acme https://github.com/acme/texforge-templates.git --ref v2
+```
+
+### texforge template source list
+
+List the official source first (marked as default, never removable), then the
+configured ones: name, `owner/name` and ref.
+
+```
+texforge template source list [--json]
+```
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--json` | print one JSON array (`name`, `repo`, `ref`, `official`) and nothing else | off |
+
+Example:
+
+```
+texforge template source list --json
+```
+
+### texforge template source remove
+
+Remove a template source from the config file. Installed templates are left
+untouched.
+
+```
+texforge template source remove <name>
+```
+
+No flags. Removing `official` or an unknown name is an error.
+
+Example:
+
+```
+texforge template source remove acme
 ```
 
 Exit codes: see the table.

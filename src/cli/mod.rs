@@ -239,6 +239,39 @@ enum TemplateAction {
         /// Template name to refresh (omit to refresh all cached templates)
         name: Option<String>,
     },
+    /// Manage extra template sources (registries)
+    Source {
+        #[command(subcommand)]
+        action: SourceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SourceAction {
+    /// Add a template source from a GitHub repository
+    Add {
+        /// Local name for the source
+        name: String,
+        /// GitHub `owner/name`, `https://github.com/owner/name` or `.git` URL
+        repo_or_url: String,
+        /// Git ref to use (default: main)
+        #[arg(long)]
+        r#ref: Option<String>,
+        /// Skip the reachability check (for offline use)
+        #[arg(long)]
+        no_check: bool,
+    },
+    /// List configured template sources (official first)
+    List {
+        /// Print one JSON array instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a template source
+    Remove {
+        /// Name of the source to remove
+        name: String,
+    },
 }
 
 impl Cli {
@@ -284,13 +317,7 @@ impl Cli {
                 };
                 commands::pdf::execute(action)
             }
-            Commands::Template { action } => match action {
-                TemplateAction::List { local } => commands::template::list(!local),
-                TemplateAction::Add { source, force } => commands::template::add(&source, force),
-                TemplateAction::Remove { name } => commands::template::remove(&name),
-                TemplateAction::Validate { name } => commands::template::validate(&name),
-                TemplateAction::Refresh { name } => commands::template::refresh(name.as_deref()),
-            },
+            Commands::Template { action } => execute_template(action),
             Commands::Spell { action } => {
                 let action = match action {
                     SpellAction::Add {
@@ -343,6 +370,28 @@ impl Cli {
                 (None, Some(_)) => anyhow::bail!("Cannot set value without a key"),
             },
         }
+    }
+}
+
+/// Dispatch the `texforge template` subcommands (kept out of [`Cli::execute`]
+/// so it stays under the line-count lint).
+fn execute_template(action: TemplateAction) -> Result<()> {
+    match action {
+        TemplateAction::List { local } => commands::template::list(!local),
+        TemplateAction::Add { source, force } => commands::template::add(&source, force),
+        TemplateAction::Remove { name } => commands::template::remove(&name),
+        TemplateAction::Validate { name } => commands::template::validate(&name),
+        TemplateAction::Refresh { name } => commands::template::refresh(name.as_deref()),
+        TemplateAction::Source { action } => match action {
+            SourceAction::Add {
+                name,
+                repo_or_url,
+                r#ref,
+                no_check,
+            } => commands::template_source::add(&name, &repo_or_url, r#ref.as_deref(), no_check),
+            SourceAction::List { json } => commands::template_source::list(json),
+            SourceAction::Remove { name } => commands::template_source::remove(&name),
+        },
     }
 }
 

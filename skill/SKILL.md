@@ -355,6 +355,9 @@ texforge template add mi-template --force  # reemplaza una instalada
 texforge template remove apa-general
 texforge template validate apa-general
 texforge template refresh            # refresca la caché (por TTL)
+texforge template source add acme https://github.com/acme/texforge-templates.git  # agrega un registry extra (--ref, --no-check)
+texforge template source list        # oficial primero (default) + configurados (--json para JSON)
+texforge template source remove acme # quita el source (los templates instalados quedan)
 ```
 
 `template add` acepta un nombre del registry o una ruta a una carpeta local. Para conocer los templates disponibles, **siempre consultá la CLI** — no asumas una lista fija, el registry remoto se actualiza por separado. Cada entrada muestra nombre y descripción; usá ese nombre con `texforge new -t <nombre>` o `texforge template add <nombre>`.
