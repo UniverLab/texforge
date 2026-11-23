@@ -11,8 +11,10 @@ use crate::utils;
 mod http;
 mod local;
 mod safety;
+pub(crate) mod sources;
 
 pub(crate) use local::{install_from_dir, is_plain_name};
+pub(crate) use sources::TemplateSource;
 
 /// True when the installed template `name` came from a local folder.
 pub(crate) fn installed_from_local(name: &str) -> Result<bool> {
@@ -28,13 +30,6 @@ pub(crate) fn clear_local_marker(name: &str) -> Result<()> {
     }
     Ok(())
 }
-
-const REGISTRY_REPO: &str = "UniverLab/texforge-templates";
-
-/// The codeload endpoint serves repository archives as files; unlike
-/// `api.github.com` it has no 60-requests-per-hour cap for anonymous callers.
-const TARBALL_URL: &str =
-    "https://codeload.github.com/UniverLab/texforge-templates/tar.gz/refs/heads/main";
 
 /// Marks a template directory installed from a local folder. Such a template
 /// is never refreshed from the network.
@@ -194,8 +189,15 @@ fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
     Ok(ResolvedTemplate { files })
 }
 
-/// Download a template tarball from GitHub and cache it locally.
+/// Download a template tarball from the official registry and cache it
+/// locally. The codeload endpoint serves repository archives as files; unlike
+/// `api.github.com` it has no 60-requests-per-hour cap for anonymous callers.
 pub fn download(name: &str) -> Result<ResolvedTemplate> {
+    download_from(&TemplateSource::official(), name)
+}
+
+/// Download a template tarball from `source` and cache it locally.
+pub fn download_from(source: &TemplateSource, name: &str) -> Result<ResolvedTemplate> {
     #[cfg(test)]
     {
         let override_fn = TEST_DOWNLOAD_OVERRIDE.with(|o| o.borrow().as_ref().map(|f| f(name)));
@@ -215,16 +217,14 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
         }
     }
 
-    let url = TARBALL_URL;
+    let url = source.tarball_url();
 
-    let response = reqwest::blocking::Client::new()
-        .get(url)
-        .header("User-Agent", "texforge")
+    let response = sources::authed_get(&url, source)
         .send()
         .context("Failed to connect to template registry")?;
 
     if !response.status().is_success() {
-        bail_on_status(&response)?;
+        bail_for_status(&response, source)?;
     }
 
     let bytes = response.bytes()?;
@@ -282,6 +282,17 @@ fn read_header<'a>(response: &'a reqwest::blocking::Response, name: &str) -> Opt
     response.headers().get(name)?.to_str().ok()
 }
 
+/// Fail for a non-success response from `source`: a 404/403 from a
+/// non-official source probably means a private repo, anything else keeps the
+/// registry refusal/generic message. The credential never appears in errors.
+fn bail_for_status(response: &reqwest::blocking::Response, source: &TemplateSource) -> Result<()> {
+    let status = response.status();
+    if !source.is_official() && (status.as_u16() == 404 || status.as_u16() == 403) {
+        anyhow::bail!("{}", http::private_repo_message(&source.repo));
+    }
+    bail_on_status(response)
+}
+
 /// Fail for a non-success registry response, explaining a refusal (403/429,
 /// usually a rate limit) when the headers say so.
 fn bail_on_status(response: &reqwest::blocking::Response) -> Result<()> {
@@ -320,23 +331,23 @@ pub(crate) fn clear_download_override() {
     TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = None);
 }
 
-/// List template names available in the remote registry: the templates its
+/// List template names available in the official registry: the templates its
 /// `registry.toml` declares. Listing the repo's directories instead would
 /// offer anything that lives there (a `scripts/` folder) as a template.
 pub fn list_remote() -> Result<Vec<String>> {
-    let url = format!(
-        "https://raw.githubusercontent.com/{}/main/registry.toml",
-        REGISTRY_REPO
-    );
+    list_remote_from(&TemplateSource::official())
+}
 
-    let response = reqwest::blocking::Client::new()
-        .get(&url)
-        .header("User-Agent", "texforge")
+/// List template names available in `source`'s remote registry.
+pub fn list_remote_from(source: &TemplateSource) -> Result<Vec<String>> {
+    let url = source.registry_url();
+
+    let response = sources::authed_get(&url, source)
         .send()
         .context("Failed to connect to template registry")?;
 
     if !response.status().is_success() {
-        bail_on_status(&response)?;
+        bail_for_status(&response, source)?;
     }
 
     parse_registry_names(&response.text()?)
@@ -624,13 +635,18 @@ mod tests {
     }
 
     #[test]
-    fn download_url_is_the_codeload_archive() {
+    fn official_source_uses_the_pinned_codeload_archive() {
+        let url = TemplateSource::official().tarball_url();
         assert_eq!(
-            TARBALL_URL,
+            url,
             "https://codeload.github.com/UniverLab/texforge-templates/tar.gz/refs/heads/main"
         );
-        assert!(TARBALL_URL.starts_with("https://codeload.github.com/"));
-        assert!(!TARBALL_URL.contains("api.github.com"));
+        assert!(url.starts_with("https://codeload.github.com/"));
+        assert!(!url.contains("api.github.com"));
+        assert_eq!(
+            TemplateSource::official().registry_url(),
+            "https://raw.githubusercontent.com/UniverLab/texforge-templates/main/registry.toml"
+        );
     }
 
     #[test]

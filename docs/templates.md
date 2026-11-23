@@ -26,6 +26,33 @@ Installed templates are cached under `~/.texforge/templates/`. The
 built-in `general` template is listed once under `Installed:`, even when a
 downloaded copy of `general` is cached.
 
+## Template sources
+
+Templates come from the official
+[texforge-templates](https://github.com/UniverLab/texforge-templates)
+registry, which is always present and used by default. You can add your own
+template repositories in `~/.texforge/config.toml` (or
+`$XDG_CONFIG_HOME/texforge/config.toml`) as `[[template_sources]]` tables:
+
+```toml
+[[template_sources]]
+name = "acme"
+repo = "acme/texforge-templates"
+ref = "main"
+```
+
+`name` is local to your config (`[a-z0-9][a-z0-9-]*`, and `official` is
+reserved for the official registry), `repo` is a GitHub `owner/name`, and
+`ref` is optional — it defaults to `main`. A misconfigured entry (a reserved
+or badly shaped name, a repo that is not `owner/name`, an empty `ref`, a
+duplicate name) is an error naming the entry and the rule.
+
+Requests to your own sources carry your GitHub credential when one exists —
+`GITHUB_TOKEN` first, then the output of `gh auth token` — so private
+repositories work. Without a credential the request is anonymous, and a 404
+or 403 answers that the repo may be private, pointing at both ways to
+authenticate. The official registry never gets a credential.
+
 ## Using a template
 
 ```bash

@@ -3,6 +3,16 @@
 const HINT: &str =
     "Try again later, or install a template from a local folder with 'texforge template add <folder>'.";
 
+/// Message for a 404/403 from a user-configured (non-official) source: the
+/// repo may be private. Names both ways to authenticate; the token itself is
+/// never part of any error string.
+pub(super) fn private_repo_message(repo: &str) -> String {
+    format!(
+        "Template source '{repo}' returned HTTP 404 or 403; the repo may be private. \
+         Set the GITHUB_TOKEN environment variable or run 'gh auth login' to authenticate."
+    )
+}
+
 /// Build the user-facing message for a non-success registry response.
 ///
 /// Only 403 and 429 are treated as a refusal that is probably a rate limit;
