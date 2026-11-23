@@ -216,27 +216,30 @@ enum SpellAction {
 
 #[derive(Subcommand)]
 enum TemplateAction {
-    /// List available templates (installed + remote registry by default)
+    /// List available templates (installed + every remote source by default)
     List {
-        /// Only show locally installed templates (skip the remote registry)
+        /// Only show locally installed templates (skip the remote sources)
         #[arg(long)]
         local: bool,
+        /// Print one JSON array (`name`, `source`, `installed`) and nothing else
+        #[arg(long)]
+        json: bool,
     },
-    /// Add a template from the registry or from a local folder
+    /// Add a template from a registry source or from a local folder
     Add {
-        /// Registry template name, or a path to a template folder
+        /// Template name, `source/name`, or a path to a template folder
         source: String,
         /// Replace a template that is already installed
         #[arg(long)]
         force: bool,
     },
-    /// Remove a template
+    /// Remove an installed template (name or `source/name`)
     Remove { name: String },
     /// Validate template compatibility
     Validate { name: String },
     /// Refresh cached templates (bypass TTL; all templates or one by name)
     Refresh {
-        /// Template name to refresh (omit to refresh all cached templates)
+        /// Template name (or `source/name`) to refresh (omit to refresh all)
         name: Option<String>,
     },
     /// Manage extra template sources (registries)
@@ -377,7 +380,7 @@ impl Cli {
 /// so it stays under the line-count lint).
 fn execute_template(action: TemplateAction) -> Result<()> {
     match action {
-        TemplateAction::List { local } => commands::template::list(!local),
+        TemplateAction::List { local, json } => commands::template::list(!local, json),
         TemplateAction::Add { source, force } => commands::template::add(&source, force),
         TemplateAction::Remove { name } => commands::template::remove(&name),
         TemplateAction::Validate { name } => commands::template::validate(&name),

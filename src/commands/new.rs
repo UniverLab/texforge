@@ -10,6 +10,35 @@ use crate::placeholders::PlaceholderResolver;
 use crate::templates;
 use crate::values_file;
 
+/// Resolve `-t` against installed templates plus every configured remote
+/// source: a bare name offered by more than one source fails naming every
+/// `source/name` candidate, and an unreachable source warns once and
+/// contributes nothing. Returns the reference `resolve` understands.
+fn resolve_template_reference(template_name: &str) -> Result<String> {
+    let names: Vec<String> = templates::load_sources()?
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    let mut union = templates::union_candidates()?;
+    for failure in &union.failures {
+        eprintln!(
+            "{}",
+            templates::refs::warning_line(&failure.source, &failure.reason)
+        );
+    }
+    let candidates = &mut union.candidates;
+    // The built-in `general` template is always usable, even fully offline:
+    // `resolve` falls back to the embedded copy when nothing is cached.
+    let builtin = templates::refs::Candidate {
+        source: templates::OFFICIAL_NAME.to_string(),
+        name: "general".to_string(),
+    };
+    if !candidates.contains(&builtin) {
+        candidates.push(builtin);
+    }
+    Ok(templates::resolve_in(template_name, candidates, &names)?.reference())
+}
+
 /// Create a new project from a template.
 ///
 /// `values_path` is the optional `--values` file: its keys must all be
@@ -30,7 +59,8 @@ pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -
         name, template_name
     );
 
-    let resolved = templates::resolve(template_name)?;
+    let template_ref = resolve_template_reference(template_name)?;
+    let resolved = templates::resolve(&template_ref)?;
     let manifest = template_manifest(&resolved.files);
     let file_values = load_values(values_path, manifest.as_ref(), template_name)?;
 
@@ -513,8 +543,10 @@ mod tests {
                 Err(anyhow::anyhow!("network disabled in tests"))
             }),
         }
+        crate::templates::set_list_override(|_| Err(anyhow::anyhow!("network disabled in tests")));
         let result = execute("demo", Some("general"), values_path.as_deref());
         crate::templates::clear_download_override();
+        crate::templates::clear_list_override();
         std::env::set_current_dir(orig).unwrap();
 
         (result, root)

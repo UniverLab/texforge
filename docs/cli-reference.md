@@ -197,15 +197,20 @@ Exit codes: see the table.
 
 ### texforge template list
 
-List installed templates, plus the remote registry by default.
+List installed templates, plus every configured remote source by default.
+Each line shows its source in parentheses: `  - <name> (<source>)` (`official`
+for the official registry; the built-in template keeps `general (built-in)`).
+A source that cannot be fetched warns once as
+`Warning: source '<name>': <reason>` and never hides the other sources.
 
 ```
-texforge template list [--local]
+texforge template list [--local] [--json]
 ```
 
 | Flag | Value | Default |
 |---|---|---|
-| `--local` | none (switch): only locally installed templates, skip the remote registry | off |
+| `--local` | none (switch): only locally installed templates, skip the remote sources | off |
+| `--json` | none (switch): print one JSON array (`name`, `source`, `installed`) and nothing else | off |
 
 Example:
 
@@ -215,15 +220,29 @@ texforge template list --local
 
 Exit codes: see the table.
 
+#### `texforge template list --json` fields
+
+Top-level array, one object per template (installed, plus available without
+`--local`), sorted by `name`, then `source`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | template name within its source |
+| `source` | string | source name (`official`, or `built-in` for the embedded template) |
+| `installed` | boolean | true for installed templates, false for available ones |
+
 ### texforge template add
 
-Add a template from the registry or from a local folder.
+Add a template from a registry source or from a local folder.
 
 ```
 texforge template add [--force] <source>
 ```
 
-`<source>` is a registry template name or a path to a template folder.
+`<source>` is a template name, `source/name`, or a path to a template folder.
+A bare name offered by more than one source fails listing every `source/name`
+candidate — pick one explicitly. There is no carve-out for the official
+source: two sources offering the same name always clash.
 
 | Flag | Value | Default |
 |---|---|---|
@@ -245,7 +264,8 @@ Remove an installed template.
 texforge template remove <name>
 ```
 
-No flags. `<name>` is the installed template name.
+No flags. `<name>` is the installed template name, or `source/name` when
+several installed sources offer it.
 
 Example:
 
@@ -281,7 +301,8 @@ Refresh cached templates, bypassing the TTL — all of them, or one by name.
 texforge template refresh [name]
 ```
 
-No flags. Omit `name` to refresh every cached template.
+No flags. Omit `name` to refresh every cached template. `name` accepts the
+`source/name` form, like `add` and `remove`.
 
 Example:
 

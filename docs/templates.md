@@ -14,17 +14,43 @@ project always works — even offline.
 ## Commands
 
 ```bash
-texforge template list              # installed + available in the registry
+texforge template list              # installed + available from every source
 texforge template list --local      # only locally installed templates
-texforge template add <name>        # download a template from the registry
+texforge template list --json       # one JSON array: name, source, installed
+texforge template add <name>        # download a template (or source/name)
 texforge template add <folder>      # install a template from a local folder
 texforge template remove <name>     # remove an installed template
 texforge template validate <name>   # verify template compatibility
 ```
 
-Installed templates are cached under `~/.texforge/templates/`. The
+Every line of `template list` shows its source in parentheses —
+`  - <name> (<source>)` (`official` for the official registry; the built-in
+template keeps `general (built-in)`). Installed templates are cached under
+`~/.texforge/templates/`: the official source and older installs stay flat
+(`~/.texforge/templates/<name>`), while a template installed from a
+non-official source lives at `~/.texforge/templates/<source>/<name>`. The
 built-in `general` template is listed once under `Installed:`, even when a
 downloaded copy of `general` is cached.
+
+## Resolving template names
+
+A template reference is a bare `name` or `source/name` (one `/` splits it;
+the part before must be a valid source name). The rule is the same for
+`texforge new -t`, `template add`, `template remove` and `template refresh`:
+
+- With `source/name`, exactly that source is used (an error if it does not
+  offer the template).
+- With a bare `name` offered by exactly one source, that source is used —
+  even when it is not the official one.
+- With a bare `name` offered by more than one source, the command fails
+  without doing anything, lists every candidate as a `source/name` line, and
+  tells you to pick one. There is no carve-out for the official source: if
+  two sources offer the same name, it is a clash, whichever is installed.
+
+An unknown source part fails with a message listing the valid sources, as
+`texforge template source list` would. A source that cannot be fetched never
+hides the others: its failure is printed once as
+`Warning: source '<name>': <reason>`.
 
 ## Template sources
 

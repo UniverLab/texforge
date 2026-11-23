@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/install.ps1` verifies the minisign signature of `SHA256SUMS.txt` on 1.x releases (`SKIP_SIGNATURE=1` skips the check).
 - An outdated managed Tectonic is updated to the supported version on the next build or `doctor`, which also warns when the Tectonic in `PATH` is older than the supported one.
 - `texforge template list` prints the built-in `general` template once under `Installed:`, even when a downloaded copy of `general` is cached.
+- `texforge template list` shows each template's source as `  - <name> (<source>)` (plus `list --json`), and every command taking a template name accepts `source/name`, failing on clashes instead of picking silently.
 - Piping output to a closed pipe (e.g. `texforge skill | head`) now exits quietly with code 0.
 - `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
 - `texforge check` resolves `\ref` to a `label=` option on `mermaid`, `d2` and `graphviz` blocks, with or without a `caption`.
