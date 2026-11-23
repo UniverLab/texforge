@@ -206,6 +206,7 @@ texforge init
 | `texforge config <key> <value>` | Set value for key |
 | `texforge template list` | List installed + available in registry |
 | `texforge template list --local` | List only locally installed templates |
+| `texforge template list --json` | List as one JSON array (`name`, `source`, `installed`) per template |
 | `texforge template add <name>` | Download template from registry |
 | `texforge template add <folder>` | Install a template from a local folder (`--force` replaces an existing one) |
 | `texforge template remove <name>` | Remove installed template |
