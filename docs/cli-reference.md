@@ -25,7 +25,7 @@ table" because the codes are shared, not per-command.
 | Code | Meaning |
 |---|---|
 | `0` | Success. The command did what it says. For `update --check`, up to date. |
-| `1` | Lint finding or build failure. `check` found an error (or any finding with `--deny-warnings`); `fmt --check` found a file that needs formatting; `build` failed (missing entry, engine error); `update --check` found an available update; an update install-phase failure after a successful check. |
+| `1` | Lint finding or build failure. `check` found an error (or any finding with `--deny-warnings`); `fmt --check` found a file that needs formatting; `build` failed (missing entry, engine error, or an overfull box over `--max-overfull`); `update --check` found an available update; an update install-phase failure after a successful check. |
 | `2` | Usage or network. A clap usage error (unknown command, bad flag value, missing argument); or `update` / `update --check` could not complete the release check (network, DNS, TLS, HTTP ≥ 400, unparsable response — the cause is the single line on stderr). |
 
 When the reader of a command's output goes away while it is still printing —
