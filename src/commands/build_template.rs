@@ -22,15 +22,16 @@ const SKIPPED_DIRS: &[&str] = &[".git", "build", ".texforge"];
 
 /// Build the template folder in the current directory to a filled PDF.
 ///
-/// `values_path` fills the manifest's placeholders (TOML or YAML, same
-/// rules as `texforge new --values`); `out` overrides the PDF destination.
+/// `values_paths` holds every `--values` file in command-line order: they
+/// are read and merged key by key before validation, exactly as in
+/// `texforge new --values`; `out` overrides the PDF destination.
 pub fn execute(
-    values_path: Option<&Path>,
+    values_paths: &[PathBuf],
     out: Option<&Path>,
     verbose: bool,
     reproducible: Option<Option<u64>>,
 ) -> Result<()> {
-    let Some(values_path) = values_path else {
+    if values_paths.is_empty() {
         anyhow::bail!("--out requires --values")
     };
     let root = std::env::current_dir()?;
@@ -50,8 +51,8 @@ pub fn execute(
     }
     let manifest = TemplateManifest::from_file(&manifest_path)?;
 
-    let file_values = values_file::load(values_path)?;
-    new::validate_values_keys(Some(&manifest), &file_values, &manifest.id)?;
+    let (file_values, origins) = values_file::load_many(values_paths)?;
+    new::validate_values_keys(Some(&manifest), &file_values, &manifest.id, &origins)?;
     let cli_args: HashMap<String, String> = file_values
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -62,20 +63,27 @@ pub fn execute(
     if !missing.is_empty() {
         let list = missing
             .iter()
-            .map(|(key, description)| format!("  - {key}: {description}"))
+            .map(|(key, description)| {
+                format!(
+                    "  - {key}: {description} {}",
+                    new::origin_note(key, &origins)
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
-        anyhow::bail!(
-            "Required placeholders have no value (values file '{}'):\n{list}",
-            values_path.display()
-        );
+        let sources = values_paths
+            .iter()
+            .map(|path| format!("'{}'", path.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("Required placeholders have no value (values files {sources}):\n{list}");
     }
 
     // Resolve the PDF destination before staging or compiling: an `--out`
     // inside the folder must fail fast, never after a heavy Tectonic run.
     let pdf_dest = resolve_pdf_dest(&root, &root_canon, out)?;
 
-    let stage = stage_rendered_copy(&root_canon, values_path, &resolved)?;
+    let stage = stage_rendered_copy(&root_canon, values_paths, &resolved)?;
 
     let config = if root.join("project.toml").exists() {
         Project::load()?.config
@@ -189,36 +197,36 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 
 /// Copy the template folder into a temporary directory outside the source
 /// tree, substituting placeholders in `.tex` files and skipping
-/// `template.toml`, `.git/`, `build/`, `.texforge/`, the values file and
+/// `template.toml`, `.git/`, `build/`, `.texforge/`, every values file and
 /// every `*.pdf`. All other files are copied byte-for-byte.
 pub(crate) fn stage_rendered_copy(
     root_canon: &Path,
-    values_path: &Path,
+    values_paths: &[PathBuf],
     values: &HashMap<String, String>,
 ) -> Result<tempfile::TempDir> {
     let stage = tempfile::tempdir()?;
-    let values_abs = if values_path.is_absolute() {
-        values_path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(values_path)
-    };
-    // The values file exists (it was just loaded), so resolve symlinks: a
-    // purely lexical prefix check misses an inside-folder values file when
-    // the folder itself sits under a symlinked prefix.
-    let values_abs = values_abs
-        .canonicalize()
-        .unwrap_or_else(|_| lexical_normalize(&values_abs));
-    let values_rel = values_abs
-        .strip_prefix(root_canon)
-        .ok()
-        .map(Path::to_path_buf);
-    stage_dir(
-        root_canon,
-        root_canon,
-        stage.path(),
-        values_rel.as_deref(),
-        values,
-    )?;
+    let mut values_rels = Vec::new();
+    for values_path in values_paths {
+        let values_abs = if values_path.is_absolute() {
+            values_path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(values_path)
+        };
+        // The values files exist (they were just loaded), so resolve
+        // symlinks: a purely lexical prefix check misses an inside-folder
+        // values file when the folder itself sits under a symlinked prefix.
+        let values_abs = values_abs
+            .canonicalize()
+            .unwrap_or_else(|_| lexical_normalize(&values_abs));
+        if let Some(values_rel) = values_abs
+            .strip_prefix(root_canon)
+            .ok()
+            .map(Path::to_path_buf)
+        {
+            values_rels.push(values_rel);
+        }
+    }
+    stage_dir(root_canon, root_canon, stage.path(), &values_rels, values)?;
     Ok(stage)
 }
 
@@ -228,7 +236,7 @@ fn stage_dir(
     root_canon: &Path,
     source: &Path,
     dest: &Path,
-    values_rel: Option<&Path>,
+    values_rels: &[PathBuf],
     values: &HashMap<String, String>,
 ) -> Result<()> {
     let entries = std::fs::read_dir(source)
@@ -242,13 +250,13 @@ fn stage_dir(
                 path.display()
             )
         })?;
-        if is_skipped(relative, values_rel, &entry.file_type()?) {
+        if is_skipped(relative, values_rels, &entry.file_type()?) {
             continue;
         }
         let target = dest.join(path.file_name().unwrap());
         if entry.file_type()?.is_dir() {
             std::fs::create_dir_all(&target)?;
-            stage_dir(root_canon, &path, &target, values_rel, values)?;
+            stage_dir(root_canon, &path, &target, values_rels, values)?;
         } else {
             if path.extension().and_then(|e| e.to_str()) == Some("tex") {
                 let text = std::fs::read(&path)?;
@@ -263,10 +271,10 @@ fn stage_dir(
 }
 
 /// True for every path the staging copy leaves behind: the top-level
-/// metadata and cache directories, `template.toml`, the values file and
+/// metadata and cache directories, `template.toml`, the values files and
 /// every `*.pdf`. `file_type` is already known so symlinks (never regular
 /// files) are skipped too.
-fn is_skipped(relative: &Path, values_rel: Option<&Path>, file_type: &std::fs::FileType) -> bool {
+fn is_skipped(relative: &Path, values_rels: &[PathBuf], file_type: &std::fs::FileType) -> bool {
     if !file_type.is_file() && !file_type.is_dir() {
         return true;
     }
@@ -278,10 +286,8 @@ fn is_skipped(relative: &Path, values_rel: Option<&Path>, file_type: &std::fs::F
         if relative == Path::new("template.toml") {
             return true;
         }
-        if let Some(values_rel) = values_rel {
-            if file_type.is_file() && relative == values_rel {
-                return true;
-            }
+        if file_type.is_file() && values_rels.iter().any(|rel| relative == rel) {
+            return true;
         }
     }
     file_type.is_file() && relative.extension().and_then(|e| e.to_str()) == Some("pdf")
@@ -323,9 +329,10 @@ mod tests {
     fn staging_substitutes_tex_and_skips_metadata() {
         let dir = staging_fixture();
         let root_canon = dir.path().canonicalize().unwrap();
+        let values_file = root_canon.join("values.toml");
         let stage = stage_rendered_copy(
             &root_canon,
-            &root_canon.join("values.toml"),
+            std::slice::from_ref(&values_file),
             &staging_values(),
         )
         .unwrap();
@@ -363,7 +370,12 @@ mod tests {
         let dir = staging_fixture();
         let root_canon = dir.path().canonicalize().unwrap();
         let values_abs = root_canon.join("values.toml");
-        let stage = stage_rendered_copy(&root_canon, &values_abs, &staging_values()).unwrap();
+        let stage = stage_rendered_copy(
+            &root_canon,
+            std::slice::from_ref(&values_abs),
+            &staging_values(),
+        )
+        .unwrap();
         assert!(!stage.path().join("values.toml").exists());
         assert!(stage.path().join("main.tex").exists());
     }
@@ -373,9 +385,10 @@ mod tests {
         let dir = staging_fixture();
         std::fs::write(dir.path().join("assets/old.pdf"), b"%PDF-old").unwrap();
         let root_canon = dir.path().canonicalize().unwrap();
+        let values_file = root_canon.join("values.toml");
         let stage = stage_rendered_copy(
             &root_canon,
-            &root_canon.join("values.toml"),
+            std::slice::from_ref(&values_file),
             &staging_values(),
         )
         .unwrap();
@@ -509,6 +522,11 @@ entry = "main.tex"
         result
     }
 
+    /// Run `execute` with a single `--values` file, mirroring the one-file CLI.
+    fn execute_one(values_file: &str, out: Option<&Path>) -> Result<()> {
+        execute(&[PathBuf::from(values_file)], out, false, None)
+    }
+
     fn tectonic_available() -> bool {
         crate::compiler::locate_tectonic().is_some()
     }
@@ -550,10 +568,7 @@ entry = "main.tex"
         };
         let (_dir, folder) = both_fixture();
         let expected = folder.parent().unwrap().join("mutual-nda.pdf");
-        run_in(&folder, || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap();
+        run_in(&folder, || execute_one("values.toml", None)).unwrap();
         assert!(expected.exists(), "PDF must land in the parent directory");
         assert!(
             !folder.join("mutual-nda.pdf").exists(),
@@ -595,10 +610,7 @@ entry = "main.tex"
         };
         let (_dir, folder) = template_only_fixture();
         let expected = folder.parent().unwrap().join("services-agreement.pdf");
-        run_in(&folder, || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap();
+        run_in(&folder, || execute_one("values.toml", None)).unwrap();
         assert!(expected.exists());
         let text = crate::pdftext::extract_text(&expected).unwrap();
         assert!(text.contains("Acme"), "{text}");
@@ -617,11 +629,9 @@ entry = "main.tex"
     fn missing_required_names_keys_and_values_file() {
         let (_dir, folder) = both_fixture();
         std::fs::write(folder.join("values.toml"), "version = \"2.0\"\n").unwrap();
-        let err = run_in(&folder, || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap_err()
-        .to_string();
+        let err = run_in(&folder, || execute_one("values.toml", None))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("client"), "{err}");
         assert!(err.contains("values.toml"), "{err}");
     }
@@ -630,12 +640,84 @@ entry = "main.tex"
     fn unknown_keys_fail_as_new_does() {
         let (_dir, folder) = both_fixture();
         std::fs::write(folder.join("values.toml"), "client = \"Acme\"\nbogus = 1\n").unwrap();
-        let err = run_in(&folder, || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap_err()
-        .to_string();
+        let err = run_in(&folder, || execute_one("values.toml", None))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("bogus"), "{err}");
+    }
+
+    #[test]
+    fn two_values_files_merge_with_the_later_file_winning_in_staged_copy() {
+        let (_dir, folder) = template_only_fixture();
+        std::fs::write(
+            folder.join("lab.toml"),
+            "client = \"Lab\"\nversion = \"9\"\n",
+        )
+        .unwrap();
+        std::fs::write(folder.join("client.toml"), "client = \"Acme\"\n").unwrap();
+        let root_canon = folder.canonicalize().unwrap();
+        let lab = root_canon.join("lab.toml");
+        let client = root_canon.join("client.toml");
+        let (file_values, _) =
+            crate::values_file::load_many(&[lab.clone(), client.clone()]).unwrap();
+        let cli_args: HashMap<String, String> = file_values
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let files = HashMap::from([(
+            "template.toml".to_string(),
+            std::fs::read(folder.join("template.toml")).unwrap(),
+        )]);
+        let resolved = new::resolve_placeholder_values(&files, cli_args, &folder);
+        let stage = stage_rendered_copy(&root_canon, &[lab, client], &resolved).unwrap();
+        let staged = stage.path();
+        assert!(
+            std::fs::read_to_string(staged.join("main.tex"))
+                .unwrap()
+                .contains("Client: Acme v9."),
+            "the second file wins on overlap and the first file's own key survives"
+        );
+        assert!(
+            !staged.join("lab.toml").exists(),
+            "every values file stays out of the staging copy"
+        );
+        assert!(
+            !staged.join("client.toml").exists(),
+            "every values file stays out of the staging copy"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_the_second_file_names_that_file() {
+        let (_dir, folder) = both_fixture();
+        std::fs::write(folder.join("lab.toml"), "client = \"Acme\"\n").unwrap();
+        std::fs::write(folder.join("client.toml"), "client = \"Acme\"\nbogus = 1\n").unwrap();
+        let lab = PathBuf::from("lab.toml");
+        let client = PathBuf::from("client.toml");
+        let err = run_in(&folder, || execute(&[lab, client], None, false, None))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bogus"), "{err}");
+        assert!(
+            err.contains("client.toml"),
+            "the error must name the file that set the key: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_required_with_two_files_names_both_sources() {
+        let (_dir, folder) = both_fixture();
+        std::fs::write(folder.join("lab.toml"), "version = \"2.0\"\n").unwrap();
+        std::fs::write(folder.join("client.toml"), "version = \"3.0\"\n").unwrap();
+        let lab = PathBuf::from("lab.toml");
+        let client = PathBuf::from("client.toml");
+        let err = run_in(&folder, || execute(&[lab, client], None, false, None))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("client"), "{err}");
+        assert!(err.contains("lab.toml"), "{err}");
+        assert!(err.contains("client.toml"), "{err}");
+        assert!(err.contains("not set by any file"), "{err}");
     }
 
     #[test]
@@ -643,11 +725,9 @@ entry = "main.tex"
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("project.toml"), PROJECT_TOML).unwrap();
         std::fs::write(dir.path().join("values.toml"), "client = \"Acme\"\n").unwrap();
-        let err = run_in(dir.path(), || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap_err()
-        .to_string();
+        let err = run_in(dir.path(), || execute_one("values.toml", None))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("template.toml"), "{err}");
     }
 
@@ -655,11 +735,9 @@ entry = "main.tex"
     fn values_on_folder_with_neither_file_fails() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("values.toml"), "client = \"Acme\"\n").unwrap();
-        let err = run_in(dir.path(), || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap_err()
-        .to_string();
+        let err = run_in(dir.path(), || execute_one("values.toml", None))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("template.toml"), "{err}");
     }
 
@@ -667,16 +745,9 @@ entry = "main.tex"
     fn out_inside_the_folder_fails_without_compiling() {
         let (_dir, folder) = template_only_fixture();
         for out in ["out.pdf", "sub/../out.pdf"] {
-            let err = run_in(&folder, || {
-                execute(
-                    Some(Path::new("values.toml")),
-                    Some(Path::new(out)),
-                    false,
-                    None,
-                )
-            })
-            .unwrap_err()
-            .to_string();
+            let err = run_in(&folder, || execute_one("values.toml", Some(Path::new(out))))
+                .unwrap_err()
+                .to_string();
             assert!(err.contains("--out"), "{err}");
         }
         assert!(
@@ -692,15 +763,7 @@ entry = "main.tex"
         };
         let (_dir, folder) = template_only_fixture();
         let dest = folder.parent().unwrap().join("custom-name.pdf");
-        run_in(&folder, || {
-            execute(
-                Some(Path::new("values.toml")),
-                Some(dest.as_path()),
-                false,
-                None,
-            )
-        })
-        .unwrap();
+        run_in(&folder, || execute_one("values.toml", Some(dest.as_path()))).unwrap();
         assert!(dest.exists());
         let text = crate::pdftext::extract_text(&dest).unwrap();
         assert!(text.contains("Acme"), "{text}");
@@ -713,10 +776,7 @@ entry = "main.tex"
         };
         let (_dir, folder) = both_fixture();
         let before = snapshot(&folder);
-        run_in(&folder, || {
-            execute(Some(Path::new("values.toml")), None, false, None)
-        })
-        .unwrap();
+        run_in(&folder, || execute_one("values.toml", None)).unwrap();
         assert_eq!(
             snapshot(&folder),
             before,

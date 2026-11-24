@@ -40,9 +40,11 @@ Placeholders are rendered into a temporary copy outside the folder, then the
 normal pipeline runs on that copy: the folder itself is never modified and
 nothing is ever written inside it. Only `.tex` files are substituted, with
 the same rules as `texforge new`; every other file is copied byte-for-byte,
-except `template.toml`, `.git/`, `build/`, `.texforge/`, the values file and
+except `template.toml`, `.git/`, `build/`, `.texforge/`, every values file and
 `*.pdf`, which are skipped. A missing required placeholder fails the run
-naming each one and the values file, before anything compiles. When the
+naming each one and the values files, before anything compiles. `--values`
+is repeatable: files merge in command-line order with later files winning
+key by key. When the
 folder also has a `project.toml`, its title, entry, bibliography, highlight,
 diagrams and reproducible settings apply; with only a `template.toml`, the
 entry is `main.tex` and the title is the manifest's display name. The PDF

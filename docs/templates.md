@@ -151,11 +151,19 @@ retype your name and institution for every document.
 
 `texforge new` accepts `--values <FILE>`, a flat table of placeholder name to
 value, so documents such as contracts, orders and audit reports are produced
-from data:
+from data. Repeat the flag to layer files — an organisation's own data live
+in one private file and each document adds only its specifics:
 
 ```bash
 texforge new contract-2026 -t contract --values client.toml
+texforge new contract-2026 -t contract --values lab.toml --values client.toml
 ```
+
+Layered files merge in command-line order: a later file's value replaces an
+earlier one for the same key, while keys only an earlier file sets survive.
+Each file may be TOML or YAML independently by its extension. Validation
+runs once on the merged map, and an error concerning a key names the file
+that last set it.
 
 The format follows the extension: `.toml` parses as TOML, `.yaml` and `.yml`
 as YAML. Any other extension is an error. Every value must be a string, an
@@ -164,7 +172,7 @@ datetime is rejected with the offending key.
 
 Values resolve in this order, the first one that exists winning:
 
-1. the `--values` file
+1. the `--values` files, in command-line order (later files win key by key)
 2. the project config (`./.texforge/config.toml`)
 3. your user config (`~/.texforge/config.toml`)
 4. the template default
@@ -181,8 +189,9 @@ missing placeholder and its description, and the directory the run created is
 removed. Optional placeholders without a value are left as they are.
 
 With `--values`, the values used are also written to `values.toml` in the new
-project: a header comment, then one `key = "value"` line per key of that file,
-sorted by key. Only the file's own keys are written — never values that came
+project: a header comment, then one `key = "value"` line per key of the merged
+map, sorted by key. With several files the header lists the source files in
+order. Only the files' own keys are written — never values that came
 from your configuration. Keep the file with the document and pass it back to
 `texforge new --values` to regenerate from the same data.
 
@@ -197,7 +206,8 @@ texforge build --values client.toml --out ../contract-2026.pdf
 ```
 
 The placeholders render into a temporary copy and the PDF is written without
-touching the folder; see [Building](building.md#building-a-template-folder).
+touching the folder; `--values` is repeatable here too, with later files
+winning key by key; see [Building](building.md#building-a-template-folder).
 
 ## Writing your own template
 

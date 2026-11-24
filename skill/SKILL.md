@@ -69,7 +69,7 @@ texforge new mi-tesis -t apa-general  # template específico
 texforge new mi-tesis --values datos.toml
 ```
 
-`--values` rellena los placeholders del template desde un archivo `.toml`, `.yaml` o `.yml`; el archivo se copia al proyecto como `values.toml` y los defaults del template se aplican cuando falta una clave. Un TOML con datetime se rechaza con el motivo.
+`--values` rellena los placeholders del template desde un archivo `.toml`, `.yaml` o `.yml`; el archivo se copia al proyecto como `values.toml` y los defaults del template se aplican cuando falta una clave. Un TOML con datetime se rechaza con el motivo. Repetible (`--values lab.toml --values cliente.toml`): los archivos se fusionan en orden y el último gana clave por clave.
 
 Estructura generada:
 ```
@@ -121,7 +121,7 @@ Compila `main.tex` → PDF en `build/`. Los errores se muestran con archivo, lí
 
 Antes de compilar, intercepta entornos de diagramas y bloques `code`, los renderiza, y trabaja sobre copias en `build/` — los `.tex` originales nunca se modifican.
 
-En una carpeta con `template.toml`, `build --values cliente.toml [--out ../nombre.pdf]` rellena los placeholders en una copia temporal y escribe el PDF fuera de la carpeta (por defecto `<carpeta>.pdf` en el directorio padre); sin `--values` compila como proyecto normal.
+En una carpeta con `template.toml`, `build --values cliente.toml [--out ../nombre.pdf]` rellena los placeholders en una copia temporal y escribe el PDF fuera de la carpeta (por defecto `<carpeta>.pdf` en el directorio padre); sin `--values` compila como proyecto normal. `--values` es repetible también en `build`, con el último archivo ganando clave por clave.
 
 #### `texforge build --watch`
 

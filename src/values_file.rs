@@ -3,8 +3,8 @@
 //! The file is a flat table of placeholder name to scalar. TOML (`.toml`) and
 //! YAML (`.yaml`, `.yml`) are accepted; the format follows the extension.
 
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
@@ -33,11 +33,48 @@ pub fn load(path: &Path) -> Result<BTreeMap<String, String>> {
     }
 }
 
+/// Load several values files in command-line order and merge them key by
+/// key: a later file's value replaces an earlier one, absent keys are kept.
+/// Each file may be TOML or YAML independently by its own extension.
+///
+/// Returns the merged map plus, for every key, the file that last set it
+/// (used to attribute validation errors to the right source file).
+pub fn load_many(
+    paths: &[PathBuf],
+) -> Result<(BTreeMap<String, String>, HashMap<String, PathBuf>)> {
+    let mut merged = BTreeMap::new();
+    let mut origins: HashMap<String, PathBuf> = HashMap::new();
+    for path in paths {
+        let values = load(path)?;
+        for (key, value) in values {
+            merged.insert(key.clone(), value);
+            origins.insert(key, path.to_path_buf());
+        }
+    }
+    Ok((merged, origins))
+}
+
 /// Render a `values.toml` for a generated project: the header comment, then
 /// one `key = "value"` line per key, sorted and escaped as a TOML basic string.
 pub fn render(values: &BTreeMap<String, String>) -> String {
+    render_with_sources(values, &[])
+}
+
+/// Render the merged `--values` map: like [`render`], but with a second
+/// header line listing the source files in the order they were given. With
+/// zero or one source the output is exactly [`render`]'s, so a single
+/// `--values` file echoes byte-identically to before.
+pub fn render_with_sources(values: &BTreeMap<String, String>, sources: &[PathBuf]) -> String {
     let mut out = String::from(VALUES_FILE_HEADER);
     out.push('\n');
+    if sources.len() > 1 {
+        let listed = sources
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("# Sources: {listed} in order\n"));
+    }
     for (key, value) in values {
         out.push_str(&format!("{} = {}\n", toml_key(key), toml_string(value)));
     }
@@ -335,6 +372,86 @@ mod tests {
         assert!(
             written.contains("author = \"A \\\\textbf{B} \\\\& \\\"C\\\"\""),
             "values must be basic strings:\n{written}"
+        );
+    }
+
+    #[test]
+    fn later_files_win_key_by_key_and_origins_name_the_last_setter() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = write(
+            dir.path(),
+            "lab.toml",
+            "title = \"Lab\"\nauthor = \"Lab Author\"\n",
+        );
+        let second = write(dir.path(), "client.toml", "title = \"Contract\"\n");
+        let (merged, origins) = load_many(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(merged["title"], "Contract");
+        assert_eq!(merged["author"], "Lab Author");
+        assert_eq!(origins["title"], second);
+        assert_eq!(origins["author"], first);
+    }
+
+    #[test]
+    fn toml_and_yaml_files_mix_with_later_files_winning() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = write(
+            dir.path(),
+            "lab.toml",
+            "title = \"Lab\"\nlanguage = \"spanish\"\n",
+        );
+        let second = write(dir.path(), "client.yaml", "title: Contract\n");
+        let (merged, origins) = load_many(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(merged["title"], "Contract");
+        assert_eq!(merged["language"], "spanish");
+        assert_eq!(origins["title"], second);
+        assert_eq!(origins["language"], first);
+    }
+
+    #[test]
+    fn a_key_set_only_by_the_first_file_survives_the_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = write(dir.path(), "lab.toml", "author = \"Lab Author\"\n");
+        let second = write(dir.path(), "client.toml", "title = \"Contract\"\n");
+        let (merged, _) = load_many(&[first, second]).unwrap();
+        assert_eq!(merged["author"], "Lab Author");
+        assert_eq!(merged["title"], "Contract");
+    }
+
+    #[test]
+    fn missing_second_file_fails_naming_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = write(dir.path(), "lab.toml", "title = \"Lab\"\n");
+        let missing = dir.path().join("client.toml");
+        let error = load_many(&[first, missing.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn rendered_sources_list_every_file_in_order() {
+        let mut values = BTreeMap::new();
+        values.insert("b".to_string(), "2".to_string());
+        values.insert("a".to_string(), "1".to_string());
+        let text = render_with_sources(
+            &values,
+            &[PathBuf::from("lab.toml"), PathBuf::from("client.toml")],
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], VALUES_FILE_HEADER);
+        assert_eq!(lines[1], "# Sources: lab.toml, client.toml in order");
+        assert_eq!(lines[2], "a = \"1\"");
+        assert_eq!(lines[3], "b = \"2\"");
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn rendered_single_source_matches_the_old_output() {
+        let mut values = BTreeMap::new();
+        values.insert("title".to_string(), "Contract".to_string());
+        assert_eq!(
+            render_with_sources(&values, &[PathBuf::from("client.toml")]),
+            render(&values)
         );
     }
 

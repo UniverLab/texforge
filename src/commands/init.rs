@@ -74,7 +74,7 @@ fn create_new() -> Result<()> {
     let template = select_template()?;
 
     println!();
-    new_cmd::execute(&name, Some(&template), None)?;
+    new_cmd::execute(&name, Some(&template), &[])?;
     Ok(())
 }
 

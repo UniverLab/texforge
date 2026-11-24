@@ -52,13 +52,13 @@ and the `--json` commands (`stats`, `outline`) never draw the banner.
 Create a new project from a template.
 
 ```
-texforge new <name> [-t <template>] [--values <file>]
+texforge new <name> [-t <template>] [--values <file>...]
 ```
 
 | Flag | Value | Default |
 |---|---|---|
 | `--template`, `-t` | template name or path to a local template folder | `general` |
-| `--values` | path to a `.toml`, `.yaml` or `.yml` file | none |
+| `--values` | repeatable path to a `.toml`, `.yaml` or `.yml` file; later files win key by key | none |
 
 A `-t` value is a path when it starts with `./`, `../`, `/`, `~/` or is
 `.`/`..`, or when a directory of that exact name exists in the current
@@ -68,12 +68,16 @@ installed — and the recorded template is the folder manifest's `id`.
 
 The `--values` file fills template placeholders; its keys are echoed into
 the project as `values.toml`. A `title` key also sets `[document] title`
-in the generated `project.toml`, so the PDF is named after it.
+in the generated `project.toml`, so the PDF is named after it. Repeat the
+flag to layer files (`--values lab.toml --values client.toml`): files merge
+in order, a later file's value replacing an earlier one, and the echoed
+`values.toml` lists the source files in its header.
 
 Example:
 
 ```
 texforge new mi-tesis -t apa-general --values cliente.yaml
+texforge new nda-2026 -t nda --values lab.toml --values client.toml
 ```
 
 Exit codes: see the table.
@@ -103,7 +107,7 @@ Compile the project to PDF.
 ```
 texforge build [--watch] [--delay <s>] [--verbose] [--reproducible[=<epoch>]]
   [--preview] [--preview-page <n>] [--preview-out <path>]
-texforge build --values <file> [--out <path>]
+texforge build --values <file>... [--out <path>]
 ```
 
 | Flag | Value | Default |
@@ -115,18 +119,20 @@ texforge build --values <file> [--out <path>]
 | `--preview` | none (switch): write a PNG of one page after each rebuild (requires `--watch`) | off |
 | `--preview-page` | page to rasterize, 1-based (requires `--preview`) | `1` |
 | `--preview-out` | fixed path for the preview PNG (requires `--preview`) | `preview.png` |
-| `--values` | path to a `.toml`, `.yaml` or `.yml` file filling the folder's template placeholders (requires a `template.toml`; conflicts with `--watch`) | none |
+| `--values` | repeatable path to a `.toml`, `.yaml` or `.yml` file filling the folder's template placeholders (requires a `template.toml`; conflicts with `--watch`); later files win key by key | none |
 | `--out` | PDF output path (requires `--values`; must not point inside the template folder — relative paths resolve against the current directory, so a bare file name is rejected, write `../name.pdf`) | `<folder-name>.pdf` in the parent directory |
 
 A folder with a `template.toml` builds to a filled PDF with `--values`;
 without `--values` the build is a plain project build, and a folder with
-only a `template.toml` fails telling you `--values` is needed.
+only a `template.toml` fails telling you `--values` is needed. The flag is
+repeatable: files merge in order and a later file's value wins key by key.
 
 Example:
 
 ```
 texforge build --watch --delay 5 --preview
 texforge build --values client.toml --out ../nda-acme.pdf
+texforge build --values lab.toml --values client.toml --out ../nda-acme.pdf
 ```
 
 Exit codes: see the table.

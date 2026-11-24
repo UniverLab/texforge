@@ -29,15 +29,17 @@ enum Commands {
         #[arg(short, long)]
         template: Option<String>,
         /// Fill template placeholders from a .toml, .yaml or .yml file
+        /// (repeatable; later files win key by key)
         #[arg(long, value_name = "FILE")]
-        values: Option<PathBuf>,
+        values: Vec<PathBuf>,
     },
     /// Compile project to PDF
     Build {
         /// Fill template placeholders from a .toml, .yaml or .yml file
         /// (only on a folder with a template.toml; staged to a temp copy)
+        /// (repeatable; later files win key by key)
         #[arg(long, value_name = "FILE", conflicts_with = "watch")]
-        values: Option<PathBuf>,
+        values: Vec<PathBuf>,
         /// PDF output path (requires --values; default: <folder-name>.pdf
         /// in the parent directory)
         #[arg(long, value_name = "PATH", requires = "values")]
@@ -294,7 +296,7 @@ impl Cli {
                 name,
                 template,
                 values,
-            } => commands::new::execute(&name, template.as_deref(), values.as_deref()),
+            } => commands::new::execute(&name, template.as_deref(), values.as_slice()),
             Commands::Build {
                 values,
                 out,
@@ -306,9 +308,9 @@ impl Cli {
                 preview_page,
                 preview_out,
             } => {
-                if values.is_some() {
+                if !values.is_empty() {
                     return commands::build_template::execute(
-                        values.as_deref(),
+                        values.as_slice(),
                         out.as_deref(),
                         verbose,
                         reproducible,
@@ -527,9 +529,62 @@ mod tests {
             } => {
                 assert_eq!(name, "demo");
                 assert_eq!(template.as_deref(), Some("contract"));
-                assert_eq!(values.as_deref(), Some(std::path::Path::new("client.toml")));
+                assert_eq!(values, vec![std::path::PathBuf::from("client.toml")]);
             }
             _ => panic!("`texforge new` must parse into Commands::New"),
+        }
+    }
+
+    /// `texforge new --values` is repeatable: later files win key by key.
+    #[test]
+    fn new_accepts_repeated_values_files_in_order() {
+        let cli = Cli::try_parse_from([
+            "texforge",
+            "new",
+            "demo",
+            "--values",
+            "lab.toml",
+            "--values",
+            "client.toml",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::New { values, .. } => {
+                assert_eq!(
+                    values,
+                    vec![
+                        std::path::PathBuf::from("lab.toml"),
+                        std::path::PathBuf::from("client.toml"),
+                    ]
+                );
+            }
+            _ => panic!("`texforge new` must parse into Commands::New"),
+        }
+    }
+
+    /// `texforge build --values` is repeatable too.
+    #[test]
+    fn build_accepts_repeated_values_files_in_order() {
+        let cli = Cli::try_parse_from([
+            "texforge",
+            "build",
+            "--values",
+            "lab.toml",
+            "--values",
+            "client.toml",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Build { values, .. } => {
+                assert_eq!(
+                    values,
+                    vec![
+                        std::path::PathBuf::from("lab.toml"),
+                        std::path::PathBuf::from("client.toml"),
+                    ]
+                );
+            }
+            _ => panic!("`texforge build` must parse into Commands::Build"),
         }
     }
 

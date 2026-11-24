@@ -1,7 +1,7 @@
 //! `texforge new` command implementation.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -43,10 +43,12 @@ fn resolve_template_reference(template_name: &str) -> Result<String> {
 
 /// Create a new project from a template.
 ///
-/// `values_path` is the optional `--values` file: its keys must all be
-/// placeholders the template declares, they win over every other source, and
-/// it is echoed into the project as `values.toml`.
-pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -> Result<()> {
+/// `values` holds every `--values` file in command-line order: they are read
+/// and merged before anything else, so a missing file fails before the
+/// project directory is created. Merged keys must all be placeholders the
+/// template declares, they win over every other source, and they are echoed
+/// into the project as `values.toml`.
+pub fn execute(name: &str, template: Option<&str>, values: &[PathBuf]) -> Result<()> {
     validate_project_name(name)?;
 
     let template_name = template.unwrap_or("general");
@@ -64,12 +66,12 @@ pub fn execute(name: &str, template: Option<&str>, values_path: Option<&Path>) -
     if new_local::is_local_arg(template_name) {
         let dir = new_local::resolve_dir(template_name);
         let (files, local_name) = new_local::load_local(&dir)?;
-        return create_from_files(name, &local_name, &files, values_path);
+        return create_from_files(name, &local_name, &files, values);
     }
 
     let template_ref = resolve_template_reference(template_name)?;
     let resolved = templates::resolve(&template_ref)?;
-    create_from_files(name, template_name, &resolved.files, values_path)
+    create_from_files(name, template_name, &resolved.files, values)
 }
 
 /// Generate the project directory from already-loaded template `files`,
@@ -80,11 +82,11 @@ fn create_from_files(
     name: &str,
     template_name: &str,
     files: &HashMap<String, Vec<u8>>,
-    values_path: Option<&Path>,
+    values_paths: &[PathBuf],
 ) -> Result<()> {
     let project_dir = Path::new(name);
     let manifest = template_manifest(files);
-    let file_values = load_values(values_path, manifest.as_ref(), template_name)?;
+    let (file_values, origins) = load_values(values_paths, manifest.as_ref(), template_name)?;
 
     // Create the project directory before resolving placeholders: the author
     // fallback runs `git config --get user.name` in the target directory and
@@ -93,8 +95,11 @@ fn create_from_files(
 
     // Resolve any placeholders the template declares (defaults, project/user
     // config). Missing values are left as-is rather than failing generation.
-    // The project name doubles as the document title unless the values file
-    // overrides it.
+    // The project name doubles as the document title unless the values files
+    // override it. The merged values feed the resolver as CLI args — the top
+    // of the precedence chain — so the files win over template defaults and
+    // user config defaults, and nothing overrides the files (no `--set` flag
+    // exists).
     let mut cli_args: HashMap<String, String> = file_values
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -111,7 +116,9 @@ fn create_from_files(
         let _ = std::fs::remove_dir_all(project_dir);
         let list = missing
             .iter()
-            .map(|(key, description)| format!("  - {key}: {description}"))
+            .map(|(key, description)| {
+                format!("  - {key}: {description} {}", origin_note(key, &origins))
+            })
             .collect::<Vec<_>>()
             .join("\n");
         anyhow::bail!("Required placeholders have no value:\n{list}");
@@ -119,12 +126,16 @@ fn create_from_files(
 
     write_project_files(files, &values, project_dir)?;
 
-    if values_path.is_some() {
-        std::fs::write(
-            project_dir.join("values.toml"),
-            values_file::render(&file_values),
-        )
-        .context("Failed to write values.toml")?;
+    if !values_paths.is_empty() {
+        // One file echoes exactly as before; several files add a header line
+        // listing the sources in order.
+        let values_toml = if values_paths.len() == 1 {
+            values_file::render(&file_values)
+        } else {
+            values_file::render_with_sources(&file_values, values_paths)
+        };
+        std::fs::write(project_dir.join("values.toml"), values_toml)
+            .context("Failed to write values.toml")?;
     }
 
     // Generate project.toml. Values are LaTeX source and may hold quotes or
@@ -167,28 +178,31 @@ pub(crate) fn template_manifest(files: &HashMap<String, Vec<u8>>) -> Option<Temp
     TemplateManifest::from_str(text).ok()
 }
 
-/// Load the `--values` file, if any, and check its keys against the
-/// placeholders the template declares.
+/// Load the `--values` files in order and check the merged keys against the
+/// placeholders the template declares. Validation runs once on the merged
+/// map: unknown-key nesting is already rejected per file at load time.
 pub(crate) fn load_values(
-    values_path: Option<&Path>,
+    values_paths: &[PathBuf],
     manifest: Option<&TemplateManifest>,
     template_name: &str,
-) -> Result<BTreeMap<String, String>> {
-    let Some(path) = values_path else {
-        return Ok(BTreeMap::new());
-    };
-    let values = values_file::load(path)?;
-    validate_values_keys(manifest, &values, template_name)?;
-    Ok(values)
+) -> Result<(BTreeMap<String, String>, HashMap<String, PathBuf>)> {
+    if values_paths.is_empty() {
+        return Ok((BTreeMap::new(), HashMap::new()));
+    }
+    let (values, origins) = values_file::load_many(values_paths)?;
+    validate_values_keys(manifest, &values, template_name, &origins)?;
+    Ok((values, origins))
 }
 
-/// Every key of the values file must be a placeholder the template declares,
-/// otherwise it would silently do nothing. A template without a parsable
-/// manifest declares nothing, so every key is unknown there.
+/// Every key of the merged values map must be a placeholder the template
+/// declares, otherwise it would silently do nothing. A template without a
+/// parsable manifest declares nothing, so every key is unknown there. Each
+/// unknown key names the file that last set it.
 pub(crate) fn validate_values_keys(
     manifest: Option<&TemplateManifest>,
     values: &BTreeMap<String, String>,
     template_name: &str,
+    origins: &HashMap<String, PathBuf>,
 ) -> Result<()> {
     let declared: Vec<&str> = manifest.map_or_else(Vec::new, |manifest| {
         manifest
@@ -210,10 +224,27 @@ pub(crate) fn validate_values_keys(
     } else {
         declared.join(", ")
     };
+    let listed = unknown
+        .iter()
+        .map(|key| match origins.get(*key) {
+            Some(path) => format!("'{key}' from '{}'", path.display()),
+            None => format!("'{key}' (not set by any file)"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     anyhow::bail!(
-        "Values file defines keys template '{template_name}' does not declare: {} (declared: {declared_list})",
-        unknown.join(", ")
+        "Values file defines keys template '{template_name}' does not declare: {listed} (declared: {declared_list})"
     )
+}
+
+/// Where a merged `--values` key came from for error messages: the last file
+/// that set it, or a note that no file set it (the value, if any, came from
+/// template defaults or configuration instead).
+pub(crate) fn origin_note(key: &str, origins: &HashMap<String, PathBuf>) -> String {
+    match origins.get(key) {
+        Some(path) => format!("(set by '{}')", path.display()),
+        None => "(not set by any file)".to_string(),
+    }
 }
 
 /// The required placeholders left without a value after resolution, as
@@ -522,6 +553,21 @@ mod tests {
         files: Option<HashMap<String, Vec<u8>>>,
         values: Option<(&str, &str)>,
     ) -> (Result<()>, tempfile::TempDir) {
+        let many: Vec<(&str, Option<&str>)> = values
+            .into_iter()
+            .map(|(name, content)| (name, Some(content)))
+            .collect();
+        run_new_many(git_name, files, &many)
+    }
+
+    /// Multi-file variant of [`run_new`]: every `(file_name, content)` is
+    /// passed as `--values` in order. A `None` content leaves the path
+    /// unwritten, so a missing-file run can be tested.
+    fn run_new_many(
+        git_name: Option<&str>,
+        files: Option<HashMap<String, Vec<u8>>>,
+        values: &[(&str, Option<&str>)],
+    ) -> (Result<()>, tempfile::TempDir) {
         let _env = crate::test_sync::ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -548,11 +594,16 @@ mod tests {
             run_git(&["config", "user.name", git_name], root.path());
         }
 
-        let values_path = values.map(|(file_name, content)| {
-            let path = root.path().join(file_name);
-            std::fs::write(&path, content).unwrap();
-            path
-        });
+        let values_paths: Vec<std::path::PathBuf> = values
+            .iter()
+            .map(|(file_name, content)| {
+                let path = root.path().join(file_name);
+                if let Some(content) = content {
+                    std::fs::write(&path, content).unwrap();
+                }
+                path
+            })
+            .collect();
 
         let _cwd = crate::test_sync::CWD_LOCK
             .lock()
@@ -566,7 +617,7 @@ mod tests {
             }),
         }
         crate::templates::set_list_override(|_| Err(anyhow::anyhow!("network disabled in tests")));
-        let result = execute("demo", Some("general"), values_path.as_deref());
+        let result = execute("demo", Some("general"), &values_paths);
         crate::templates::clear_download_override();
         crate::templates::clear_list_override();
         std::env::set_current_dir(orig).unwrap();
@@ -905,5 +956,131 @@ required = true
                 "values.toml must only exist when --values is used"
             );
         });
+    }
+
+    #[test]
+    fn two_values_files_merge_with_the_later_file_winning() {
+        let lab = "author = \"Lab Author\"\ntitle = \"Lab Title\"\n";
+        let client = "title = \"Contract\"\n";
+        let (result, root) = run_new_many(
+            None,
+            None,
+            &[("lab.toml", Some(lab)), ("client.toml", Some(client))],
+        );
+        result.unwrap();
+        let main = std::fs::read_to_string(root.path().join("demo/main.tex")).unwrap();
+        assert!(
+            main.contains("\\title{Contract}"),
+            "the second file must win on overlap:\n{main}"
+        );
+        assert!(
+            main.contains("\\author{Lab Author}"),
+            "a key set only by the first file must survive:\n{main}"
+        );
+    }
+
+    #[test]
+    fn toml_and_yaml_values_files_mix_with_the_later_file_winning() {
+        let lab = "title = \"Lab Title\"\nlanguage = \"spanish\"\n";
+        let client = "title: Contract\n";
+        let (result, root) = run_new_many(
+            None,
+            None,
+            &[("lab.toml", Some(lab)), ("client.yaml", Some(client))],
+        );
+        result.unwrap();
+        let main = std::fs::read_to_string(root.path().join("demo/main.tex")).unwrap();
+        assert!(
+            main.contains("\\title{Contract}"),
+            "the YAML file must win on overlap:\n{main}"
+        );
+        assert!(
+            main.contains("\\usepackage[spanish]{babel}"),
+            "a key set only by the TOML file must survive:\n{main}"
+        );
+    }
+
+    #[test]
+    fn merged_values_toml_lists_both_source_files_in_order() {
+        let lab = "author = \"Lab Author\"\n";
+        let client = "title = \"Contract\"\n";
+        let (result, root) = run_new_many(
+            None,
+            None,
+            &[("lab.toml", Some(lab)), ("client.toml", Some(client))],
+        );
+        result.unwrap();
+        let written = std::fs::read_to_string(root.path().join("demo/values.toml")).unwrap();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(
+            lines[0],
+            "# Values used by texforge new; run texforge new with --values on this file to regenerate."
+        );
+        assert!(
+            lines[1].contains("lab.toml") && lines[1].contains("client.toml"),
+            "the header must list both source files in order:\n{written}"
+        );
+        assert!(
+            lines[1].find("lab.toml") < lines[1].find("client.toml"),
+            "sources must stay in command-line order:\n{written}"
+        );
+        assert!(written.contains("author = \"Lab Author\""), "{written}");
+        assert!(written.contains("title = \"Contract\""), "{written}");
+    }
+
+    #[test]
+    fn single_values_file_echo_is_byte_identical_to_before() {
+        let values = "title = \"Contract\"\nauthor = \"Ada\"\n";
+        let (result, root) = run_new(None, None, Some(("client.toml", values)));
+        result.unwrap();
+        let written = std::fs::read_to_string(root.path().join("demo/values.toml")).unwrap();
+        assert!(
+            !written.contains("# Sources:"),
+            "a single file must echo exactly as before:\n{written}"
+        );
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), 3, "{written}");
+        assert_eq!(lines[1], "author = \"Ada\"");
+        assert_eq!(lines[2], "title = \"Contract\"");
+    }
+
+    #[test]
+    fn unknown_key_in_the_second_file_names_that_file() {
+        let lab = "client = \"Acme Ltd\"\nreference = \"C-2026-001\"\n";
+        let client = "client = \"Acme Ltd\"\nreference = \"C-2026-001\"\nbogus = 1\n";
+        let (result, root) = run_new_many(
+            None,
+            Some(contract_template(TWO_REQUIRED)),
+            &[("lab.toml", Some(lab)), ("client.toml", Some(client))],
+        );
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("bogus"), "{error}");
+        assert!(
+            error.contains("client.toml"),
+            "the error must name the file that set the key: {error}"
+        );
+        assert!(
+            !root.path().join("demo").exists(),
+            "no project directory may be created for an unknown key"
+        );
+    }
+
+    #[test]
+    fn missing_second_values_file_fails_before_creating_the_directory() {
+        let lab = "title = \"Contract\"\n";
+        let (result, root) = run_new_many(
+            None,
+            None,
+            &[("lab.toml", Some(lab)), ("client.toml", None)],
+        );
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("client.toml"),
+            "the error must name the missing file: {error}"
+        );
+        assert!(
+            !root.path().join("demo").exists(),
+            "no project directory may be created when a file is missing"
+        );
     }
 }
