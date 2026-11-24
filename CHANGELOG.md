@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- New `diagram-design` diagram style preset: warm paper-tint nodes, muted brown lines and arrows, ink text, a sans-serif face and extra spacing, applied consistently across Mermaid, D2 and Graphviz.
 - `texforge build` now converts SVG files included via `\includegraphics` to vector PDF automatically (same PNG fallback as diagrams); bare stems resolve to SVG only when no `.pdf`/`.png`/`.jpg`/`.jpeg`/`.eps` sits beside it, only `\input`-reachable files are rewritten, and `\graphicspath` is not supported.
 - `texforge build --values <file>... [DIR]` now accepts an optional template folder `DIR` (default `.`), writing the resulting PDF to the current directory rather than inside `DIR`.
 - `texforge pdf check` no longer reports LaTeX spacing lengths (`\vspace*{...}`, `\vskip`/`\hskip`/`\kern`/`\vglue`/`\hglue` unbraced glue) as missing source words; prose measurements like `3cm` are still checked.

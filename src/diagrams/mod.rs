@@ -19,6 +19,8 @@ mod fonts;
 mod latex_escapes;
 mod preamble;
 pub mod style;
+#[cfg(test)]
+mod style_tests;
 mod svg_include;
 use fonts::{shared_fontdb, shared_svg2pdf_fontdb};
 use style::DiagramStyle;
@@ -1301,10 +1303,29 @@ mod tests {
             DiagramStyle::Editorial,
             DiagramStyle::Monochrome,
             DiagramStyle::Technical,
+            DiagramStyle::DiagramDesign,
         ] {
             let svg = render_graphviz("digraph G { A -> B }", sty).unwrap();
             assert!(svg.contains("<svg"));
         }
+    }
+
+    #[test]
+    fn diagram_design_mermaid_svg_carries_palette_and_converts_to_pdf() {
+        let svg = render_mermaid_with_config(
+            "flowchart LR\n  A --> B --> C",
+            DiagramStyle::DiagramDesign,
+        )
+        .unwrap();
+        assert!(svg.contains("#F1ECE4"), "svg: {svg}");
+        assert!(svg.contains("#6B5A43"), "svg: {svg}");
+        assert!(svg.contains("Helvetica Neue"), "svg: {svg}");
+        let pdf = svg_to_pdf(&svg).unwrap();
+        assert!(
+            pdf.starts_with(b"%PDF-"),
+            "expected PDF magic bytes, got: {:?}",
+            &pdf[..pdf.len().min(20)]
+        );
     }
 
     #[test]

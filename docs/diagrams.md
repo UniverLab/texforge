@@ -144,7 +144,7 @@ unterminated `{` fails the build.
 
 By default, each renderer draws diagrams with whatever it ships as its own
 look — which means a Mermaid figure and a D2 figure in the same document can
-look like they came from different tools. `style=` applies one of four
+look like they came from different tools. `style=` applies one of five
 named presets consistently across all three renderers:
 
 ```latex
@@ -160,10 +160,31 @@ flowchart LR
 | `editorial` | Restrained palette (ink `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`), one accent colour, no drop shadows, thin strokes, generous whitespace, EB Garamond type. | The `article` and `workshop` templates. |
 | `monochrome` | Greyscale only — for documents printed in black and white. | The `apa` templates. |
 | `technical` | Drafting register: uniform stroke weight, no fills, labels in a monospaced face where the renderer allows it. | The `ieee` template. |
+| `diagram-design` | Warm paper-tint nodes (`#F1ECE4`), muted brown lines and arrows (`#6B5A43`), ink text (`#1D1510`), sans-serif face, generous spacing; no failure accent. | Documents that want a warm hand-drawn register. |
 
 An unrecognised style name (e.g. `style=editoral`) fails the build with a
 message naming the value and listing the valid ones — it never silently
 falls back to `default`.
+
+### `diagram-design`
+
+```latex
+\begin{mermaid}[style=diagram-design, caption=System flow]
+flowchart LR
+  A --> B --> C
+\end{mermaid}
+```
+
+What it expresses: tinted nodes, muted lines and arrows, ink text, a
+sans-serif face and extra spacing — the look of warm hand-drawn
+figures. What it does not: stroke width, corner radius and arrowhead
+shape are not controllable through the engines, and there is no failure
+accent — the garnet `#87222C` of the report's figures is deliberately
+not part of the preset, so a node that must stand out gets its colour
+per node in the diagram source.
+
+Inspired by ["diagram-design"](https://github.com/cathrynlavery/diagram-design)
+by Cathryn Lavery (MIT).
 
 Presets are named, not parameterised: there is no `style=editorial,accent=#ff0000`.
 Opening them to arbitrary colours would make them themes, a different and

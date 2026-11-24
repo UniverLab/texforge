@@ -79,7 +79,7 @@ entry = "main.tex"
 | `build.entry` | Entry `.tex` file passed to the engine |
 | `build.bibliography` | Optional `.bib` file used by the linter |
 | `build.reproducible` | Optional: pin `SOURCE_DATE_EPOCH` so identical source plus the same Tectonic version yields an identical PDF. `true` uses a fixed default epoch; a number pins an explicit epoch (`reproducible = 1700000000`); `false` or absent keeps the default behaviour. Overridden by `texforge build --reproducible` when that flag is present. |
-| `diagrams.style` | Optional: document-wide default diagram style preset (`default`, `editorial`, `monochrome`, `technical`; see [Diagrams](diagrams.md)). A `style=` on the diagram environment itself overrides this. |
+| `diagrams.style` | Optional: document-wide default diagram style preset (`default`, `editorial`, `monochrome`, `technical`, `diagram-design`; see [Diagrams](diagrams.md)). A `style=` on the diagram environment itself overrides this. |
 | `highlight.theme` | Optional: code-listing palette family (`github`, `one-light`; see [Code listings](listings.md)). |
 | `highlight.style` | Optional: document-wide listing style (`light`, `light-mono`, `dark`, `dark-mono`). A block's `style=` option wins over it. |
 | `highlight.by_lang` | Optional: per-language styles, keyed by language name or alias (`bash = "dark"`); wins over `highlight.style` for blocks in that language. |
