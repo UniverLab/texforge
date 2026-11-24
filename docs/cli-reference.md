@@ -688,6 +688,8 @@ texforge preview [--page <n>] [--scale <s>] [--out <dir>]
 | `--scale` | rasterization scale in pixels per PDF point | `1.0` |
 | `--out` | directory to write PNGs to | `<project>/preview` |
 
+Before rasterizing, stale `page-<n>.png` files are deleted from the output folder (all of them, or only those for page `<n>` with `--page <n>` under any padding); other files are left alone.
+
 Example:
 
 ```
