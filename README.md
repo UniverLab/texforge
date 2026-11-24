@@ -175,11 +175,11 @@ texforge init
 |---|---|
 | `texforge new <name>` | Create new project from template |
 | `texforge new <name> -t <template>` | Create with specific template (name or local folder) |
-| `texforge new <name> --values <file>` | Fill template placeholders from a `.toml`, `.yaml` or `.yml` file |
+| `texforge new <name> --values <file>...` | Fill template placeholders from repeatable `.toml`/`.yaml`/`.yml` files (later files win) |
 | `texforge init` | Interactive wizard — new project or migrate existing |
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |
-| `texforge build --values <file> [--out <path>]` | Build a template folder to a filled PDF |
+| `texforge build --values <file>... [--out <path>]` | Build a template folder to a filled PDF (repeatable `--values`, later files win) |
 | `texforge clean` | Remove build artifacts |
 | `texforge fmt` | Format .tex files |
 | `texforge fmt --check` | Check formatting without modifying |

@@ -163,7 +163,7 @@ Layered files merge in command-line order: a later file's value replaces an
 earlier one for the same key, while keys only an earlier file sets survive.
 Each file may be TOML or YAML independently by its extension. Validation
 runs once on the merged map, and an error concerning a key names the file
-that last set it.
+that last set it (or says no file set it).
 
 The format follows the extension: `.toml` parses as TOML, `.yaml` and `.yml`
 as YAML. Any other extension is an error. Every value must be a string, an
