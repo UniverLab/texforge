@@ -135,6 +135,22 @@ struct CountState {
 /// Single-pass counting over all token streams, in `\input` traversal order:
 /// an `\input` seen inside the document is walked where it appears, so the
 /// sections it carries take their position in the numbering.
+/// Point the tracker's top level and numbering depth at the walked files:
+///
+/// the smallest top level among the non-starred chapters/sections, and
+/// LaTeX's class default for `secnumdepth` (a `\setcounter` in the walk
+/// overrides it later).
+fn configure_tracker(tracker: &mut SectionTracker, files: &[TokenizedFile]) {
+    use crate::texparse::{appendix_top_level, default_secnumdepth, document_class};
+    tracker.set_top_level(appendix_top_level(
+        files.iter().flat_map(|file| file.tokens.iter()),
+    ));
+    let class = files
+        .first()
+        .and_then(|entry| document_class(entry.tokens.iter()));
+    tracker.set_secnumdepth(default_secnumdepth(class.as_deref()));
+}
+
 fn count_files(files: &[TokenizedFile]) -> RawCounts {
     let mut state = CountState {
         tracker: SectionTracker::new(6),
@@ -144,6 +160,7 @@ fn count_files(files: &[TokenizedFile]) -> RawCounts {
         in_document: false,
         current: None,
     };
+    configure_tracker(&mut state.tracker, files);
     let mut visited = vec![false; files.len()];
 
     // The entry is first. An in-document `\input` is consumed in place by
@@ -201,6 +218,12 @@ fn walk(idx: usize, files: &[TokenizedFile], state: &mut CountState, visited: &m
                 if let Some(child) = unvisited_input(files, args, visited) {
                     walk(child, files, state, visited);
                 }
+            }
+            Token::Command { name, .. } if name == "appendix" && state.in_document => {
+                state.tracker.start_appendix();
+            }
+            Token::Command { name, args } if name == "setcounter" => {
+                crate::texparse::apply_secnumdepth(&mut state.tracker, args);
             }
             _ => {}
         }
@@ -426,7 +449,48 @@ body
 \end{document}";
         let stats = count_document("Doc", &files_from(&[("main.tex", src)]));
         let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
-        assert_eq!(paths, vec!["1", "1.1", "1.2", "2", "2.1", "2.1.1"]);
+        // No `\documentclass` means the non-article default (`secnumdepth`
+        // 2): the subsubsection prints no number and consumes none.
+        assert_eq!(paths, vec!["1", "1.1", "1.2", "2", "2.1", ""]);
+    }
+
+    #[test]
+    fn appendix_chapters_take_letters_and_deep_headings_stay_empty() {
+        let src = "\\documentclass{report}\n\\begin{document}\n\\chapter*{Resumen}\n\\chapter{Uno}\n\\section{S}\n\\paragraph{P}\n\\appendix\n\\chapter{Anexo}\n\\section{T}\n\\end{document}";
+        let stats = count_document("Doc", &files_from(&[("main.tex", src)]));
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["", "1", "1.1", "", "A", "A.1"]);
+    }
+
+    #[test]
+    fn article_appendix_letters_sections() {
+        let src = "\\documentclass{article}\n\\begin{document}\n\\section{Uno}\n\\subsection{S}\n\\subsubsection{SS}\n\\paragraph{P}\n\\appendix\n\\section{Anexo}\n\\subsection{T}\n\\end{document}";
+        let stats = count_document("Doc", &files_from(&[("main.tex", src)]));
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["1", "1.1", "1.1.1", "", "A", "A.1"]);
+    }
+
+    #[test]
+    fn setcounter_from_an_input_file_narrows_the_depth() {
+        let files = files_from(&[
+            (
+                "main.tex",
+                "\\begin{document}\n\\section{A}\n\\input{part}\n\\subsection{B}\n\\end{document}",
+            ),
+            ("part.tex", "\\setcounter{secnumdepth}{1}\n\\section{C}\n"),
+        ]);
+        let stats = count_document("Doc", &files);
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["1", "2", ""]);
+    }
+
+    #[test]
+    fn appendix_without_chapter_or_section_changes_nothing() {
+        let src =
+            "\\begin{document}\n\\subsection{A}\n\\appendix\n\\subsection{B}\n\\end{document}";
+        let stats = count_document("Doc", &files_from(&[("main.tex", src)]));
+        let paths: Vec<&str> = stats.sections.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["1", "2"]);
     }
 
     #[test]

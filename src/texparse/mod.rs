@@ -44,7 +44,9 @@ use std::path::{Path, PathBuf};
 
 use crate::texutil;
 
-pub use sections::SectionTracker;
+pub use sections::{
+    appendix_top_level, apply_secnumdepth, default_secnumdepth, document_class, SectionTracker,
+};
 pub use verbatim::{verbatim_blocks, verbatim_body_lines};
 
 /// A single token produced by the tokenizer.

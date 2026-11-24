@@ -552,6 +552,10 @@ Exit codes: see the table.
 
 Report which section opens each page (diff-friendly, one line per page).
 
+The number is the one the PDF prints: unnumbered sections show an empty
+section, appendices show letters, and headings deeper than `secnumdepth`
+show empty.
+
 ```
 texforge pdf pages
 ```
@@ -606,6 +610,11 @@ texforge outline --json
 
 Starred sectioning commands (`\chapter*`, `\section*`, ...) are listed unnumbered: they keep their level and title but consume no number.
 
+The number is the one the PDF prints: sections after `\appendix` take
+letters (`A`, `A.1`), and headings deeper than `secnumdepth` (`3` for
+`article`, `2` otherwise, overridable with
+`\setcounter{secnumdepth}{N}`) show an empty number.
+
 Exit codes: see the table.
 
 #### `texforge outline --json` fields
@@ -643,6 +652,11 @@ texforge stats [--by <section|file>] [--json]
 In section mode a starred sectioning command (`\chapter*`, `\section*`, ...) has
 an empty section number: its words are reported under its title, with no number
 before it, and it consumes no number.
+
+The number is the one the PDF prints: sections after `\appendix` take
+letters (`A`, `A.1`), and headings deeper than `secnumdepth` (`3` for
+`article`, `2` otherwise, overridable with
+`\setcounter{secnumdepth}{N}`) show an empty number.
 
 Example:
 

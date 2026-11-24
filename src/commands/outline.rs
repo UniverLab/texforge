@@ -62,21 +62,27 @@ pub fn build_outline(document: &str, root: &Path, entry: &str) -> DocumentOutlin
 
     let entry_path = texutil::resolve_tex_path(root, entry);
     let mut tracker = SectionTracker::new(6);
-    let mut sections = Vec::new();
-    let mut stack = Vec::new();
-    walk(
-        &entry_path,
-        root,
-        &tokenized,
-        &sources,
-        &mut tracker,
-        &mut sections,
-        &mut stack,
-    );
+    tracker.set_top_level(texparse::appendix_top_level(
+        tokenized
+            .values()
+            .flat_map(|tokens| tokens.iter())
+            .map(|s| &s.token),
+    ));
+    let class = tokenized
+        .get(&entry_path)
+        .and_then(|tokens| texparse::document_class(tokens.iter().map(|s| &s.token)));
+    tracker.set_secnumdepth(texparse::default_secnumdepth(class.as_deref()));
+    let mut state = WalkState {
+        tracker,
+        sections: Vec::new(),
+        stack: Vec::new(),
+        in_document: false,
+    };
+    walk(&entry_path, root, &tokenized, &sources, &mut state);
 
     DocumentOutline {
         document: document.to_string(),
-        sections,
+        sections: state.sections,
     }
 }
 
@@ -90,23 +96,29 @@ fn section_number(tracker: &mut SectionTracker, level: u8, starred: bool) -> Str
     }
 }
 
+/// Mutable numbering and output state threaded through the `\input` walk.
+struct WalkState {
+    tracker: SectionTracker,
+    sections: Vec<OutlineSection>,
+    stack: Vec<PathBuf>,
+    in_document: bool,
+}
+
 /// Walk one file's token stream, recursing into `\input` targets in place.
 fn walk(
     file: &Path,
     root: &Path,
     tokenized: &HashMap<PathBuf, Vec<SpannedToken>>,
     sources: &HashMap<PathBuf, String>,
-    tracker: &mut SectionTracker,
-    sections: &mut Vec<OutlineSection>,
-    stack: &mut Vec<PathBuf>,
+    state: &mut WalkState,
 ) {
-    if stack.iter().any(|path| path == file) {
+    if state.stack.iter().any(|path| path == file) {
         return;
     }
     let Some(tokens) = tokenized.get(file) else {
         return;
     };
-    stack.push(file.to_path_buf());
+    state.stack.push(file.to_path_buf());
     let source = &sources[file];
 
     for spanned in tokens {
@@ -117,9 +129,9 @@ fn walk(
                 title,
                 ..
             } => {
-                let number = section_number(tracker, *level, *starred);
+                let number = section_number(&mut state.tracker, *level, *starred);
                 if *level <= MAX_LEVEL {
-                    sections.push(OutlineSection {
+                    state.sections.push(OutlineSection {
                         level: *level,
                         number,
                         title: title.clone(),
@@ -128,19 +140,26 @@ fn walk(
                     });
                 }
             }
+            Token::BeginDocument => state.in_document = true,
             Token::Command { name, args } if name == "input" => {
                 if let Some(input) = args.last() {
                     let child = texutil::resolve_tex_path(root, input);
                     if tokenized.contains_key(&child) {
-                        walk(&child, root, tokenized, sources, tracker, sections, stack);
+                        walk(&child, root, tokenized, sources, state);
                     }
                 }
+            }
+            Token::Command { name, .. } if name == "appendix" && state.in_document => {
+                state.tracker.start_appendix();
+            }
+            Token::Command { name, args } if name == "setcounter" => {
+                texparse::apply_secnumdepth(&mut state.tracker, args);
             }
             _ => {}
         }
     }
 
-    stack.pop();
+    state.stack.pop();
 }
 
 /// The section command's line number, computed from its byte offset.
@@ -248,9 +267,11 @@ mod tests {
             "\\documentclass{book}\n\\begin{document}\n\\part{One}\n\\chapter{Intro}\n\\section{First}\n\\subsection{Sub}\n\\subsubsection{Subsub}\n\\section{Second}\n\\end{document}",
         )]);
         let outline = build_outline("Doc", dir.path(), "main.tex");
+        // `book` numbers down to `secnumdepth` 2: the subsubsection keeps its
+        // row (it is within `MAX_LEVEL`) but prints no number.
         assert_eq!(
             numbers(&outline),
-            vec!["1", "1.1", "1.1.1", "1.1.1.1", "1.1.1.1.1", "1.1.2"]
+            vec!["1", "1.1", "1.1.1", "1.1.1.1", "", "1.1.2"]
         );
     }
 
@@ -479,6 +500,50 @@ mod tests {
         )]);
         let outline = build_outline("Doc", dir.path(), "main.tex");
         assert_eq!(numbers(&outline), vec!["1", "1.1", "", "1.2", "2"]);
+    }
+
+    #[test]
+    fn appendix_chapters_take_letters_and_deep_headings_stay_empty() {
+        let dir = write(&[(
+            "main.tex",
+            "\\documentclass{report}\n\\begin{document}\n\\chapter*{Resumen}\n\\chapter{Uno}\n\\section{S}\n\\paragraph{P}\n\\appendix\n\\chapter{Anexo}\n\\section{T}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        // The paragraph sits below `MAX_LEVEL`, so the outline skips its row.
+        assert_eq!(numbers(&outline), vec!["", "1", "1.1", "A", "A.1"]);
+    }
+
+    #[test]
+    fn article_appendix_letters_sections() {
+        let dir = write(&[(
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\\section{Uno}\n\\subsection{S}\n\\subsubsection{SS}\n\\paragraph{P}\n\\appendix\n\\section{Anexo}\n\\subsection{T}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(numbers(&outline), vec!["1", "1.1", "1.1.1", "A", "A.1"]);
+    }
+
+    #[test]
+    fn setcounter_from_an_input_file_narrows_the_depth() {
+        let dir = write(&[
+            (
+                "main.tex",
+                "\\begin{document}\n\\section{A}\n\\input{part}\n\\subsection{B}\n\\end{document}",
+            ),
+            ("part.tex", "\\setcounter{secnumdepth}{1}\n\\section{C}\n"),
+        ]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(numbers(&outline), vec!["1", "2", ""]);
+    }
+
+    #[test]
+    fn appendix_without_chapter_or_section_changes_nothing() {
+        let dir = write(&[(
+            "main.tex",
+            "\\begin{document}\n\\subsection{A}\n\\appendix\n\\subsection{B}\n\\end{document}",
+        )]);
+        let outline = build_outline("Doc", dir.path(), "main.tex");
+        assert_eq!(numbers(&outline), vec!["1", "2"]);
     }
 
     #[test]
