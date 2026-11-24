@@ -179,7 +179,7 @@ texforge init
 | `texforge init` | Interactive wizard — new project or migrate existing |
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |
-| `texforge build --values <file>... [--out <path>]` | Build a template folder to a filled PDF (repeatable `--values`, later files win) |
+| `texforge build --values <file>... [--out <path>] [<dir>]` | Build a template folder to a filled PDF (repeatable `--values`, later files win; optional `[<dir>]` template folder, PDF goes to the current directory) |
 | `texforge clean` | Remove build artifacts |
 | `texforge fmt` | Format .tex files |
 | `texforge fmt --check` | Check formatting without modifying |
