@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- `texforge pdf text`, `pdf pages` and `pdf check` report a PDF whose font text mapping is incomplete as an error naming the file instead of aborting.
 - `texforge bib check` verifies DOI/arXiv ids in bibliography against Crossref/arXiv.
 
 - New `diagram-design` diagram style preset: warm paper-tint nodes, muted brown lines and arrows, ink text, a sans-serif face and extra spacing, applied consistently across Mermaid, D2 and Graphviz.

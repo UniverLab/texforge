@@ -567,6 +567,9 @@ Inspect the compiled PDF. Every action is a subcommand below.
 texforge pdf <text|info|pages|check>
 ```
 
+A PDF whose text the extractor cannot read (for example a font whose text
+mapping is incomplete) is reported as an error naming the file instead of
+aborting.
 Example:
 
 ```
