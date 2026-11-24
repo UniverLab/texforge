@@ -3,6 +3,7 @@
 //! command dispatch.
 
 mod commands;
+mod glue;
 mod groups;
 mod math;
 

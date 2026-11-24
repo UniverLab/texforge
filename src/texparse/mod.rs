@@ -646,8 +646,9 @@ mod tests {
         );
         for t in &tokens {
             if let Token::Text(text) = t {
-                assert!(!text.contains("p{3cm"), "column spec leaked: {text:?}");
+                assert!(!text.contains("p{3cm"), "column spec leaked: {text:?}"); // }
                 assert!(!text.contains("p{5.5cm"), "column spec leaked: {text:?}");
+                // }
             }
         }
         assert!(tokens.iter().any(
@@ -717,7 +718,7 @@ mod tests {
 
     #[test]
     fn unbalanced_braces_do_not_panic() {
-        let tokens = tokenize(r"\textbf{unclosed and }}}} stray");
+        let tokens = tokenize(r"\textbf{unclosed and }}}} stray"); // {{{
         assert!(tokens.iter().any(|t| matches!(
             t,
             Token::Command { name, .. } if name == "textbf"
@@ -1229,5 +1230,169 @@ mod tests {
             }
         }
         assert_eq!(numbers, vec!["1", "1.1"]);
+    }
+
+    fn significant_words_in(source: &str) -> Vec<String> {
+        let files = vec![TokenizedFile {
+            path: std::path::PathBuf::from("main.tex"),
+            tokens: tokenize(&format!("\\begin{{document}}\n{source}\n\\end{{document}}")),
+        }];
+        crate::pdftext::significant_words(&files)
+            .into_keys()
+            .collect()
+    }
+
+    #[test]
+    fn starred_vspace_consumes_braced_length_as_argument() {
+        let tokens = tokenize(r"\vspace*{1.2cm}");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vspace".to_string(),
+                args: vec!["1.2cm".to_string()],
+            }]
+        );
+        let words = significant_words_in(r"\vspace*{1.2cm}");
+        assert!(
+            !words.iter().any(|w| w == "1.2cm"),
+            "length leaked as word: {words:?}"
+        );
+    }
+
+    #[test]
+    fn starred_vspace_consumes_glue_with_stretch() {
+        let tokens = tokenize(r"\vspace*{2em plus 1fill}");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vspace".to_string(),
+                args: vec!["2em plus 1fill".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn vskip_unbraced_length_does_not_leak_into_words() {
+        let tokens = tokenize(r"\vskip 1.2cm");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vskip".to_string(),
+                args: vec![" 1.2cm".to_string()],
+            }]
+        );
+        let words = significant_words_in(r"\vskip 1.2cm");
+        assert!(
+            !words.iter().any(|w| w == "1.2cm"),
+            "length leaked as word: {words:?}"
+        );
+    }
+
+    #[test]
+    fn hskip_glue_with_stretch_and_shrink_does_not_leak() {
+        let source = r"\hskip 2em plus 1fill minus 0.5em";
+        let tokens = tokenize(source);
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "hskip".to_string(),
+                args: vec![" 2em plus 1fill minus 0.5em".to_string()],
+            }]
+        );
+        let words = significant_words_in(source);
+        for leaked in ["2em", "plus", "1fill", "minus", "0.5em"] {
+            assert!(
+                !words.iter().any(|w| w == leaked),
+                "{leaked} leaked as word: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kern_consumes_signed_dimension() {
+        for source in [r"\kern-1pt", r"\kern -1pt"] {
+            let tokens = tokenize(source);
+            assert!(
+                matches!(&tokens[..], [Token::Command { name, args }] if name == "kern" && args.len() == 1),
+                "unexpected tokens for {source}: {tokens:?}"
+            );
+            let words = significant_words_in(source);
+            assert!(
+                !words.iter().any(|w| w == "1pt" || w == "-1pt"),
+                "kern length leaked for {source}: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vglue_consumes_unbraced_dimension() {
+        let tokens = tokenize(r"\vglue 3mm");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vglue".to_string(),
+                args: vec![" 3mm".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn vskip_consumes_control_sequence_glue() {
+        for source in [r"\vskip\baselineskip", r"\vskip 2\baselineskip"] {
+            let tokens = tokenize(source);
+            assert!(
+                matches!(&tokens[..], [Token::Command { name, args }] if name == "vskip" && args.len() == 1),
+                "unexpected tokens for {source}: {tokens:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_after_consumed_glue_survives() {
+        let words = significant_words_in(r"A \vskip 1.2cm B");
+        assert!(words.iter().any(|w| w == "A"), "A missing: {words:?}");
+        assert!(words.iter().any(|w| w == "B"), "B missing: {words:?}");
+        assert!(
+            !words.iter().any(|w| w == "1.2cm"),
+            "length leaked: {words:?}"
+        );
+    }
+
+    #[test]
+    fn prose_lengths_remain_significant_words() {
+        let words = significant_words_in("La pared mide 3cm de espesor");
+        assert!(words.iter().any(|w| w == "3cm"), "3cm missing: {words:?}");
+
+        let words = significant_words_in("La pared mide 5 cm de espesor");
+        assert!(words.iter().any(|w| w == "cm"), "cm missing: {words:?}");
+        assert!(
+            !words.iter().any(|w| w == "5"),
+            "numeric token should be excluded: {words:?}"
+        );
+    }
+
+    #[test]
+    fn prose_plus_and_kern_remain_significant_words() {
+        let words = significant_words_in("we add plus and kern in running text");
+        assert!(words.iter().any(|w| w == "plus"), "plus missing: {words:?}");
+        assert!(words.iter().any(|w| w == "kern"), "kern missing: {words:?}");
+    }
+
+    #[test]
+    fn token_after_consumed_glue_keeps_correct_start_offset() {
+        let src = "A \\vskip 1.2cm B";
+        let spanned = tokenize_with_spans(src).tokens;
+        let b = spanned
+            .iter()
+            .find(|t| matches!(&t.token, Token::Text(s) if s.contains('B')))
+            .expect("text containing B");
+        let b_pos = src.find('B').expect("B in source");
+        assert!(
+            b.start <= b_pos && b_pos < b.end,
+            "B at {b_pos} not within token span {}..{}",
+            b.start,
+            b.end
+        );
+        assert_eq!(&src[b.start..b.end], " B");
     }
 }

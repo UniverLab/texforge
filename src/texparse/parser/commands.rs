@@ -208,6 +208,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Any other command: greedily collect optional and braced arguments.
+    /// Spacing commands get special handling: `\vspace`/`\hspace` accept a
+    /// `*` before their arguments, and the unbraced-glue commands consume one
+    /// TeX glue specification as a single argument so lengths do not leak into
+    /// prose.
     pub(super) fn handle_plain_command(
         &mut self,
         name: &str,
@@ -215,6 +219,23 @@ impl<'a> Parser<'a> {
         tokens: &mut Vec<SpannedToken>,
     ) {
         let mut args = Vec::new();
+        if matches!(name, "vspace" | "hspace") && self.peek() == Some('*') {
+            self.bump();
+        } else if matches!(name, "vskip" | "hskip" | "kern" | "vglue" | "hglue") {
+            if let Some(glue) = self.read_glue() {
+                args.push(glue);
+            }
+            self.push(
+                tokens,
+                Token::Command {
+                    name: name.to_string(),
+                    args,
+                },
+                start,
+                self.pos,
+            );
+            return;
+        }
         // Capped loop: each successful read consumes at least one byte (see
         // `Parser::run` for why the bound is behaviour-neutral).
         for _ in 0..self.src.len() {

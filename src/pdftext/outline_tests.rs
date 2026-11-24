@@ -1,4 +1,3 @@
-
 use super::super::fixtures::{CAPABILITIES_PDF, PAGES_PDF};
 use super::*;
 

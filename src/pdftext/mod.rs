@@ -22,6 +22,8 @@ pub(crate) use dest_number::column_letters;
 pub use dest_number::{number_from_dest, DestNumber};
 pub use extract::{extract_text, extract_text_by_pages, normalize_pdf_text};
 pub use fidelity::check_fidelity;
+#[cfg(test)]
+pub(crate) use fidelity::significant_words;
 pub use outline::{format_page_breaks, page_breaks_from_outline, read_pdf_outline};
 pub use quality::{check_quality, pdf_info};
 
