@@ -109,16 +109,68 @@ fn resolve_highlight_settings(project: &Project) -> Result<highlight::Settings> 
     Ok(settings)
 }
 
+/// Default engine-log path for a project build: `build/<entry-stem>.log`
+/// under the project root.
+pub(crate) fn default_log_path(project: &Project) -> PathBuf {
+    let stem = Path::new(&project.config.build.entry)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    project.root.join("build").join(format!("{stem}.log"))
+}
+
+/// Resolve `--log`: an explicit path wins (relative paths resolve against
+/// the current directory), otherwise the caller's default applies.
+pub(crate) fn resolve_log_path(log: Option<&Path>, default: PathBuf) -> PathBuf {
+    match log {
+        Some(path) if path.is_absolute() => path.to_path_buf(),
+        Some(path) => std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path),
+        None => default,
+    }
+}
+
+/// Print the overfull-box report after the existing warning output. Silent
+/// when no box exceeds 1pt, so clean builds print exactly what they print
+/// today.
+fn print_overfull(warnings: &[compiler::CompileWarning], verbose: bool) {
+    let out = compiler::log::format_overfull(warnings, verbose);
+    if !out.is_empty() {
+        print!("{out}");
+    }
+}
+
+/// Fail when any overfull box exceeds `--max-overfull`. Callers run this
+/// after the PDF is written, so the PDF survives the non-zero exit.
+pub(crate) fn enforce_max_overfull(
+    warnings: &[compiler::CompileWarning],
+    max_overfull: Option<f32>,
+) -> Result<()> {
+    if let Some(max) = max_overfull {
+        if let Some(worst) = compiler::log::exceeds_max(warnings, max) {
+            anyhow::bail!("{}", compiler::log::overfull_gate_message(worst, max));
+        }
+    }
+    Ok(())
+}
+
 /// Run the diagrams + highlight + Tectonic pipeline for `project` with its
 /// sources copied into `build_dir`, returning the built PDF inside
-/// `build_dir`. Shared by the normal build and the template-folder build,
-/// which stages a rendered copy and points a [`Project`] at it.
+/// `build_dir` with its warnings and the engine's complete log text. Shared
+/// by the normal build and the template-folder build, which stages a
+/// rendered copy and points a [`Project`] at it.
+///
+/// The log is written to `log_path` after every compile, successful or not;
+/// the overfull-box report prints after the existing warning output.
 pub(crate) fn compile_project(
     project: &Project,
     build_dir: &Path,
     verbose: bool,
     epoch: Option<u64>,
-) -> Result<PathBuf> {
+    log_path: &Path,
+) -> Result<(PathBuf, Vec<compiler::CompileWarning>, String)> {
     let default_style = resolve_default_style(project)?;
     let highlight_cfg = resolve_highlight_settings(project)?;
 
@@ -140,18 +192,38 @@ pub(crate) fn compile_project(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map)?;
+    let (warnings, raw) =
+        match compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map) {
+            Ok(ok) => ok,
+            Err(e) => {
+                if let Some(failure) = e.downcast_ref::<compiler::CompileFailure>() {
+                    compiler::log::write_log(log_path, &failure.raw)?;
+                }
+                return Err(e);
+            }
+        };
+    compiler::log::write_log(log_path, &raw)?;
+    print_overfull(&warnings, verbose);
 
-    Ok(build_dir.join(
-        Path::new(&project.config.build.entry)
-            .with_extension("pdf")
-            .file_name()
-            .unwrap(),
+    Ok((
+        build_dir.join(
+            Path::new(&project.config.build.entry)
+                .with_extension("pdf")
+                .file_name()
+                .unwrap(),
+        ),
+        warnings,
+        raw,
     ))
 }
 
 /// Compile project to PDF using a temp directory, output named after the document title.
-pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
+pub fn execute(
+    verbose: bool,
+    reproducible: Option<Option<u64>>,
+    log: Option<&Path>,
+    max_overfull: Option<f32>,
+) -> Result<()> {
     if !Path::new("project.toml").exists() && Path::new("template.toml").exists() {
         anyhow::bail!(
             "This folder is a template: `texforge build --values <file>` is needed \
@@ -171,12 +243,16 @@ pub fn execute(verbose: bool, reproducible: Option<Option<u64>>) -> Result<()> {
     let build_dir = temp_dir.path();
     println!("  ◇ temp: {}", build_dir.display());
 
-    let pdf_src = compile_project(&project, build_dir, verbose, epoch)?;
+    let log_path = resolve_log_path(log, default_log_path(&project));
+    let (pdf_src, warnings, _raw) =
+        compile_project(&project, build_dir, verbose, epoch, &log_path)?;
 
     let pdf_name = format!("{}.pdf", sanitize_filename(&titulo));
     let pdf_dest = project.root.join(&pdf_name);
     std::fs::copy(&pdf_src, &pdf_dest)?;
     println!("  ◇ {}", pdf_dest.display());
+
+    enforce_max_overfull(&warnings, max_overfull)?;
 
     Ok(())
 }
@@ -187,6 +263,8 @@ pub fn watch(
     verbose: bool,
     reproducible: Option<Option<u64>>,
     live_preview: Option<&LivePreview>,
+    log: Option<&Path>,
+    max_overfull: Option<f32>,
 ) -> Result<()> {
     let project = Project::load()?;
     let epoch = resolve_epoch(reproducible, project.config.build.reproducible);
@@ -205,7 +283,15 @@ pub fn watch(
     let build_dir = temp_dir.path().to_path_buf();
 
     let started = std::time::Instant::now();
-    let result = run_build_with_preview(&project, &build_dir, verbose, epoch, live_preview);
+    let result = run_build_with_preview(
+        &project,
+        &build_dir,
+        verbose,
+        epoch,
+        live_preview,
+        log,
+        max_overfull,
+    );
     redraw_status(&result, 1, started, status_row);
 
     let (tx, rx) = mpsc::channel();
@@ -248,8 +334,15 @@ pub fn watch(
         if pending && last_event.elapsed() >= debounce {
             pending = false;
             build_count += 1;
-            last_result =
-                run_build_with_preview(&project, &build_dir, verbose, epoch, live_preview);
+            last_result = run_build_with_preview(
+                &project,
+                &build_dir,
+                verbose,
+                epoch,
+                live_preview,
+                log,
+                max_overfull,
+            );
             last_build = std::time::Instant::now();
             redraw_status(&last_result, build_count, started, status_row);
         }
@@ -322,6 +415,8 @@ fn run_build(
     build_dir: &Path,
     verbose: bool,
     epoch: Option<u64>,
+    log: Option<&Path>,
+    max_overfull: Option<f32>,
 ) -> WatchResult {
     let _ = std::fs::create_dir_all(build_dir);
     let default_style = match resolve_default_style(project) {
@@ -353,21 +448,36 @@ fn run_build(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| project.config.build.entry.clone());
-    match compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map) {
-        Ok(_) => {
-            let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
-            let pdf_dest = project.root.join(&pdf_name);
-            let pdf_src = build_dir.join(
-                Path::new(&project.config.build.entry)
-                    .with_extension("pdf")
-                    .file_name()
-                    .unwrap(),
-            );
-            match std::fs::copy(&pdf_src, &pdf_dest) {
-                Ok(_) => WatchResult::Ok(pdf_name),
-                Err(e) => WatchResult::Err(e.to_string()),
+    let log_path = resolve_log_path(log, default_log_path(project));
+    let (warnings, raw) =
+        match compiler::compile(build_dir, &entry_filename, verbose, epoch, &line_map) {
+            Ok(ok) => ok,
+            Err(e) => {
+                if let Some(failure) = e.downcast_ref::<compiler::CompileFailure>() {
+                    if let Err(e) = compiler::log::write_log(&log_path, &failure.raw) {
+                        return WatchResult::Err(e.to_string());
+                    }
+                }
+                return WatchResult::Err(e.to_string());
             }
-        }
+        };
+    if let Err(e) = compiler::log::write_log(&log_path, &raw) {
+        return WatchResult::Err(e.to_string());
+    }
+    print_overfull(&warnings, verbose);
+    let pdf_name = format!("{}.pdf", sanitize_filename(&project.config.document.title));
+    let pdf_dest = project.root.join(&pdf_name);
+    let pdf_src = build_dir.join(
+        Path::new(&project.config.build.entry)
+            .with_extension("pdf")
+            .file_name()
+            .unwrap(),
+    );
+    match std::fs::copy(&pdf_src, &pdf_dest) {
+        Ok(_) => match enforce_max_overfull(&warnings, max_overfull) {
+            Ok(()) => WatchResult::Ok(pdf_name),
+            Err(e) => WatchResult::Err(e.to_string()),
+        },
         Err(e) => WatchResult::Err(e.to_string()),
     }
 }
@@ -380,8 +490,10 @@ fn run_build_with_preview(
     verbose: bool,
     epoch: Option<u64>,
     live_preview: Option<&LivePreview>,
+    log: Option<&Path>,
+    max_overfull: Option<f32>,
 ) -> WatchResult {
-    let result = run_build(project, build_dir, verbose, epoch);
+    let result = run_build(project, build_dir, verbose, epoch, log, max_overfull);
     if let (WatchResult::Ok(ref pdf_name), Some(opts)) = (&result, live_preview) {
         let pdf_path = project.root.join(pdf_name);
         let out = resolve_preview_path(&project.root, opts.out.as_deref());
@@ -964,7 +1076,8 @@ mod tests {
             page: 1,
             out: Some(out.clone()),
         };
-        let result = run_build_with_preview(&project, &build_dir, false, None, Some(&opts));
+        let result =
+            run_build_with_preview(&project, &build_dir, false, None, Some(&opts), None, None);
         assert!(matches!(result, WatchResult::Err(_)));
         assert_eq!(std::fs::read(&out).unwrap(), b"previous-good-frame");
         assert!(!preview_temp_path(&out).exists());
@@ -999,5 +1112,161 @@ mod tests {
         assert!(err.to_string().contains("out of range"));
         assert_eq!(std::fs::read(&out).unwrap(), b"keep-me");
         assert!(!preview_temp_path(&out).exists());
+    }
+
+    /// A project whose body holds one unbreakable long `\texttt` line.
+    fn overfull_project() -> (tempfile::TempDir, Project) {
+        let dir = tempfile::tempdir().unwrap();
+        let long = "x".repeat(150);
+        let main = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\\texttt{{{long}}}\n\\end{{document}}\n"
+        );
+        std::fs::write(dir.path().join("main.tex"), &main).unwrap();
+        std::fs::write(
+            dir.path().join("project.toml"),
+            "[document]\ntitle = \"Overfull\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
+        )
+        .unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+            config: crate::domain::project::ProjectConfig {
+                document: crate::domain::project::DocumentConfig {
+                    title: "Overfull".to_string(),
+                    author: "A".to_string(),
+                    template: "general".to_string(),
+                },
+                build: crate::domain::project::BuildConfig {
+                    entry: "main.tex".to_string(),
+                    bibliography: None,
+                    reproducible: None,
+                },
+                diagrams: None,
+                highlight: None,
+            },
+        };
+        (dir, project)
+    }
+
+    /// An unbreakable long `\texttt` line overflows: the engine log is kept
+    /// at `build/<stem>.log` and the overfull report prints a summary line
+    /// plus one `file:line` detail. Skips without Tectonic.
+    #[test]
+    fn overfull_build_writes_log_and_reports_boxes() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !tectonic_available() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let (_dir, project) = overfull_project();
+        let build_dir = tempfile::tempdir().unwrap();
+        let log_path = default_log_path(&project);
+        assert_eq!(log_path, project.root.join("build").join("main.log"));
+
+        let (pdf_src, warnings, _raw) =
+            compile_project(&project, build_dir.path(), false, None, &log_path).unwrap();
+        assert!(pdf_src.exists(), "the engine must still write its PDF");
+
+        let log = std::fs::read_to_string(&log_path)
+            .unwrap_or_else(|_| panic!("{} must exist", log_path.display()));
+        assert!(
+            log.contains("Overfull"),
+            "the engine log must keep the box: {}",
+            log_path.display()
+        );
+
+        // This is the exact string `print_overfull` emits after the
+        // existing warning output; the parser-level unit tests pin the
+        // per-box sorting, cap and labels.
+        let report = compiler::log::format_overfull(&warnings, false);
+        assert!(
+            report.contains("overfull box(es), worst "),
+            "a summary line must appear: {report}"
+        );
+        let at = report
+            .find("main.tex:")
+            .expect("the widest box must name its source file and line");
+        assert!(
+            report[at + "main.tex:".len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit()),
+            "the detail line must carry a source line number: {report}"
+        );
+    }
+
+    /// `--max-overfull` fails the build after the PDF is written, and
+    /// `--log` redirects the engine log. Skips without Tectonic.
+    #[test]
+    fn max_overfull_fails_after_writing_pdf_and_log_redirects() {
+        // Lock order is ENV then CWD: no other test holds both, so this
+        // cannot deadlock against the CWD-only or ENV-only holders.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !tectonic_available() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let (_dir, project) = overfull_project();
+        let _cwd = crate::test_sync::CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&project.root).unwrap();
+
+        // A plain build exits 0 and keeps the default log.
+        execute(false, None, None, None).unwrap();
+        let pdf = project.root.join("overfull.pdf");
+        assert!(pdf.exists(), "a plain build writes the PDF");
+        assert!(
+            project.root.join("build").join("main.log").exists(),
+            "a plain build keeps the default log"
+        );
+
+        // A tight gate fails naming the flag, but the PDF is still written.
+        let err = execute(false, None, None, Some(1.0))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exceeds --max-overfull"), "{err}");
+        assert!(pdf.exists(), "the PDF survives the gate failure");
+
+        // `--log` redirects the engine log to the given path.
+        execute(false, None, Some(Path::new("custom.log")), None).unwrap();
+        assert!(
+            project.root.join("custom.log").exists(),
+            "the redirected log must exist"
+        );
+
+        std::env::set_current_dir(orig).unwrap();
+    }
+
+    #[test]
+    fn default_log_path_uses_the_entry_stem() {
+        let (_dir, project) = overfull_project();
+        assert_eq!(
+            default_log_path(&project),
+            project.root.join("build").join("main.log")
+        );
+    }
+
+    #[test]
+    fn resolve_log_path_prefers_the_flag_and_joins_relative() {
+        let default = PathBuf::from("/proj/build/main.log");
+        assert_eq!(
+            resolve_log_path(Some(Path::new("/abs/engine.log")), default.clone()),
+            PathBuf::from("/abs/engine.log")
+        );
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            resolve_log_path(Some(Path::new("custom.log")), default.clone()),
+            cwd.join("custom.log")
+        );
+        assert_eq!(resolve_log_path(None, default.clone()), default);
     }
 }

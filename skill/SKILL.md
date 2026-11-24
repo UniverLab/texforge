@@ -117,7 +117,7 @@ Después de `init`, todos los comandos (`build`, `fmt`, `check`) funcionan norma
 texforge build
 ```
 
-Compila `main.tex` → PDF en `build/`. Los errores se muestran con archivo, línea y sugerencia — nunca logs crudos de tectonic.
+Compila `main.tex` → PDF junto al proyecto (nombrado según el título). Los errores se muestran con archivo, línea y sugerencia — nunca logs crudos de tectonic. El log completo del motor se guarda en `build/<entrada>.log` (`--log <ruta>` lo redirige); las cajas overfull de más de 1pt se reportan con archivo y línea, y `--max-overfull <pt>` falla si alguna lo excede.
 
 Antes de compilar, intercepta entornos de diagramas y bloques `code`, los renderiza, y trabaja sobre copias en `build/` — los `.tex` originales nunca se modifican.
 

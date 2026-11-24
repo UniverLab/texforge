@@ -26,6 +26,32 @@ an outdated managed copy is updated to the supported version automatically;
 when the Tectonic that runs is older than the supported version — for
 example one earlier in `PATH` — the build warns about it and continues.
 
+## Engine log and overfull boxes
+
+After every compile — successful or not — the engine's complete log text is
+kept at `build/<entry-stem>.log` under the project root (`build/` is
+created when needed and removed by `texforge clean`). `--log <path>`
+writes it elsewhere instead; relative paths resolve against the current
+directory. For `build --values` the default is `<pdf-stem>.log` next to the
+PDF.
+
+Overfull horizontal boxes wider than 1pt are reported after the existing
+warning output: one summary line (`◇ N overfull box(es), worst Wpt`) plus
+one `file:line` detail per box, widest first — at most 10 unless
+`--verbose` lists them all. A box with no source line (one the engine
+raised while `\output` was active) is labelled `output routine`. Builds
+with no box wider than 1pt print exactly what they print today.
+
+```bash
+texforge build --log engine.log     # keep the log at a custom path
+texforge build --max-overfull 5     # fail when any box exceeds 5pt
+```
+
+`--max-overfull <pt>` still writes the PDF but exits non-zero with
+`overfull box of Wpt exceeds --max-overfull Mpt` when any reported box is
+wider than the given value. Without the flag the exit status is unchanged.
+`texforge check` does not read the log.
+
 ## Building a template folder
 
 A folder carrying a `template.toml` — with or without a `project.toml` —

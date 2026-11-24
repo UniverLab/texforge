@@ -31,6 +31,8 @@ pub fn execute(
     out: Option<&Path>,
     verbose: bool,
     reproducible: Option<Option<u64>>,
+    log: Option<&Path>,
+    max_overfull: Option<f32>,
 ) -> Result<()> {
     if values_paths.is_empty() {
         anyhow::bail!("--out requires --values")
@@ -113,7 +115,9 @@ pub fn execute(
 
     let build_dir = tempfile::tempdir()?;
     println!("  ◇ temp: {}", build_dir.path().display());
-    let pdf_src = build::compile_project(&project, build_dir.path(), verbose, epoch)?;
+    let log_path = build::resolve_log_path(log, pdf_dest.with_extension("log"));
+    let (pdf_src, warnings, _raw) =
+        build::compile_project(&project, build_dir.path(), verbose, epoch, &log_path)?;
 
     if let Some(parent) = pdf_dest.parent() {
         if !parent.as_os_str().is_empty() {
@@ -123,6 +127,8 @@ pub fn execute(
     }
     std::fs::copy(&pdf_src, &pdf_dest)?;
     println!("wrote {}", pdf_dest.display());
+
+    build::enforce_max_overfull(&warnings, max_overfull)?;
 
     Ok(())
 }
@@ -507,7 +513,7 @@ entry = "main.tex"
 
     /// Run `execute` with a single `--values` file, mirroring the one-file CLI.
     fn execute_one(values_file: &str, out: Option<&Path>) -> Result<()> {
-        execute(&[PathBuf::from(values_file)], out, false, None)
+        execute(&[PathBuf::from(values_file)], out, false, None, None, None)
     }
 
     fn tectonic_available() -> bool {
@@ -572,7 +578,10 @@ entry = "main.tex"
             return;
         };
         let (_dir, folder) = both_fixture();
-        run_in(&folder, || super::super::build::execute(false, None)).unwrap();
+        run_in(&folder, || {
+            super::super::build::execute(false, None, None, None)
+        })
+        .unwrap();
         let pdf = folder.join("both-doc.pdf");
         assert!(pdf.exists(), "plain build names the PDF after the title");
         let text = crate::pdftext::extract_text(&pdf).unwrap();
@@ -602,9 +611,11 @@ entry = "main.tex"
     #[test]
     fn template_only_fails_without_values_naming_the_flag() {
         let (_dir, folder) = template_only_fixture();
-        let err = run_in(&folder, || super::super::build::execute(false, None))
-            .unwrap_err()
-            .to_string();
+        let err = run_in(&folder, || {
+            super::super::build::execute(false, None, None, None)
+        })
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("--values"), "{err}");
     }
 
@@ -677,9 +688,11 @@ entry = "main.tex"
         std::fs::write(folder.join("client.toml"), "client = \"Acme\"\nbogus = 1\n").unwrap();
         let lab = PathBuf::from("lab.toml");
         let client = PathBuf::from("client.toml");
-        let err = run_in(&folder, || execute(&[lab, client], None, false, None))
-            .unwrap_err()
-            .to_string();
+        let err = run_in(&folder, || {
+            execute(&[lab, client], None, false, None, None, None)
+        })
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("bogus"), "{err}");
         assert!(
             err.contains("client.toml"),
@@ -694,9 +707,11 @@ entry = "main.tex"
         std::fs::write(folder.join("client.toml"), "version = \"3.0\"\n").unwrap();
         let lab = PathBuf::from("lab.toml");
         let client = PathBuf::from("client.toml");
-        let err = run_in(&folder, || execute(&[lab, client], None, false, None))
-            .unwrap_err()
-            .to_string();
+        let err = run_in(&folder, || {
+            execute(&[lab, client], None, false, None, None, None)
+        })
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("client"), "{err}");
         assert!(err.contains("lab.toml"), "{err}");
         assert!(err.contains("client.toml"), "{err}");

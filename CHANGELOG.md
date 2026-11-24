@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- `texforge build` keeps the engine log at `build/<entry-stem>.log` (`--log <path>` overrides it), reports overfull boxes wider than 1pt by file and line, and `--max-overfull <pt>` fails after writing the PDF when any box exceeds the value.
 - `texforge new -t` now also takes a path to a local template folder (`./my-template`), used in place without installing; the `template` recorded in `project.toml` is the folder manifest's `id`.
 - In the `ink` code-listing style, gutter line numbers now render in grey so they do not compete with the code.
 - The capabilities example regained the Mermaid preset comparison and got richer Graphviz, D2 and TikZ figures.

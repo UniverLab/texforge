@@ -53,6 +53,16 @@ enum Commands {
         /// Print every engine warning instead of a per-file summary
         #[arg(long)]
         verbose: bool,
+        /// Write the engine's complete log text here (relative paths
+        /// resolve against the current directory); default
+        /// `build/<entry-stem>.log` (for `--values`, `<pdf-stem>.log`
+        /// next to the PDF)
+        #[arg(long, value_name = "PATH")]
+        log: Option<PathBuf>,
+        /// Fail (after writing the PDF) when any overfull box exceeds
+        /// this width in points
+        #[arg(long, value_name = "PT")]
+        max_overfull: Option<f32>,
         /// Build reproducibly: pin `SOURCE_DATE_EPOCH` so identical source plus
         /// the same Tectonic version yields an identical PDF. An optional epoch
         /// (seconds since the Unix epoch) overrides the fixed default.
@@ -307,25 +317,21 @@ impl Cli {
                 preview,
                 preview_page,
                 preview_out,
-            } => {
-                if !values.is_empty() {
-                    return commands::build_template::execute(
-                        values.as_slice(),
-                        out.as_deref(),
-                        verbose,
-                        reproducible,
-                    );
-                }
-                if watch {
-                    let live_preview = preview.then_some(commands::build::LivePreview {
-                        page: preview_page,
-                        out: preview_out,
-                    });
-                    commands::build::watch(delay, verbose, reproducible, live_preview.as_ref())
-                } else {
-                    commands::build::execute(verbose, reproducible)
-                }
-            }
+                log,
+                max_overfull,
+            } => execute_build(BuildRequest {
+                values,
+                out,
+                watch,
+                delay,
+                verbose,
+                reproducible,
+                preview,
+                preview_page,
+                preview_out,
+                log,
+                max_overfull,
+            }),
             Commands::Fmt { check } => commands::fmt::execute(check),
             Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
             Commands::Stats { json, by } => commands::stats::execute(json, by),
@@ -393,6 +399,59 @@ impl Cli {
                 (None, Some(_)) => anyhow::bail!("Cannot set value without a key"),
             },
         }
+    }
+}
+
+/// The `texforge build` flags as one value, so [`Cli::execute`] stays
+/// under the line-count lint while the plain, watch and template-folder
+/// builds each keep their own call shape.
+struct BuildRequest {
+    values: Vec<PathBuf>,
+    out: Option<PathBuf>,
+    watch: bool,
+    delay: u64,
+    verbose: bool,
+    reproducible: Option<Option<u64>>,
+    preview: bool,
+    preview_page: usize,
+    preview_out: Option<PathBuf>,
+    log: Option<PathBuf>,
+    max_overfull: Option<f32>,
+}
+
+/// Dispatch the `texforge build` subcommands (kept out of [`Cli::execute`]
+/// so it stays under the line-count lint).
+fn execute_build(req: BuildRequest) -> Result<()> {
+    if !req.values.is_empty() {
+        return commands::build_template::execute(
+            req.values.as_slice(),
+            req.out.as_deref(),
+            req.verbose,
+            req.reproducible,
+            req.log.as_deref(),
+            req.max_overfull,
+        );
+    }
+    if req.watch {
+        let live_preview = req.preview.then_some(commands::build::LivePreview {
+            page: req.preview_page,
+            out: req.preview_out,
+        });
+        commands::build::watch(
+            req.delay,
+            req.verbose,
+            req.reproducible,
+            live_preview.as_ref(),
+            req.log.as_deref(),
+            req.max_overfull,
+        )
+    } else {
+        commands::build::execute(
+            req.verbose,
+            req.reproducible,
+            req.log.as_deref(),
+            req.max_overfull,
+        )
     }
 }
 

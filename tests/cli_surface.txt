@@ -39,6 +39,8 @@ command template validate
 command uninstall
 command update
 flag build --delay value
+flag build --log value
+flag build --max-overfull value
 flag build --out value
 flag build --preview bool
 flag build --preview-out value

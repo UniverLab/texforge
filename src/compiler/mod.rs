@@ -1,5 +1,6 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
+pub(crate) mod log;
 pub(crate) mod tectonic_version;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,7 +36,7 @@ pub fn compile(
     verbose: bool,
     epoch: Option<u64>,
     line_map: &LineMap,
-) -> Result<Vec<CompileWarning>> {
+) -> Result<(Vec<CompileWarning>, String)> {
     let tectonic = find_tectonic()?;
 
     let output = tectonic_command(&tectonic, root, entry, epoch)
@@ -51,13 +52,17 @@ pub fn compile(
 
     if output.status.success() {
         print_warnings(&warnings, verbose);
-        return Ok(warnings);
+        return Ok((warnings, raw));
     }
 
     let mut errors = parse_errors(&raw);
     remap_errors(&mut errors, line_map);
     if errors.is_empty() {
-        anyhow::bail!("Compilation failed:\n{}", raw.trim());
+        return Err(CompileFailure {
+            message: format!("Compilation failed:\n{}", raw.trim()),
+            raw,
+        }
+        .into());
     }
 
     let mut msg = String::from("Compilation failed:\n\n");
@@ -67,7 +72,11 @@ pub fn compile(
             e.file, e.line, e.message
         ));
     }
-    anyhow::bail!("{}", msg.trim());
+    Err(CompileFailure {
+        message: msg.trim().to_string(),
+        raw,
+    }
+    .into())
 }
 
 /// Rewrite one parsed `file:line` location through the build-copy line
@@ -128,6 +137,22 @@ struct CompileError {
     message: String,
 }
 
+/// A failed engine run: the display message plus the engine's complete log,
+/// so callers can persist the log even when compilation fails.
+#[derive(Debug)]
+pub(crate) struct CompileFailure {
+    message: String,
+    pub(crate) raw: String,
+}
+
+impl std::fmt::Display for CompileFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CompileFailure {}
+
 /// Parse tectonic/TeX error output into structured errors.
 fn parse_errors(raw: &str) -> Vec<CompileError> {
     let mut errors = Vec::new();
@@ -181,13 +206,16 @@ fn parse_tectonic_error(rest: &str, errors: &mut Vec<CompileError>) {
 }
 
 /// A single TeX/Tectonic warning parsed from compiler output.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct CompileWarning {
     file: String,
     line: usize,
     severity: Severity,
     kind: &'static str,
     message: String,
+    /// The `N` in `Overfull \hbox (Npt too wide)`; `None` for every other
+    /// warning kind. Only hbox warnings carry a width by construction.
+    width_pt: Option<f32>,
 }
 
 /// Recognized warning shapes: (substring fragment, canonical kind name).
@@ -212,6 +240,16 @@ fn warning_kind(line: &str) -> Option<&'static str> {
         return Some("package warning");
     }
     None
+}
+
+/// The overfull width for a classified warning: only `overfull hbox`
+/// warnings carry one, parsed from `Overfull \hbox (Npt too wide)`.
+fn warning_width(kind: &str, message: &str) -> Option<f32> {
+    if kind == "overfull hbox" {
+        log::parse_width(message)
+    } else {
+        None
+    }
 }
 
 /// Pull a line number out of TeX warning markers: `at lines 41--42` and
@@ -277,12 +315,14 @@ fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
         if let Some(rest) = trimmed.strip_prefix("warning: ") {
             if let Some((file, line, message)) = parse_tectonic_warning_prefix(rest) {
                 if let Some(kind) = warning_kind(&message) {
+                    let width_pt = warning_width(kind, &message);
                     warnings.push(CompileWarning {
                         file,
                         line,
                         severity: Severity::Warning,
                         kind,
                         message,
+                        width_pt,
                     });
                     continue;
                 }
@@ -291,12 +331,14 @@ fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
         let Some(kind) = warning_kind(trimmed) else {
             continue;
         };
+        let width_pt = warning_width(kind, trimmed);
         warnings.push(CompileWarning {
             file: file_stack.last().cloned().unwrap_or_default(),
             line: extract_line(trimmed),
             severity: Severity::Warning,
             kind,
             message: trimmed.to_string(),
+            width_pt,
         });
     }
 
@@ -805,6 +847,7 @@ mod tests {
         assert_eq!(warnings[0].severity, Severity::Warning);
         assert_eq!(warnings[0].kind, "underfull hbox");
         assert!(warnings[0].message.contains("badness 1856"));
+        assert_eq!(warnings[0].width_pt, None);
     }
 
     #[test]
@@ -815,6 +858,7 @@ mod tests {
         assert_eq!(warnings[0].kind, "overfull hbox");
         assert_eq!(warnings[0].line, 41);
         assert_eq!(warnings[0].file, "");
+        assert_eq!(warnings[0].width_pt, Some(12.0));
     }
 
     #[test]
@@ -881,6 +925,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "underfull hbox",
                 message: "Underfull \\hbox (badness 1856)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "main.tex".into(),
@@ -888,6 +933,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "underfull hbox",
                 message: "Underfull \\hbox (badness 2000)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "skills.tex".into(),
@@ -895,6 +941,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "package warning",
                 message: "Package hyperref Warning: ...".into(),
+                width_pt: None,
             },
         ];
         let out = format_warnings(&warnings, false);
@@ -911,6 +958,7 @@ mod tests {
             severity: Severity::Warning,
             kind: "underfull hbox",
             message: "Underfull \\hbox (badness 1856) in paragraph at lines 58--59".into(),
+            width_pt: None,
         }];
         let out = format_warnings(&warnings, true);
         assert!(out.contains("WARNING [main.tex:58] underfull hbox:"));
@@ -933,6 +981,7 @@ mod tests {
             severity: Severity::Warning,
             kind: "engine warning",
             message: "something engine-wide happened".into(),
+            width_pt: None,
         }];
         let out = format_warnings(&warnings, false);
         assert_eq!(out, "WARNINGS (1)\n  main.tex: 1 engine warning\n");
@@ -948,6 +997,7 @@ mod tests {
         assert_eq!(warnings[0].line, 8);
         assert_eq!(warnings[0].kind, "overfull hbox");
         assert!(warnings[0].message.contains("Overfull"));
+        assert_eq!(warnings[0].width_pt, Some(12.0));
     }
 
     #[test]
@@ -977,6 +1027,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull \\hbox (12.0pt too wide)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "main.tex".into(),
@@ -984,6 +1035,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull \\hbox (12.0pt too wide)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "main.tex".into(),
@@ -991,6 +1043,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull \\hbox (9.0pt too wide)".into(),
+                width_pt: None,
             },
         ];
         let out = format_warnings(&warnings, false);
@@ -1033,7 +1086,7 @@ mod tests {
             crate::highlight::Settings::default(),
         )
         .unwrap();
-        let warnings = compile(dir.path(), "main.tex", false, None, &map).unwrap();
+        let (warnings, _raw) = compile(dir.path(), "main.tex", false, None, &map).unwrap();
         let overfull: Vec<_> = warnings
             .iter()
             .filter(|w| w.kind == "overfull hbox")
@@ -1086,6 +1139,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "other.tex".into(),
@@ -1093,6 +1147,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull".into(),
+                width_pt: None,
             },
         ];
         remap_warnings(&mut warnings, &map);
@@ -1105,6 +1160,7 @@ mod tests {
             severity: Severity::Warning,
             kind: "overfull hbox",
             message: "Overfull".into(),
+            width_pt: None,
         }];
         remap_warnings(&mut warnings, &LineMap::default());
         assert_eq!(warnings[0].line, 3);

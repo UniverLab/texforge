@@ -107,6 +107,7 @@ Compile the project to PDF.
 ```
 texforge build [--watch] [--delay <s>] [--verbose] [--reproducible[=<epoch>]]
   [--preview] [--preview-page <n>] [--preview-out <path>]
+  [--log <path>] [--max-overfull <pt>]
 texforge build --values <file>... [--out <path>]
 ```
 
@@ -121,6 +122,8 @@ texforge build --values <file>... [--out <path>]
 | `--preview-out` | fixed path for the preview PNG (requires `--preview`) | `preview.png` |
 | `--values` | repeatable path to a `.toml`, `.yaml` or `.yml` file filling the folder's template placeholders (requires a `template.toml`; conflicts with `--watch`); later files win key by key | none |
 | `--out` | PDF output path (requires `--values`; relative paths resolve against the current directory) | `<folder-name>.pdf` in the current directory |
+| `--log` | engine log path (relative paths resolve against the current directory) | `build/<entry-stem>.log` (`<pdf-stem>.log` next to the PDF for `--values`) |
+| `--max-overfull` | fail (after writing the PDF) when any overfull box exceeds this width in points | none |
 
 A folder with a `template.toml` builds to a filled PDF with `--values`;
 without `--values` the build is a plain project build, and a folder with
