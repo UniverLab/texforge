@@ -19,6 +19,7 @@ mod fonts;
 mod latex_escapes;
 mod preamble;
 pub mod style;
+mod svg_include;
 use fonts::{shared_fontdb, shared_svg2pdf_fontdb};
 use style::DiagramStyle;
 
@@ -52,6 +53,12 @@ pub fn process(
         let (processed, file_uses_h) =
             render_diagrams_facts(&content, &diagrams_dir, default_style)
                 .with_context(|| format!("Failed to render diagrams in {}", src.display()))?;
+        // SVG artwork included via `\includegraphics` is converted to
+        // vector PDF the same way diagram figures are. Only files reachable
+        // through `\input` are visited (see `collect_tex_files`);
+        // `\include` is not followed and is out of scope.
+        let processed = svg_include::rewrite_svg_includes(&processed, root, build_dir, src)
+            .with_context(|| format!("Failed to rewrite SVG includes in {}", src.display()))?;
         // Byte-compare: a replacement always changes the bytes (a
         // `\begin{mermaid}` tag can never equal a `figure` environment),
         // and a file without diagram blocks comes through untouched.
@@ -447,7 +454,7 @@ fn svg_to_pdf(svg: &str) -> Result<Vec<u8>> {
 ///
 /// Returns the encoded bytes alongside the extension actually produced, so
 /// callers can name the cached artefact accordingly.
-fn convert_svg_or_fallback(env: &str, svg: &str) -> Result<(Vec<u8>, &'static str)> {
+pub(super) fn convert_svg_or_fallback(env: &str, svg: &str) -> Result<(Vec<u8>, &'static str)> {
     match svg_to_pdf(svg) {
         Ok(pdf) => Ok((pdf, "pdf")),
         Err(e) => {

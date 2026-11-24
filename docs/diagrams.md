@@ -22,6 +22,31 @@ If a diagram's SVG can't be converted to PDF, texforge falls back to a
 rasterized PNG for that one diagram, prints a warning naming it, and the
 build still succeeds.
 
+## Including SVG files
+
+Your own SVG artwork needs no hand conversion: include it directly and the
+build converts it to vector PDF (with the same PNG fallback and warning as
+diagrams) before compilation. Your `.tex` files are never modified — the
+conversion happens in the `build/` copies.
+
+```latex
+\usepackage{graphicx}
+% ...
+\includegraphics[width=\linewidth]{figs/logo.svg}
+```
+
+An include counts as SVG when the path ends in `.svg`, or when it has no
+extension and `<project>/<path>.svg` exists while none of `<project>/<path>.pdf`,
+`.png`, `.jpg`, `.jpeg` or `.eps` exists (a bare `{figs/logo}` beside a
+`logo.pdf` keeps resolving to the PDF, exactly as LaTeX would). Other
+extensions (`.png`, `.jpg`, …) are never touched.
+
+Only files reachable from the entry through `\input` are rewritten;
+`\include` is not followed. Paths resolve against the project root —
+`\graphicspath` is not supported. SVG text is rendered with the same shared
+fonts as diagram figures, so labels stay selectable in the final PDF; a
+missing SVG file fails the build with `<file>:<line>: SVG not found: <path>`.
+
 ## Mermaid
 
 ```latex
