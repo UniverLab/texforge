@@ -184,6 +184,7 @@ texforge init
 | `texforge fmt` | Format .tex files |
 | `texforge fmt --check` | Check formatting without modifying |
 | `texforge check` | Lint without compiling (includes spell-check) |
+| `texforge bib check` | Verify DOIs and arXiv IDs in the `.bib` against Crossref and arXiv |
 | `texforge spell add <word>` | Add word to personal dictionary (default: global) |
 | `texforge spell list` | List personal dictionary words |
 | `texforge spell remove <word>` | Remove word from personal dictionary |
