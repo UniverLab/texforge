@@ -21,12 +21,13 @@ use crate::values_file;
 /// Top-level directories never staged into the temporary copy.
 const SKIPPED_DIRS: &[&str] = &[".git", "build", ".texforge"];
 
-/// Build the template folder in the current directory to a filled PDF.
+/// Build the template folder `dir` (default: current directory) to a filled PDF.
 ///
 /// `values_paths` holds every `--values` file in command-line order: they
 /// are read and merged key by key before validation, exactly as in
 /// `texforge new --values`; `out` overrides the PDF destination.
 pub fn execute(
+    dir: Option<&Path>,
     values_paths: &[PathBuf],
     out: Option<&Path>,
     verbose: bool,
@@ -37,18 +38,29 @@ pub fn execute(
     if values_paths.is_empty() {
         anyhow::bail!("--out requires --values")
     };
-    let root = std::env::current_dir()?;
+    let cwd = std::env::current_dir()?;
+    let root = dir.map(|d| cwd.join(d)).unwrap_or_else(|| cwd.clone());
+    let dir_label = dir.unwrap_or(&root);
+    if !root.is_dir() {
+        anyhow::bail!(
+            "Template folder not found or not a directory: {}",
+            dir_label.display()
+        );
+    }
     let root_canon = root
         .canonicalize()
-        .with_context(|| format!("Failed to resolve {}", root.display()))?;
+        .with_context(|| format!("Failed to resolve {}", dir_label.display()))?;
 
     let manifest_path = root.join("template.toml");
     if !manifest_path.exists() {
+        let where_label = dir
+            .map(|d| format!("'{}'", d.display()))
+            .unwrap_or_else(|| "the current folder".to_string());
         if root.join("project.toml").exists() {
-            anyhow::bail!("--values needs a template.toml in the current folder to fill");
+            anyhow::bail!("--values needs a template.toml in {where_label} to fill");
         }
         anyhow::bail!(
-            "--values needs a template.toml in the current folder to fill \
+            "--values needs a template.toml in {where_label} to fill \
              (no project.toml or template.toml found)"
         );
     }
@@ -83,12 +95,12 @@ pub fn execute(
     }
 
     // Resolve the PDF destination before staging or compiling.
-    let pdf_dest = resolve_pdf_dest(&root, &root_canon, out)?;
+    let pdf_dest = resolve_pdf_dest(&root_canon, &cwd, out)?;
 
     let stage = stage_rendered_copy(&root_canon, values_paths, &resolved)?;
 
     let config = if root.join("project.toml").exists() {
-        Project::load()?.config
+        Project::load_from(&root)?.config
     } else {
         ProjectConfig {
             document: DocumentConfig {
@@ -148,13 +160,13 @@ fn manifest_title(manifest: &TemplateManifest) -> String {
 /// the current directory too. The staged copy is what compiles, so the PDF
 /// written next to the sources never feeds back into a later build (`*.pdf`
 /// is skipped when staging).
-fn resolve_pdf_dest(root: &Path, root_canon: &Path, out: Option<&Path>) -> Result<PathBuf> {
+fn resolve_pdf_dest(root_canon: &Path, cwd: &Path, out: Option<&Path>) -> Result<PathBuf> {
     match out {
         Some(path) => {
             let absolute = if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                root.join(path)
+                cwd.join(path)
             };
             Ok(lexical_normalize(&absolute))
         }
@@ -164,9 +176,9 @@ fn resolve_pdf_dest(root: &Path, root_canon: &Path, out: Option<&Path>) -> Resul
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
             if folder.is_empty() {
-                anyhow::bail!("Cannot derive the PDF name from the current directory");
+                anyhow::bail!("Cannot derive the PDF name from the template folder");
             }
-            Ok(root.join(format!("{}.pdf", sanitize_filename(folder))))
+            Ok(cwd.join(format!("{}.pdf", sanitize_filename(folder))))
         }
     }
 }
@@ -391,24 +403,26 @@ mod tests {
     #[test]
     fn default_dest_is_cwd_and_relative_out_resolves_against_it() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("mutual-nda");
+        let root = dir.path().join("sub/mutual-nda");
+        let cwd = dir.path().join("caller");
         std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
         let root_canon = root.canonicalize().unwrap();
 
         assert_eq!(
-            resolve_pdf_dest(&root, &root_canon, None).unwrap(),
-            root.join("mutual-nda.pdf")
+            resolve_pdf_dest(&root_canon, &cwd, None).unwrap(),
+            cwd.join("mutual-nda.pdf")
         );
         assert_eq!(
-            resolve_pdf_dest(&root, &root_canon, Some(Path::new("/tmp/x/out.pdf"))).unwrap(),
+            resolve_pdf_dest(&root_canon, &cwd, Some(Path::new("/tmp/x/out.pdf"))).unwrap(),
             PathBuf::from("/tmp/x/out.pdf")
         );
         assert_eq!(
-            resolve_pdf_dest(&root, &root_canon, Some(Path::new("sub/../client.pdf"))).unwrap(),
-            root.join("client.pdf")
+            resolve_pdf_dest(&root_canon, &cwd, Some(Path::new("sub/../client.pdf"))).unwrap(),
+            cwd.join("client.pdf")
         );
         assert_eq!(
-            resolve_pdf_dest(&root, &root_canon, Some(Path::new("../client.pdf"))).unwrap(),
+            resolve_pdf_dest(&root_canon, &cwd, Some(Path::new("../client.pdf"))).unwrap(),
             dir.path().join("client.pdf")
         );
     }
@@ -513,7 +527,27 @@ entry = "main.tex"
 
     /// Run `execute` with a single `--values` file, mirroring the one-file CLI.
     fn execute_one(values_file: &str, out: Option<&Path>) -> Result<()> {
-        execute(&[PathBuf::from(values_file)], out, false, None, None, None)
+        execute(
+            None,
+            &[PathBuf::from(values_file)],
+            out,
+            false,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn execute_in(dir: Option<&Path>, values_file: &str, out: Option<&Path>) -> Result<()> {
+        execute(
+            dir,
+            &[PathBuf::from(values_file)],
+            out,
+            false,
+            None,
+            None,
+            None,
+        )
     }
 
     fn tectonic_available() -> bool {
@@ -689,7 +723,7 @@ entry = "main.tex"
         let lab = PathBuf::from("lab.toml");
         let client = PathBuf::from("client.toml");
         let err = run_in(&folder, || {
-            execute(&[lab, client], None, false, None, None, None)
+            execute(None, &[lab, client], None, false, None, None, None)
         })
         .unwrap_err()
         .to_string();
@@ -708,7 +742,7 @@ entry = "main.tex"
         let lab = PathBuf::from("lab.toml");
         let client = PathBuf::from("client.toml");
         let err = run_in(&folder, || {
-            execute(&[lab, client], None, false, None, None, None)
+            execute(None, &[lab, client], None, false, None, None, None)
         })
         .unwrap_err()
         .to_string();
@@ -766,5 +800,77 @@ entry = "main.tex"
             before,
             "the source folder must be byte-identical"
         );
+    }
+
+    #[test]
+    fn dir_builds_from_parent_to_cwd_and_leaves_dir_untouched() {
+        let Some(_tectonic) = tectonic_guard() else {
+            return;
+        };
+        let parent = tempfile::tempdir().unwrap();
+        let tpl = parent.path().join("sub/template");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(tpl.join("project.toml"), PROJECT_TOML).unwrap();
+        std::fs::write(tpl.join("template.toml"), TEMPLATE_TOML).unwrap();
+        std::fs::write(tpl.join("main.tex"), MAIN_TEX).unwrap();
+        std::fs::write(parent.path().join("v.toml"), "client = \"Acme\"\n").unwrap();
+
+        let before = snapshot(&tpl);
+        run_in(parent.path(), || {
+            execute_in(Some(Path::new("sub/template")), "v.toml", None)
+        })
+        .unwrap();
+        let default_pdf = parent.path().join("template.pdf");
+        assert!(default_pdf.exists(), "PDF must land in cwd, not DIR");
+        assert!(!tpl.join("template.pdf").exists());
+        assert_eq!(snapshot(&tpl), before, "DIR must remain untouched");
+        assert!(crate::pdftext::extract_text(&default_pdf)
+            .unwrap()
+            .contains("Acme"));
+
+        run_in(parent.path(), || {
+            execute_in(
+                Some(Path::new("sub/template")),
+                "v.toml",
+                Some(Path::new("custom.pdf")),
+            )
+        })
+        .unwrap();
+        assert!(parent.path().join("custom.pdf").exists());
+        assert_eq!(snapshot(&tpl), before);
+    }
+
+    #[test]
+    fn dir_dot_behaves_like_default() {
+        let Some(_tectonic) = tectonic_guard() else {
+            return;
+        };
+        let (_dir, folder) = template_only_fixture();
+        run_in(&folder, || {
+            execute_in(Some(Path::new(".")), "values.toml", None)
+        })
+        .unwrap();
+        assert!(folder.join("services-agreement.pdf").exists());
+    }
+
+    #[test]
+    fn missing_or_non_dir_fails_naming_it() {
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::write(parent.path().join("v.toml"), "client = \"Acme\"\n").unwrap();
+        std::fs::write(parent.path().join("not-a-dir.txt"), "hi").unwrap();
+
+        let missing_err = run_in(parent.path(), || {
+            execute_in(Some(Path::new("sub/missing")), "v.toml", None)
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(missing_err.contains("sub/missing"), "{missing_err}");
+
+        let file_err = run_in(parent.path(), || {
+            execute_in(Some(Path::new("not-a-dir.txt")), "v.toml", None)
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(file_err.contains("not-a-dir.txt"), "{file_err}");
     }
 }

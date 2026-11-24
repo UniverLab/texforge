@@ -121,11 +121,15 @@ impl Project {
 
     /// Load project from current directory.
     pub fn load() -> Result<Self> {
-        let root = std::env::current_dir()?;
+        Self::load_from(&std::env::current_dir()?)
+    }
+
+    /// Load project from an explicit root directory.
+    pub fn load_from(root: &Path) -> Result<Self> {
         let config_path = root.join("project.toml");
 
         if !config_path.exists() {
-            anyhow::bail!("No project.toml found in current directory");
+            anyhow::bail!("No project.toml found in {}", root.display());
         }
 
         let content = std::fs::read_to_string(&config_path)?;
@@ -135,7 +139,7 @@ impl Project {
         let config: ProjectConfig =
             toml::from_str(&content).map_err(|e| toml_error(&config_path, &content, &e))?;
 
-        Ok(Self::from_parts(root, config))
+        Ok(Self::from_parts(root.to_path_buf(), config))
     }
 }
 

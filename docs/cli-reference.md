@@ -135,7 +135,7 @@ Compile the project to PDF.
 texforge build [--watch] [--delay <s>] [--verbose] [--reproducible[=<epoch>]]
   [--preview] [--preview-page <n>] [--preview-out <path>]
   [--log <path>] [--max-overfull <pt>]
-texforge build --values <file>... [--out <path>]
+texforge build --values <file>... [--out <path>] [<dir>]
 ```
 
 | Flag | Value | Default |
@@ -153,9 +153,14 @@ texforge build --values <file>... [--out <path>]
 | `--max-overfull` | fail (after writing the PDF) when any overfull box exceeds this width in points | none |
 
 A folder with a `template.toml` builds to a filled PDF with `--values`;
-without `--values` the build is a plain project build, and a folder with
-only a `template.toml` fails telling you `--values` is needed. The flag is
-repeatable: files merge in order and a later file's value wins key by key.
+pass an optional `<dir>` to build a template folder from anywhere (only
+valid with `--values`; defaults to `.`). The PDF is written to the
+current directory as `<folder-name>.pdf` (not inside `<dir>`), and
+relative `--values` and `--out` paths resolve against the current
+directory. Without `--values` the build is a plain project build, and a
+folder with only a `template.toml` fails telling you `--values` is
+needed. The `--values` flag is repeatable: files merge in order and a
+later file's value wins key by key.
 
 Example:
 
@@ -163,6 +168,7 @@ Example:
 texforge build --watch --delay 5 --preview
 texforge build --values client.toml --out ../nda-acme.pdf
 texforge build --values lab.toml --values client.toml --out ../nda-acme.pdf
+texforge build --values client.toml templates/nda
 ```
 
 Exit codes: see the table.

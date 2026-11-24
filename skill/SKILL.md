@@ -121,7 +121,7 @@ Compila `main.tex` → PDF junto al proyecto (nombrado según el título). Los e
 
 Antes de compilar, intercepta entornos de diagramas y bloques `code`, los renderiza, y trabaja sobre copias en `build/` — los `.tex` originales nunca se modifican.
 
-En una carpeta con `template.toml`, `build --values cliente.toml [--out ../nombre.pdf]` rellena los placeholders en una copia temporal y escribe el PDF (por defecto `<carpeta>.pdf` en el directorio actual; `--out` elige otra ruta); sin `--values` compila como proyecto normal. `--values` es repetible también en `build`, con el último archivo ganando clave por clave.
+En una carpeta con `template.toml`, `build --values cliente.toml [--out ../nombre.pdf] [DIR]` rellena los placeholders en una copia temporal y escribe el PDF (por defecto `<carpeta>.pdf` en el directorio actual, no dentro de `DIR`; `--out` elige otra ruta; `DIR` por defecto es `.` y sólo es válido con `--values`); sin `--values` compila como proyecto normal. `--values` es repetible también en `build`, con el último archivo ganando clave por clave.
 
 #### `texforge build --watch`
 

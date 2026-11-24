@@ -60,9 +60,12 @@ builds straight to a filled PDF, without creating a project first:
 ```bash
 texforge build --values client.toml
 texforge build --values client.toml --out ../nda-acme.pdf
+texforge build --values client.toml templates/nda
 ```
 
-Placeholders are rendered into a temporary copy outside the folder, then the
+Pass an optional `DIR` after `--values <file>` to build a template folder
+from another directory (`DIR` defaults to `.` and is only valid with
+`--values`). Placeholders are rendered into a temporary copy outside the folder, then the
 normal pipeline runs on that copy: the folder itself is never modified and
 nothing is ever written inside it. Only `.tex` files are substituted, with
 the same rules as `texforge new`; every other file is copied byte-for-byte,
@@ -75,9 +78,9 @@ folder also has a `project.toml`, its title, entry, bibliography, highlight,
 diagrams and reproducible settings apply; with only a `template.toml`, the
 entry is `main.tex` and the title is the manifest's display name. The PDF
 lands at `--out`, or at `<folder-name>.pdf` in the current directory (where
-the command runs) when `--out` is omitted, and the run ends with
+the command runs, not inside `DIR`) when `--out` is omitted, and the run ends with
 `wrote <path>`; `--values` on a folder with no `template.toml` is an error.
-A relative `--out` resolves against the current directory too, so
+Relative `--values` and `--out` paths resolve against the current directory too, so
 `--out ../name.pdf` places the PDF next to the folder. No existing file of
 the folder is modified: the sources compile from a temporary copy, and
 `*.pdf` files are never staged, so a previous PDF does not feed back into

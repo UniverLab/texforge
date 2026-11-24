@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- `texforge build --values <file>... [DIR]` now accepts an optional template folder `DIR` (default `.`), writing the resulting PDF to the current directory rather than inside `DIR`.
 - `texforge pdf check` no longer reports LaTeX spacing lengths (`\vspace*{...}`, `\vskip`/`\hskip`/`\kern`/`\vglue`/`\hglue` unbraced glue) as missing source words; prose measurements like `3cm` are still checked.
 - `texforge preview` deletes stale `page-<n>.png` files from the output folder before rasterizing, so an old unpadded name never sits beside its zero-padded replacement.
 - `texforge build` keeps the engine log at `build/<entry-stem>.log` (`--log <path>` overrides it), reports overfull boxes wider than 1pt by file and line, and `--max-overfull <pt>` fails after writing the PDF when any box exceeds the value.

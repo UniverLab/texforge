@@ -199,14 +199,15 @@ from your configuration. Keep the file with the document and pass it back to
 
 A folder that already carries a `template.toml` — a reusable document such
 as a contract that is both a buildable project and an installable template —
-needs no `texforge new` step. Run from that folder:
+needs no `texforge new` step. Run from that folder (or pass its path as `DIR`):
 
 ```bash
 texforge build --values client.toml --out contract-2026.pdf
+texforge build --values client.toml path/to/template
 ```
 
 The placeholders render into a temporary copy and the PDF is written to the
-current directory (or to `--out`) without modifying any file of the folder; `--values` is repeatable here too, with later files
+current directory (not inside `DIR`, or to `--out`) without modifying any file of the folder; `--values` is repeatable here too, with later files
 winning key by key; see [Building](building.md#building-a-template-folder).
 
 ## Writing your own template

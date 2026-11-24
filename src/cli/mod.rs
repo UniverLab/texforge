@@ -35,13 +35,16 @@ enum Commands {
     },
     /// Compile project to PDF
     Build {
+        /// Template folder to build when `--values` is given (default: `.`)
+        #[arg(value_name = "DIR")]
+        dir: Option<PathBuf>,
         /// Fill template placeholders from a .toml, .yaml or .yml file
         /// (only on a folder with a template.toml; staged to a temp copy)
         /// (repeatable; later files win key by key)
         #[arg(long, value_name = "FILE", conflicts_with = "watch")]
         values: Vec<PathBuf>,
         /// PDF output path (requires --values; default: <folder-name>.pdf
-        /// in the parent directory)
+        /// in the current directory)
         #[arg(long, value_name = "PATH", requires = "values")]
         out: Option<PathBuf>,
         /// Watch for file changes and rebuild automatically
@@ -308,6 +311,7 @@ impl Cli {
                 values,
             } => commands::new::execute(&name, template.as_deref(), values.as_slice()),
             Commands::Build {
+                dir,
                 values,
                 out,
                 watch,
@@ -320,6 +324,7 @@ impl Cli {
                 log,
                 max_overfull,
             } => execute_build(BuildRequest {
+                dir,
                 values,
                 out,
                 watch,
@@ -406,6 +411,7 @@ impl Cli {
 /// under the line-count lint while the plain, watch and template-folder
 /// builds each keep their own call shape.
 struct BuildRequest {
+    dir: Option<PathBuf>,
     values: Vec<PathBuf>,
     out: Option<PathBuf>,
     watch: bool,
@@ -424,6 +430,7 @@ struct BuildRequest {
 fn execute_build(req: BuildRequest) -> Result<()> {
     if !req.values.is_empty() {
         return commands::build_template::execute(
+            req.dir.as_deref(),
             req.values.as_slice(),
             req.out.as_deref(),
             req.verbose,
@@ -431,6 +438,9 @@ fn execute_build(req: BuildRequest) -> Result<()> {
             req.log.as_deref(),
             req.max_overfull,
         );
+    }
+    if req.dir.is_some() {
+        anyhow::bail!("`DIR` is only valid with `--values`");
     }
     if req.watch {
         let live_preview = req.preview.then_some(commands::build::LivePreview {
@@ -673,5 +683,26 @@ mod tests {
         assert_eq!(update_exit_code(false, 0), None, "plain update, done");
         assert_eq!(update_exit_code(false, 1), Some(1), "install phase failed");
         assert_eq!(update_exit_code(false, 2), Some(2), "check failed");
+    }
+
+    #[test]
+    fn build_dir_without_values_fails() {
+        let cli = Cli::try_parse_from(["texforge", "build", "templates/nda"]).unwrap();
+        let err = cli.execute().unwrap_err().to_string();
+        assert!(err.contains("--values"), "{err}");
+        assert!(err.contains("DIR"), "{err}");
+    }
+
+    #[test]
+    fn build_accepts_values_and_dir() {
+        let cli =
+            Cli::try_parse_from(["texforge", "build", "--values", "v.toml", "sub/tpl"]).unwrap();
+        match cli.command {
+            Commands::Build { dir, values, .. } => {
+                assert_eq!(dir, Some(std::path::PathBuf::from("sub/tpl")));
+                assert_eq!(values, vec![std::path::PathBuf::from("v.toml")]);
+            }
+            _ => panic!("`texforge build` must parse into Commands::Build"),
+        }
     }
 }
