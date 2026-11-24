@@ -6,11 +6,12 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::manifest::TemplateManifest;
-use crate::placeholders::PlaceholderResolver;
+use crate::placeholders::{PlaceholderOrigin, PlaceholderResolver};
 use crate::templates;
 use crate::values_file;
 
 use super::new_local;
+use super::new_origins;
 
 /// Resolve `-t` against installed templates plus every configured remote
 /// source: a bare name offered by more than one source fails naming every
@@ -107,7 +108,8 @@ fn create_from_files(
     cli_args
         .entry("title".to_string())
         .or_insert_with(|| name.to_string());
-    let values = resolve_placeholder_values(files, cli_args, project_dir);
+    let (values, value_origins) =
+        resolve_placeholder_values_with_origins(files, cli_args, project_dir);
 
     // A required placeholder with no value fails generation instead of leaving
     // a raw `{{name}}` in the project. Remove the directory this run created.
@@ -123,6 +125,11 @@ fn create_from_files(
             .join("\n");
         anyhow::bail!("Required placeholders have no value:\n{list}");
     }
+
+    // Say where every value came from before writing files: `--values` keys
+    // are the user's explicit input and stay silent (they reach the resolver
+    // merged into `cli_args`, so the exclusion needs this separate map).
+    new_origins::print_origins(manifest.as_ref(), &values, &value_origins, &origins);
 
     write_project_files(files, &values, project_dir)?;
 
@@ -302,19 +309,31 @@ pub(crate) fn resolve_placeholder_values(
     cli_args: HashMap<String, String>,
     project_dir: &Path,
 ) -> HashMap<String, String> {
+    resolve_placeholder_values_with_origins(files, cli_args, project_dir).0
+}
+
+/// Same resolution as [`resolve_placeholder_values`], also returning one
+/// [`PlaceholderOrigin`] per resolved placeholder for the origin report.
+pub(crate) fn resolve_placeholder_values_with_origins(
+    files: &HashMap<String, Vec<u8>>,
+    cli_args: HashMap<String, String>,
+    project_dir: &Path,
+) -> (HashMap<String, String>, HashMap<String, PlaceholderOrigin>) {
     let mut values = HashMap::new();
+    let mut origins = HashMap::new();
 
     let Some(manifest) = template_manifest(files) else {
-        return values;
+        return (values, origins);
     };
 
     let resolver = PlaceholderResolver::new_in(cli_args, project_dir);
     for ph in &manifest.placeholders {
-        if let Ok(Some(value)) = resolver.resolve(ph) {
+        if let Ok(Some((value, origin))) = resolver.resolve_with_origin(ph) {
             values.insert(ph.name.clone(), value);
+            origins.insert(ph.name.clone(), origin);
         }
     }
-    values
+    (values, origins)
 }
 
 /// Replace `{{name}}` tokens with resolved values. Unresolved non-identity

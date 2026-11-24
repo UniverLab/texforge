@@ -10,6 +10,7 @@ pub mod fmt;
 pub mod init;
 pub mod new;
 pub mod new_local;
+pub mod new_origins;
 pub mod outline;
 pub mod pdf;
 pub mod preview;

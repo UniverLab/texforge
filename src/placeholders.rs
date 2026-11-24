@@ -16,6 +16,32 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Where a resolved placeholder value came from in the precedence chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaceholderOrigin {
+    /// Command-line arguments (including values merged in from `--values` files).
+    Cli,
+    /// Project config (`./.texforge/config.toml`).
+    ProjectConfig,
+    /// User config; carries the real [`crate::config::config_file_path`] value.
+    UserConfig(PathBuf),
+    /// The template default; `via` holds one entry per `{{user.name}}`,
+    /// `{{user.email}}` / `{{institution.name}}` token in the default, in
+    /// order of appearance (empty when the default holds no such token).
+    TemplateDefault { via: Vec<InterpolationOrigin> },
+}
+
+/// Which source supplied one identity interpolation inside a template default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterpolationOrigin {
+    /// The user config file at this path; never hardcoded.
+    UserConfig(PathBuf),
+    /// `git config --get <key>` in the target directory.
+    Git(String),
+    /// Neither the user config nor git had it: resolved to the empty string.
+    Empty,
+}
+
 /// Placeholder resolver with precedence chain
 pub struct PlaceholderResolver {
     /// Values from CLI (highest priority)
@@ -52,27 +78,40 @@ impl PlaceholderResolver {
     /// Resolve a placeholder value using the 5-level precedence chain
     /// Returns None if not found, Err if resolution fails
     pub fn resolve(&self, placeholder: &Placeholder) -> Result<Option<String>> {
+        Ok(self
+            .resolve_with_origin(placeholder)?
+            .map(|(value, _)| value))
+    }
+
+    /// Same chain as [`Self::resolve`], also reporting where each value came
+    /// from. `TemplateDefault.via` holds one entry per identity token in the
+    /// default, in order of appearance. Values are identical to `resolve`.
+    pub fn resolve_with_origin(
+        &self,
+        placeholder: &Placeholder,
+    ) -> Result<Option<(String, PlaceholderOrigin)>> {
         // 1. Check CLI arguments first
         if let Some(value) = self.cli_args.get(&placeholder.name) {
-            return Ok(Some(value.clone()));
+            return Ok(Some((value.clone(), PlaceholderOrigin::Cli)));
         }
 
         // 2. Check project config
         if let Some(value) = self.project_config.get(&placeholder.name) {
-            return Ok(Some(value.clone()));
+            return Ok(Some((value.clone(), PlaceholderOrigin::ProjectConfig)));
         }
 
         // 3. Check user config
         if let Some(user_cfg) = &self.user_config {
             if let Some(value) = self.resolve_from_user_config(user_cfg, &placeholder.name) {
-                return Ok(Some(value));
+                let path = config::config_file_path().unwrap_or_default();
+                return Ok(Some((value, PlaceholderOrigin::UserConfig(path))));
             }
         }
 
         // 4. Check template default
         if let Some(default) = &placeholder.default {
-            let resolved = self.resolve_interpolations(default)?;
-            return Ok(Some(resolved));
+            let (resolved, via) = self.resolve_interpolations_with_origins(default)?;
+            return Ok(Some((resolved, PlaceholderOrigin::TemplateDefault { via })));
         }
 
         // If required and not found, error (caller should prompt)
@@ -124,44 +163,92 @@ impl PlaceholderResolver {
     /// empty string, so no raw `{{user.*}}` / `{{institution.*}}` token
     /// survives into a generated file.
     fn resolve_interpolations(&self, text: &str) -> Result<String> {
-        let mut result = text.to_string();
+        Ok(self.resolve_interpolations_with_origins(text)?.0)
+    }
 
-        // {{user.name}}
-        if result.contains("{{user.name}}") {
-            let name = self
-                .user_config
-                .as_ref()
-                .and_then(|cfg| cfg.user.name.clone())
-                .filter(|value| !value.is_empty())
-                .or_else(|| git_config_value(&self.target_dir, "user.name"))
-                .unwrap_or_default();
-            result = result.replace("{{user.name}}", &name);
-        }
-
-        // {{user.email}}
-        if result.contains("{{user.email}}") {
-            let email = self
-                .user_config
-                .as_ref()
-                .and_then(|cfg| cfg.user.email.clone())
-                .filter(|value| !value.is_empty())
-                .or_else(|| git_config_value(&self.target_dir, "user.email"))
-                .unwrap_or_default();
-            result = result.replace("{{user.email}}", &email);
-        }
-
-        // {{institution.name}} — config only, no git fallback
-        if result.contains("{{institution.name}}") {
-            let name = self
+    /// Same interpolation as [`Self::resolve_interpolations`], also
+    /// reporting one [`InterpolationOrigin`] per identity token in `text`,
+    /// in order of appearance. The returned text is identical.
+    fn resolve_interpolations_with_origins(
+        &self,
+        text: &str,
+    ) -> Result<(String, Vec<InterpolationOrigin>)> {
+        // `{{user.name}}` / `{{user.email}}`: non-empty config wins, then the
+        // git fallback in the target directory, then the empty string.
+        // Each kind is computed only when its token is present, exactly like
+        // before, so no git subprocess runs for text without the token.
+        let name = text.contains("{{user.name}}").then(|| {
+            self.identity_value(
+                self.user_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.user.name.clone())
+                    .filter(|value| !value.is_empty()),
+                "user.name",
+            )
+        });
+        let email = text.contains("{{user.email}}").then(|| {
+            self.identity_value(
+                self.user_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.user.email.clone())
+                    .filter(|value| !value.is_empty()),
+                "user.email",
+            )
+        });
+        // `{{institution.name}}` — config only, no git fallback.
+        let institution = text.contains("{{institution.name}}").then(|| {
+            match self
                 .user_config
                 .as_ref()
                 .and_then(|cfg| cfg.institution.name.clone())
                 .filter(|value| !value.is_empty())
-                .unwrap_or_default();
-            result = result.replace("{{institution.name}}", &name);
+            {
+                Some(value) => {
+                    let path = config::config_file_path().unwrap_or_default();
+                    (value, InterpolationOrigin::UserConfig(path))
+                }
+                None => (String::new(), InterpolationOrigin::Empty),
+            }
+        });
+
+        let mut result = text.to_string();
+        if let Some((value, _)) = &name {
+            result = result.replace("{{user.name}}", value);
+        }
+        if let Some((value, _)) = &email {
+            result = result.replace("{{user.email}}", value);
+        }
+        if let Some((value, _)) = &institution {
+            result = result.replace("{{institution.name}}", value);
         }
 
-        Ok(clear_unresolved_identities(&result))
+        let via = interpolation_tokens(text)
+            .into_iter()
+            .map(|token| match token {
+                "{{user.name}}" => name.clone().map(|(_, origin)| origin),
+                "{{user.email}}" => email.clone().map(|(_, origin)| origin),
+                _ => institution.clone().map(|(_, origin)| origin),
+            })
+            .map(|origin| origin.expect("token listed from text always computed"))
+            .collect();
+        Ok((clear_unresolved_identities(&result), via))
+    }
+
+    /// Value and origin for one git-backed identity field: the config value
+    /// when non-empty, else `git config --get <key>`, else the empty string.
+    fn identity_value(
+        &self,
+        configured: Option<String>,
+        key: &str,
+    ) -> (String, InterpolationOrigin) {
+        if let Some(value) = configured {
+            let path = config::config_file_path().unwrap_or_default();
+            return (value, InterpolationOrigin::UserConfig(path));
+        }
+        if let Some(value) = git_config_value(&self.target_dir, key) {
+            return (value, InterpolationOrigin::Git(key.to_string()));
+        }
+        (String::new(), InterpolationOrigin::Empty)
     }
 
     /// Extract value from user config by placeholder name (convention: section.key)
@@ -207,6 +294,24 @@ impl PlaceholderResolver {
 /// entry is treated as "not set" everywhere in the resolution chain.
 fn non_empty(value: &Option<String>) -> Option<&String> {
     value.as_ref().filter(|v| !v.is_empty())
+}
+
+/// Every `{{user.name}}`, `{{user.email}}` / `{{institution.name}}` token a
+/// template default contains, in order of appearance (one entry per
+/// occurrence). The report zips this with the `via` list, which is why the
+/// origin enums carry no token name of their own.
+pub(crate) fn interpolation_tokens(default: &str) -> Vec<&str> {
+    const KINDS: [&str; 3] = ["{{user.name}}", "{{user.email}}", "{{institution.name}}"];
+    let mut found: Vec<(usize, &str)> = Vec::new();
+    for kind in KINDS {
+        let mut start = 0;
+        while let Some(pos) = default[start..].find(kind) {
+            found.push((start + pos, kind));
+            start += pos + kind.len();
+        }
+    }
+    found.sort_by_key(|(pos, _)| *pos);
+    found.into_iter().map(|(_, kind)| kind).collect()
 }
 
 /// `git config --get <key>` run in `dir`. Returns `None` when git is not
@@ -819,5 +924,252 @@ mod tests {
         let ph = make_placeholder("title", true);
         let result = resolver.resolve(&ph).unwrap();
         assert_eq!(result, Some("CLI Value".to_string()));
+    }
+
+    /// A default `{{user.name}}` resolved from a temp user config reports
+    /// `UserConfig` with exactly the `config_file_path()` value in `via`.
+    #[test]
+    fn test_origin_user_config_with_exact_path() {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().unwrap();
+        // Declared after the lock: locals drop in reverse declaration order,
+        // so the environment is restored while ENV_LOCK is still held.
+        let _restore = crate::test_sync::EnvGuard::capture(&[
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let empty_git_config = tmp.path().join("empty.gitconfig");
+        std::fs::write(&empty_git_config, "").unwrap();
+        std::env::set_var("GIT_CONFIG_GLOBAL", &empty_git_config);
+        std::env::set_var("GIT_CONFIG_SYSTEM", &empty_git_config);
+        let cfg_dir = tmp.path().join("texforge");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            "[user]\nname = \"Alice\"\nemail = \"alice@example.com\"\n\n[institution]\nname = \"MIT\"\n",
+        )
+        .unwrap();
+        let expected_path = crate::config::config_file_path().unwrap();
+
+        let resolver = PlaceholderResolver::new_in(HashMap::new(), tmp.path());
+
+        // Direct identity placeholder: the config author wins.
+        let author = make_placeholder("author", false);
+        assert_eq!(
+            resolver.resolve_with_origin(&author).unwrap(),
+            Some((
+                "Alice".to_string(),
+                PlaceholderOrigin::UserConfig(expected_path.clone())
+            ))
+        );
+        // `resolve` returns exactly the same value.
+        assert_eq!(
+            resolver.resolve(&author).unwrap(),
+            Some("Alice".to_string())
+        );
+
+        // Interpolated default: one `via` entry per token, in appearance
+        // order, each carrying that exact path.
+        let mut ph = make_placeholder("byline", false);
+        ph.default = Some("{{user.email}} / {{user.name}} / {{institution.name}}".to_string());
+        let via_path = PlaceholderOrigin::UserConfig(expected_path);
+        assert_eq!(
+            resolver.resolve_with_origin(&ph).unwrap(),
+            Some((
+                "alice@example.com / Alice / MIT".to_string(),
+                PlaceholderOrigin::TemplateDefault {
+                    via: vec![
+                        InterpolationOrigin::UserConfig(via_user_path(&via_path)),
+                        InterpolationOrigin::UserConfig(via_user_path(&via_path)),
+                        InterpolationOrigin::UserConfig(via_user_path(&via_path)),
+                    ]
+                }
+            ))
+        );
+    }
+
+    /// With no user config and a temp git repo carrying `user.name`, the
+    /// default's `via` reports `Git("user.name")` with the git value used.
+    #[test]
+    fn test_origin_git_user_name() {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().unwrap();
+        let _restore = crate::test_sync::EnvGuard::capture(&[
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let empty_git_config = tmp.path().join("empty.gitconfig");
+        std::fs::write(&empty_git_config, "").unwrap();
+        std::env::set_var("GIT_CONFIG_GLOBAL", &empty_git_config);
+        std::env::set_var("GIT_CONFIG_SYSTEM", &empty_git_config);
+
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["config", "user.name", "Git User"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+
+        let resolver = PlaceholderResolver::new_in(HashMap::new(), &repo);
+        let mut ph = make_placeholder("author", false);
+        ph.default = Some("{{user.name}}".to_string());
+        assert_eq!(
+            resolver.resolve_with_origin(&ph).unwrap(),
+            Some((
+                "Git User".to_string(),
+                PlaceholderOrigin::TemplateDefault {
+                    via: vec![InterpolationOrigin::Git("user.name".to_string())]
+                }
+            ))
+        );
+        assert_eq!(resolver.resolve(&ph).unwrap(), Some("Git User".to_string()));
+    }
+
+    /// With neither a user config nor any git identity, the token resolves
+    /// to the empty string and `via` reports `Empty`.
+    #[test]
+    fn test_origin_empty_interpolation() {
+        let _lock = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().unwrap();
+        let _restore = crate::test_sync::EnvGuard::capture(&[
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let empty_git_config = tmp.path().join("empty.gitconfig");
+        std::fs::write(&empty_git_config, "").unwrap();
+        std::env::set_var("GIT_CONFIG_GLOBAL", &empty_git_config);
+        std::env::set_var("GIT_CONFIG_SYSTEM", &empty_git_config);
+
+        let resolver = PlaceholderResolver::new_in(HashMap::new(), tmp.path());
+        let mut ph = make_placeholder("author", false);
+        ph.default = Some("{{user.name}}".to_string());
+        assert_eq!(
+            resolver.resolve_with_origin(&ph).unwrap(),
+            Some((
+                String::new(),
+                PlaceholderOrigin::TemplateDefault {
+                    via: vec![InterpolationOrigin::Empty]
+                }
+            ))
+        );
+    }
+
+    /// A project config value reports `ProjectConfig` with the same value
+    /// `resolve` always returned.
+    #[test]
+    fn test_origin_project_config() {
+        let mut project_config = HashMap::new();
+        project_config.insert("author".to_string(), "Proj Author".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config,
+            user_config: None,
+            target_dir: PathBuf::new(),
+        };
+
+        let ph = make_placeholder("author", false);
+        assert_eq!(
+            resolver.resolve_with_origin(&ph).unwrap(),
+            Some(("Proj Author".to_string(), PlaceholderOrigin::ProjectConfig))
+        );
+        assert_eq!(
+            resolver.resolve(&ph).unwrap(),
+            Some("Proj Author".to_string())
+        );
+    }
+
+    /// A CLI value reports `Cli` with the same value `resolve` returned.
+    #[test]
+    fn test_origin_cli() {
+        let mut cli_args = HashMap::new();
+        cli_args.insert("title".to_string(), "CLI Title".to_string());
+
+        let resolver = PlaceholderResolver {
+            cli_args,
+            project_config: HashMap::new(),
+            user_config: None,
+            target_dir: PathBuf::new(),
+        };
+
+        let ph = make_placeholder("title", false);
+        assert_eq!(
+            resolver.resolve_with_origin(&ph).unwrap(),
+            Some(("CLI Title".to_string(), PlaceholderOrigin::Cli))
+        );
+        assert_eq!(
+            resolver.resolve(&ph).unwrap(),
+            Some("CLI Title".to_string())
+        );
+    }
+
+    /// A default without identity tokens reports `TemplateDefault` with an
+    /// empty `via` and the literal default as the value.
+    #[test]
+    fn test_origin_plain_default() {
+        let resolver = PlaceholderResolver {
+            cli_args: HashMap::new(),
+            project_config: HashMap::new(),
+            user_config: None,
+            target_dir: PathBuf::new(),
+        };
+
+        let mut ph = make_placeholder("title", false);
+        ph.default = Some("Plain Default".to_string());
+        assert_eq!(
+            resolver.resolve_with_origin(&ph).unwrap(),
+            Some((
+                "Plain Default".to_string(),
+                PlaceholderOrigin::TemplateDefault { via: vec![] }
+            ))
+        );
+    }
+
+    /// One entry per token occurrence, in order of appearance.
+    #[test]
+    fn test_interpolation_tokens_order() {
+        assert_eq!(
+            interpolation_tokens("{{user.name}} x {{institution.name}} y {{user.name}}"),
+            vec!["{{user.name}}", "{{institution.name}}", "{{user.name}}"]
+        );
+        assert_eq!(interpolation_tokens("no tokens here"), Vec::<&str>::new());
+        assert_eq!(
+            interpolation_tokens("{{user.email}}:{{user.name}}"),
+            vec!["{{user.email}}", "{{user.name}}"]
+        );
+    }
+
+    /// Pull the path back out of a `UserConfig` origin for `via` assertions.
+    fn via_user_path(origin: &PlaceholderOrigin) -> PathBuf {
+        match origin {
+            PlaceholderOrigin::UserConfig(path) => path.clone(),
+            other => panic!("expected UserConfig origin, got {other:?}"),
+        }
     }
 }

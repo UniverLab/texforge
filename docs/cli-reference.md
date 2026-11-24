@@ -73,6 +73,33 @@ flag to layer files (`--values lab.toml --values client.toml`): files merge
 in order, a later file's value replacing an earlier one, and the echoed
 `values.toml` lists the source files in its header.
 
+Placeholder values resolve in this order: command-line values (including
+everything merged in from `--values` files), project config
+(`./.texforge/config.toml`), user config (the real `config_file_path()`
+value, never a hardcoded `~/.texforge/config.toml`), then the template
+default — where `{{user.name}}` and `{{user.email}}` fall back to
+`git config --get <key>` in the new project directory and finally to the
+empty string, while `{{institution.name}}` falls back to the empty string
+directly. After resolution, and before writing files, `new` prints one
+line per manifest placeholder in manifest order for every value it did
+not receive from a `--values` file, so a filled `author` or `institution`
+can always be traced:
+
+```
+  ◇ author = "Alice" (from user config /home/ana/.config/texforge/config.toml)
+  ◇ institution = "MIT" (from project config ./.texforge/config.toml)
+  ◇ byline = "Alice" (from template default; {{user.name}} from user config /home/ana/.config/texforge/config.toml)
+  ◇ byline = "Git User" (from template default; {{user.name}} from git config user.name)
+  ◇ byline = "" (from template default; {{user.name}} empty: no user config and no git identity)
+```
+
+Values from the command line report `(from command line)` and defaults
+without identity tokens report `(from template default)`.
+Values print in clear: placeholders are only `String`, `Boolean` or `Enum`,
+so there is no secret type to redact. A placeholder that resolved to
+nothing prints nothing, values that came from `--values` files print
+nothing, and a template with no manifest placeholders prints nothing.
+
 Example:
 
 ```
