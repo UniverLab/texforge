@@ -20,6 +20,13 @@ pub fn templates_dir() -> anyhow::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// Get the cache directory (~/.texforge/cache)
+pub fn cache_dir() -> anyhow::Result<std::path::PathBuf> {
+    let dir = data_dir()?.join("cache");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// Find all .tex files in a directory, excluding build/.
 pub fn find_tex_files(root: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();

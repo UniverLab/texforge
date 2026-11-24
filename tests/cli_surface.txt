@@ -5,6 +5,8 @@
 # update this file AND docs/cli-reference.md together.
 # Lines starting with `#` are ignored. No positionals, no `help`,
 # no `--help`/`--version` rows.
+command bib
+command bib check
 command build
 command check
 command clean
@@ -38,6 +40,11 @@ command template source remove
 command template validate
 command uninstall
 command update
+flag bib check --deny-warnings bool
+flag bib check --file value
+flag bib check --json bool
+flag bib check --no-cache bool
+flag bib check --offline bool
 flag build --delay value
 flag build --log value
 flag build --max-overfull value

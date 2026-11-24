@@ -95,6 +95,11 @@ enum Commands {
         #[arg(long)]
         deny_warnings: bool,
     },
+    /// Verify bibliography DOIs and arXiv identifiers
+    Bib {
+        #[command(subcommand)]
+        action: BibAction,
+    },
     /// Count words per section or file
     Stats {
         /// Output JSON instead of a human-readable breakdown
@@ -181,6 +186,28 @@ enum Commands {
         key: Option<String>,
         /// Value to set (optional - if omitted, shows current value)
         value: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BibAction {
+    /// Verify every DOI and arXiv identifier in the project's .bib against Crossref and arXiv
+    Check {
+        /// Path to a .bib file (defaults to build.bibliography in project.toml)
+        #[arg(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+        /// Skip network requests and only report entries with no DOI or arXiv id
+        #[arg(long)]
+        offline: bool,
+        /// Bypass the 24-hour lookup cache
+        #[arg(long)]
+        no_cache: bool,
+        /// Exit non-zero if any warning (such as year drift) is present
+        #[arg(long)]
+        deny_warnings: bool,
+        /// Output one JSON array and nothing else on stdout
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -339,6 +366,7 @@ impl Cli {
             }),
             Commands::Fmt { check } => commands::fmt::execute(check),
             Commands::Check { deny_warnings } => commands::check::execute(deny_warnings),
+            Commands::Bib { action } => execute_bib(action),
             Commands::Stats { json, by } => commands::stats::execute(json, by),
             Commands::Outline { json } => commands::outline::execute(json),
             Commands::Preview { page, scale, out } => commands::preview::execute(page, scale, out),
@@ -463,6 +491,26 @@ fn execute_build(req: BuildRequest) -> Result<()> {
             req.max_overfull,
         )
     }
+}
+
+/// Dispatch the `texforge bib` subcommands.
+fn execute_bib(action: BibAction) -> Result<()> {
+    let action = match action {
+        BibAction::Check {
+            file,
+            offline,
+            no_cache,
+            deny_warnings,
+            json,
+        } => commands::bib::BibAction::Check {
+            file,
+            offline,
+            no_cache,
+            deny_warnings,
+            json,
+        },
+    };
+    commands::bib::execute(action)
 }
 
 /// Dispatch the `texforge template` subcommands (kept out of [`Cli::execute`]
@@ -703,6 +751,65 @@ mod tests {
                 assert_eq!(values, vec![std::path::PathBuf::from("v.toml")]);
             }
             _ => panic!("`texforge build` must parse into Commands::Build"),
+        }
+    }
+
+    #[test]
+    fn bib_check_parses_all_flags() {
+        let cli = Cli::try_parse_from([
+            "texforge",
+            "bib",
+            "check",
+            "--file",
+            "refs.bib",
+            "--offline",
+            "--no-cache",
+            "--deny-warnings",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Bib {
+                action:
+                    BibAction::Check {
+                        file,
+                        offline,
+                        no_cache,
+                        deny_warnings,
+                        json,
+                    },
+            } => {
+                assert_eq!(file, Some(std::path::PathBuf::from("refs.bib")));
+                assert!(offline);
+                assert!(no_cache);
+                assert!(deny_warnings);
+                assert!(json);
+            }
+            _ => panic!("`texforge bib check` must parse into Commands::Bib"),
+        }
+    }
+
+    #[test]
+    fn bib_check_defaults_parse() {
+        let cli = Cli::try_parse_from(["texforge", "bib", "check"]).unwrap();
+        match cli.command {
+            Commands::Bib {
+                action:
+                    BibAction::Check {
+                        file,
+                        offline,
+                        no_cache,
+                        deny_warnings,
+                        json,
+                    },
+            } => {
+                assert!(file.is_none());
+                assert!(!offline);
+                assert!(!no_cache);
+                assert!(!deny_warnings);
+                assert!(!json);
+            }
+            _ => panic!("`texforge bib check` must parse into Commands::Bib"),
         }
     }
 }

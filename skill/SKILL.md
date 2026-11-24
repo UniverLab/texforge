@@ -46,6 +46,7 @@ Tectonic se descarga e instala automáticamente en `~/.texforge/bin/` la primera
 | `build` | compilar a PDF |
 | `clean` | borrar artefactos de build |
 | `check` | linter + corrector ortográfico, sin compilar |
+| `bib` | verificar DOIs y arXiv IDs en el `.bib` |
 | `fmt` | formatear `.tex` y `.bib` |
 | `outline` | árbol de secciones |
 | `stats` | conteo de palabras |
@@ -256,6 +257,19 @@ texforge check --deny-warnings   # los warnings también hacen fallar (CI)
 | `&`, `#`, `_`, `$` sin escapar | fuera de math y tablas | dentro de math o tablas | **error** |
 
 Solo los `ERROR` cambian el código de salida (a menos que uses `--deny-warnings`).
+
+### `texforge bib check`
+
+Verifica cada DOI y arXiv ID del `.bib` configurado en `project.toml` contra Crossref y arXiv, comparando títulos (y avisando si el año difiere en más de 1).
+
+```bash
+texforge bib check                 # verifica contra Crossref / arXiv (caché 24 h)
+texforge bib check --file refs.bib # otro archivo .bib
+texforge bib check --offline       # sin red; solo reporta entradas sin identificador
+texforge bib check --no-cache      # ignora la caché local de 24 h
+texforge bib check --deny-warnings # falla también si hay warnings (p. ej. año)
+texforge bib check --json          # imprime un array JSON en stdout
+```
 
 #### Ortografía
 

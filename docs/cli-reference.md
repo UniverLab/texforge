@@ -233,6 +233,38 @@ texforge fmt --check
 
 Exit codes: see the table.
 
+### texforge bib
+
+Bibliography verification commands.
+
+```
+texforge bib <check>
+```
+
+### texforge bib check
+
+Verify every DOI and arXiv identifier in the project's `.bib` file against Crossref and arXiv.
+
+```
+texforge bib check [--file <PATH>] [--offline] [--no-cache] [--deny-warnings] [--json]
+```
+
+| Flag | Value | Default |
+|---|---|---|
+| `--file` `<PATH>` | path to a `.bib` file | `[build] bibliography` from `project.toml` |
+| `--offline` | none (switch): skip network requests and report entries without a DOI or arXiv id | off |
+| `--no-cache` | none (switch): bypass the 24-hour lookup cache | off |
+| `--deny-warnings` | none (switch): exit non-zero on warnings (such as year drift > 1) | off |
+| `--json` | none (switch): output one JSON array and nothing else on stdout | off |
+
+Example:
+
+```
+texforge bib check --deny-warnings
+```
+
+Exit codes: `0` when all checked identifiers match (and no warnings when `--deny-warnings` is set); `1` when any identifier is missing, points to a different work, or triggers a denied warning.
+
 ## Templates
 
 ### texforge template
