@@ -3,8 +3,9 @@
 //! A folder carrying a `template.toml` (with or without a `project.toml`)
 //! builds to a filled PDF: placeholders are rendered into a temporary copy
 //! outside the source tree, then the normal build pipeline runs on that
-//! staging copy. The source folder is never modified and nothing is ever
-//! written inside it.
+//! staging copy. No existing file of the source folder is modified; the only
+//! thing written is the PDF, in the current directory unless `--out` says
+//! otherwise.
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -79,8 +80,7 @@ pub fn execute(
         anyhow::bail!("Required placeholders have no value (values files {sources}):\n{list}");
     }
 
-    // Resolve the PDF destination before staging or compiling: an `--out`
-    // inside the folder must fail fast, never after a heavy Tectonic run.
+    // Resolve the PDF destination before staging or compiling.
     let pdf_dest = resolve_pdf_dest(&root, &root_canon, out)?;
 
     let stage = stage_rendered_copy(&root_canon, values_paths, &resolved)?;
@@ -137,31 +137,20 @@ fn manifest_title(manifest: &TemplateManifest) -> String {
     }
 }
 
-/// Where the filled PDF goes: `--out`, or `<folder-name>.pdf` in the parent
-/// directory so nothing is ever written inside the template folder. `--out`
-/// pointing inside the folder is an error; relative paths resolve against
-/// the current directory (canonically, so symlinked prefixes cannot evade
-/// the containment check).
+/// Where the filled PDF goes: `--out`, or `<folder-name>.pdf` in the current
+/// directory (where the command runs). Relative `--out` paths resolve against
+/// the current directory too. The staged copy is what compiles, so the PDF
+/// written next to the sources never feeds back into a later build (`*.pdf`
+/// is skipped when staging).
 fn resolve_pdf_dest(root: &Path, root_canon: &Path, out: Option<&Path>) -> Result<PathBuf> {
     match out {
         Some(path) => {
-            // Relative paths resolve against the canonical folder: `root`
-            // itself may sit under a symlinked prefix, which would otherwise
-            // let an inside-folder `--out` slip past the containment check.
             let absolute = if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                root_canon.join(path)
+                root.join(path)
             };
-            let absolute = lexical_normalize(&absolute);
-            if absolute == *root_canon || absolute.starts_with(root_canon) {
-                anyhow::bail!(
-                    "--out '{}' must not point inside the template folder '{}'",
-                    path.display(),
-                    root.display()
-                );
-            }
-            Ok(absolute)
+            Ok(lexical_normalize(&absolute))
         }
         None => {
             let folder = root_canon
@@ -171,10 +160,7 @@ fn resolve_pdf_dest(root: &Path, root_canon: &Path, out: Option<&Path>) -> Resul
             if folder.is_empty() {
                 anyhow::bail!("Cannot derive the PDF name from the current directory");
             }
-            let parent = root_canon.parent().ok_or_else(|| {
-                anyhow::anyhow!("Cannot derive the PDF name from the current directory")
-            })?;
-            Ok(parent.join(format!("{}.pdf", sanitize_filename(folder))))
+            Ok(root.join(format!("{}.pdf", sanitize_filename(folder))))
         }
     }
 }
@@ -397,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn default_dest_is_parent_dir_and_out_inside_fails() {
+    fn default_dest_is_cwd_and_relative_out_resolves_against_it() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("mutual-nda");
         std::fs::create_dir_all(&root).unwrap();
@@ -405,23 +391,20 @@ mod tests {
 
         assert_eq!(
             resolve_pdf_dest(&root, &root_canon, None).unwrap(),
-            dir.path().join("mutual-nda.pdf")
+            root.join("mutual-nda.pdf")
         );
         assert_eq!(
             resolve_pdf_dest(&root, &root_canon, Some(Path::new("/tmp/x/out.pdf"))).unwrap(),
             PathBuf::from("/tmp/x/out.pdf")
         );
-        for inside in [
-            PathBuf::from("out.pdf"),
-            PathBuf::from("sub/../out.pdf"),
-            root_canon.join("out.pdf"),
-        ] {
-            let err = resolve_pdf_dest(&root, &root_canon, Some(&inside))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("--out"), "{err}");
-            assert!(err.contains("inside"), "{err}");
-        }
+        assert_eq!(
+            resolve_pdf_dest(&root, &root_canon, Some(Path::new("sub/../client.pdf"))).unwrap(),
+            root.join("client.pdf")
+        );
+        assert_eq!(
+            resolve_pdf_dest(&root, &root_canon, Some(Path::new("../client.pdf"))).unwrap(),
+            dir.path().join("client.pdf")
+        );
     }
 
     #[test]
@@ -562,17 +545,17 @@ entry = "main.tex"
     }
 
     #[test]
-    fn both_files_build_with_values_to_parent_pdf() {
+    fn both_files_build_with_values_to_cwd_pdf() {
         let Some(_tectonic) = tectonic_guard() else {
             return;
         };
         let (_dir, folder) = both_fixture();
-        let expected = folder.parent().unwrap().join("mutual-nda.pdf");
+        let expected = folder.join("mutual-nda.pdf");
         run_in(&folder, || execute_one("values.toml", None)).unwrap();
-        assert!(expected.exists(), "PDF must land in the parent directory");
+        assert!(expected.exists(), "PDF must land in the current directory");
         assert!(
-            !folder.join("mutual-nda.pdf").exists(),
-            "nothing may be written inside the template folder"
+            !folder.parent().unwrap().join("mutual-nda.pdf").exists(),
+            "nothing may be written to the parent directory"
         );
         let text = crate::pdftext::extract_text(&expected).unwrap();
         assert!(text.contains("Acme"), "{text}");
@@ -609,7 +592,7 @@ entry = "main.tex"
             return;
         };
         let (_dir, folder) = template_only_fixture();
-        let expected = folder.parent().unwrap().join("services-agreement.pdf");
+        let expected = folder.join("services-agreement.pdf");
         run_in(&folder, || execute_one("values.toml", None)).unwrap();
         assert!(expected.exists());
         let text = crate::pdftext::extract_text(&expected).unwrap();
@@ -742,21 +725,6 @@ entry = "main.tex"
     }
 
     #[test]
-    fn out_inside_the_folder_fails_without_compiling() {
-        let (_dir, folder) = template_only_fixture();
-        for out in ["out.pdf", "sub/../out.pdf"] {
-            let err = run_in(&folder, || execute_one("values.toml", Some(Path::new(out))))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("--out"), "{err}");
-        }
-        assert!(
-            !folder.join("out.pdf").exists(),
-            "the failed run must not compile anything"
-        );
-    }
-
-    #[test]
     fn out_writes_to_the_given_path() {
         let Some(_tectonic) = tectonic_guard() else {
             return;
@@ -776,7 +744,8 @@ entry = "main.tex"
         };
         let (_dir, folder) = both_fixture();
         let before = snapshot(&folder);
-        run_in(&folder, || execute_one("values.toml", None)).unwrap();
+        let out = folder.parent().unwrap().join("elsewhere.pdf");
+        run_in(&folder, || execute_one("values.toml", Some(out.as_path()))).unwrap();
         assert_eq!(
             snapshot(&folder),
             before,

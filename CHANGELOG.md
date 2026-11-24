@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `texforge template list` shows each template's source as `  - <name> (<source>)` (plus `list --json`), and every command taking a template name accepts `source/name`, failing on clashes instead of picking silently.
 - Piping output to a closed pipe (e.g. `texforge skill | head`) now exits quietly with code 0.
 - `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
-- `texforge build --values <file> [--out <path>]` builds a folder carrying a `template.toml` straight to a filled PDF, rendering placeholders into a temporary copy without touching the folder.
+- `texforge build --values <file> [--out <path>]` builds a folder carrying a `template.toml` straight to a filled PDF, rendering placeholders into a temporary copy without modifying any file of the folder; the PDF lands in the current directory unless `--out` says otherwise.
 - `texforge new` and `texforge build` accept `--values` more than once: files merge in order with later files winning key by key, and the echoed `values.toml` lists the source files.
 - `texforge check` resolves `\ref` to a `label=` option on `mermaid`, `d2` and `graphviz` blocks, with or without a `caption`.
 - The example directory was renamed to `texforge-capabilities` (the old name was misspelled).

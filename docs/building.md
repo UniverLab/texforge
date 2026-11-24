@@ -48,12 +48,14 @@ key by key. When the
 folder also has a `project.toml`, its title, entry, bibliography, highlight,
 diagrams and reproducible settings apply; with only a `template.toml`, the
 entry is `main.tex` and the title is the manifest's display name. The PDF
-lands at `--out`, or at `<folder-name>.pdf` in the parent directory when
-`--out` is omitted, and the run ends with `wrote <path>` — `--out` pointing
-inside the folder is an error, as is `--values` on a folder with no
-`template.toml`. A relative `--out` resolves against the current directory,
-so a bare file name would land inside the folder and is rejected: write
-`../name.pdf` to place it next to the folder. Without `--values`, a folder
+lands at `--out`, or at `<folder-name>.pdf` in the current directory (where
+the command runs) when `--out` is omitted, and the run ends with
+`wrote <path>`; `--values` on a folder with no `template.toml` is an error.
+A relative `--out` resolves against the current directory too, so
+`--out ../name.pdf` places the PDF next to the folder. No existing file of
+the folder is modified: the sources compile from a temporary copy, and
+`*.pdf` files are never staged, so a previous PDF does not feed back into
+the next build. Without `--values`, a folder
 that also has a `project.toml` builds as a plain project; a folder with only
 a `template.toml` fails telling you `--values` is needed. `--values` cannot
 be combined with `--watch`.

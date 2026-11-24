@@ -202,11 +202,11 @@ as a contract that is both a buildable project and an installable template —
 needs no `texforge new` step. Run from that folder:
 
 ```bash
-texforge build --values client.toml --out ../contract-2026.pdf
+texforge build --values client.toml --out contract-2026.pdf
 ```
 
-The placeholders render into a temporary copy and the PDF is written without
-touching the folder; `--values` is repeatable here too, with later files
+The placeholders render into a temporary copy and the PDF is written to the
+current directory (or to `--out`) without modifying any file of the folder; `--values` is repeatable here too, with later files
 winning key by key; see [Building](building.md#building-a-template-folder).
 
 ## Writing your own template
