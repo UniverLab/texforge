@@ -574,6 +574,10 @@ Exit codes: see the table.
 
 Check significant source words appear in the PDF text.
 
+Length arguments of spacing commands (`\vspace`, `\hspace`, `\vskip`,
+`\hskip`, `\kern`, `\vglue`, `\hglue`, starred forms included) are not
+prose, so they are never reported as missing words.
+
 ```
 texforge pdf check
 ```
