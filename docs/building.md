@@ -135,7 +135,7 @@ texforge clean   # remove build artifacts
 
 ## Preview
 
-`texforge preview` rasterizes the compiled PDF to PNG pages for quick visual review or for embedding in documentation:
+`texforge preview` rasterizes the compiled PDF to PNG pages for quick visual review or for embedding in documentation. Before rasterizing, stale `page-<n>.png` files are removed from the output folder (all of them, or only those for `--page <n>`); other files are left alone:
 
 ```bash
 # Rasterize all pages (writes to ./preview/)

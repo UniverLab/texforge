@@ -455,7 +455,9 @@ texforge stats --json
 
 ## Preview
 
-Rasterize the compiled PDF to PNG pages:
+Rasterize the compiled PDF to PNG pages. Before rasterizing, stale `page-<n>.png`
+files are removed from the output folder (all of them, or only those for
+`--page <n>`); other files are left alone.
 
 ```bash
 # Rasterize all pages (writes to ./preview/ by default)
