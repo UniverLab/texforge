@@ -17,9 +17,69 @@ const LIGATURES: &[(char, &str)] = &[
     ('\u{FB06}', "st"),  // ﬆ
 ];
 
+/// Load, optionally sanitize, and return a document for extraction.
+///
+/// The four extractors below all pass `true`: form `XObject` fonts are given
+/// per-form resource names so a figure reusing a page's font name no longer
+/// decodes with the page font's map (or vice versa). Passing `false` runs
+/// the same fixture unsanitized, which lets a test prove the fixture
+/// reproduces the defect.
+pub(crate) fn extract_doc(mut doc: lopdf::Document, sanitize: bool) -> lopdf::Document {
+    if sanitize {
+        super::sanitize::rename_form_fonts(&mut doc);
+    }
+    doc
+}
+
+/// Load one document, decrypting with the empty password when it reports
+/// being encrypted (the same empty-password attempt `pdf-extract` makes).
+fn load_doc(
+    doc: Result<lopdf::Document, lopdf::Error>,
+) -> Result<lopdf::Document, pdf_extract::OutputError> {
+    let mut loaded = doc?;
+    if loaded.is_encrypted() {
+        loaded
+            .decrypt("")
+            .map_err(pdf_extract::OutputError::PdfError)?;
+    }
+    Ok(loaded)
+}
+
+/// Extract the whole text of one loaded document.
+fn whole_text(doc: &lopdf::Document) -> Result<String, pdf_extract::OutputError> {
+    let mut text = String::new();
+    {
+        let mut output = pdf_extract::PlainTextOutput::new(&mut text);
+        pdf_extract::output_doc(doc, &mut output)?;
+    }
+    Ok(text)
+}
+
+/// Extract page `page_num` (1-based) of one loaded document.
+fn page_text(doc: &lopdf::Document, page_num: u32) -> Result<String, pdf_extract::OutputError> {
+    let mut text = String::new();
+    {
+        let mut output = pdf_extract::PlainTextOutput::new(&mut text);
+        pdf_extract::output_doc_page(doc, &mut output, page_num)?;
+    }
+    Ok(text)
+}
+
+/// Extract every page in order, stopping at the first page number that
+/// does not exist (the same loop `pdf-extract` itself uses).
+fn all_pages(doc: &lopdf::Document) -> Result<Vec<String>, pdf_extract::OutputError> {
+    let mut pages = Vec::new();
+    let mut page_num = 1;
+    while let Ok(text) = page_text(doc, page_num) {
+        pages.push(text);
+        page_num += 1;
+    }
+    Ok(pages)
+}
+
 /// Extract raw PDF text (ligatures left as `ToUnicode` mapped them).
 pub fn extract_text(path: &Path) -> Result<String> {
-    match guarded(|| pdf_extract::extract_text(path)) {
+    match guarded(|| whole_text(&extract_doc(load_doc(lopdf::Document::load(path))?, true))) {
         Ok(text) => Ok(text),
         Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
             "failed to extract text from {}: {message}",
@@ -35,7 +95,12 @@ pub fn extract_text(path: &Path) -> Result<String> {
 /// Extract raw PDF text from bytes.
 #[allow(dead_code)]
 pub fn extract_text_from_bytes(data: &[u8]) -> Result<String> {
-    match guarded(|| pdf_extract::extract_text_from_mem(data)) {
+    match guarded(|| {
+        whole_text(&extract_doc(
+            load_doc(lopdf::Document::load_mem(data))?,
+            true,
+        ))
+    }) {
         Ok(text) => Ok(text),
         Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
             "failed to extract text from PDF bytes: {message}"
@@ -48,7 +113,7 @@ pub fn extract_text_from_bytes(data: &[u8]) -> Result<String> {
 
 /// Extract raw text one page at a time (1-based order).
 pub fn extract_text_by_pages(path: &Path) -> Result<Vec<String>> {
-    match guarded(|| pdf_extract::extract_text_by_pages(path)) {
+    match guarded(|| all_pages(&extract_doc(load_doc(lopdf::Document::load(path))?, true))) {
         Ok(pages) => Ok(pages),
         Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
             "failed to extract per-page text from {}: {message}",
@@ -66,7 +131,12 @@ pub fn extract_text_by_pages(path: &Path) -> Result<Vec<String>> {
 /// Used by the fixture tests and by callers that already hold the PDF in memory.
 #[allow(dead_code)]
 pub fn extract_text_by_pages_from_bytes(data: &[u8]) -> Result<Vec<String>> {
-    match guarded(|| pdf_extract::extract_text_from_mem_by_pages(data)) {
+    match guarded(|| {
+        all_pages(&extract_doc(
+            load_doc(lopdf::Document::load_mem(data))?,
+            true,
+        ))
+    }) {
         Ok(pages) => Ok(pages),
         Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
             "failed to extract per-page text from PDF bytes: {message}"
@@ -200,8 +270,11 @@ fn word_after_hyphen_break(chars: &[char], hyphen: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        missing_unicode_map_pdf, missing_unicode_map_with_encoding_pdf, LIGATURES_PDF,
+        font_name_clash_compressed_pdf, font_name_clash_pdf, font_name_clash_shared_resources_pdf,
+        font_name_clash_two_forms_pdf, missing_unicode_map_pdf,
+        missing_unicode_map_with_encoding_pdf, LIGATURES_PDF,
     };
+    use super::super::sanitize::rename_form_fonts;
     use super::*;
 
     #[test]
@@ -404,6 +477,282 @@ mod tests {
             matches!(ok, Ok(ref value) if value == "ok"),
             "clean call must pass through: {ok:?}"
         );
+    }
+
+    /// Extract `data` with (`true`) or without (`false`) the form-font
+    /// rename, through the same load path the extractors use.
+    fn text_with_sanitize(data: &[u8], sanitize: bool) -> String {
+        let doc = lopdf::Document::load_mem(data).expect("fixture must load");
+        let doc = extract_doc(doc, sanitize);
+        let mut text = String::new();
+        {
+            let mut output = pdf_extract::PlainTextOutput::new(&mut text);
+            pdf_extract::output_doc(&doc, &mut output).expect("fixture must extract");
+        }
+        text
+    }
+
+    /// How often the clash letters appear: page draws `P`, the form `Q`.
+    fn clash_counts(text: &str) -> (usize, usize) {
+        (
+            text.chars().filter(|&c| c == 'P').count(),
+            text.chars().filter(|&c| c == 'Q').count(),
+        )
+    }
+
+    /// Without the rename at least one of the two operator orders must
+    /// collapse the two fonts into two equal letters: the fixture has to
+    /// reproduce the defect, otherwise it proves nothing.
+    #[test]
+    fn clash_fixture_reproduces_the_defect_unsanitized() {
+        let page_first = text_with_sanitize(&font_name_clash_pdf(false), false);
+        let form_first = text_with_sanitize(&font_name_clash_pdf(true), false);
+        let collides = |text: &str| {
+            let (p, q) = clash_counts(text);
+            p == 2 || q == 2
+        };
+        assert!(
+            collides(&page_first) || collides(&form_first),
+            "fixture must reproduce the defect: one order must read PP or QQ, \
+             got page-first {page_first:?} and form-first {form_first:?}"
+        );
+    }
+
+    /// With the rename both orders read exactly one `P` (page) and one `Q`
+    /// (form), in operator order.
+    #[test]
+    fn clash_fixture_decodes_both_fonts_sanitized() {
+        for form_first in [false, true] {
+            let text = text_with_sanitize(&font_name_clash_pdf(form_first), true);
+            assert_eq!(
+                clash_counts(&text),
+                (1, 1),
+                "expected one P and one Q with form_first={form_first}, got {text:?}"
+            );
+            let (p, q) = (text.find('P').unwrap(), text.find('Q').unwrap());
+            if form_first {
+                assert!(q < p, "form draws first, so Q precedes P: {text:?}");
+            } else {
+                assert!(p < q, "page draws first, so P precedes Q: {text:?}");
+            }
+        }
+        // The public entry point sanitizes too.
+        let text = extract_text_from_bytes(&font_name_clash_pdf(false)).unwrap();
+        assert_eq!(clash_counts(&text), (1, 1), "public path: {text:?}");
+    }
+
+    /// The rename reports one renamed form for both the raw and the
+    /// compressed fixture, and nothing for a fixture without form fonts.
+    #[test]
+    fn rename_report_counts_renamed_and_untouched() {
+        for data in [font_name_clash_pdf(false), font_name_clash_compressed_pdf()] {
+            let mut doc = lopdf::Document::load_mem(&data).expect("fixture must load");
+            let report = rename_form_fonts(&mut doc);
+            assert_eq!(report.renamed, 1, "one form font must be renamed");
+            assert_eq!(report.skipped, 0, "no form may be skipped");
+        }
+        let mut ligatures = lopdf::Document::load_mem(LIGATURES_PDF).expect("fixture must load");
+        let report = rename_form_fonts(&mut ligatures);
+        assert_eq!(report.renamed, 0, "no form fonts to rename");
+        assert_eq!(report.skipped, 0, "no form may be skipped");
+    }
+
+    /// The compressed form still decodes after the rename and no longer
+    /// carries its `/FlateDecode` filter.
+    #[test]
+    fn compressed_form_decodes_without_filter_after_rename() {
+        let mut doc = lopdf::Document::load_mem(&font_name_clash_compressed_pdf())
+            .expect("fixture must load");
+        let before = form_filter(&doc);
+        assert_eq!(
+            before.as_deref(),
+            Some("FlateDecode"),
+            "fixture must start compressed"
+        );
+        rename_form_fonts(&mut doc);
+        assert!(
+            form_filter(&doc).is_none(),
+            "renamed content must be stored plain"
+        );
+        let content = form_content_bytes(&doc);
+        let operations =
+            lopdf::content::Content::decode(&content).expect("renamed content must decode");
+        let renamed_tf = operations
+            .operations
+            .iter()
+            .filter(|op| op.operator == "Tf")
+            .count();
+        assert_eq!(renamed_tf, 1, "form keeps its single Tf operator");
+        let text = text_with_sanitize(&font_name_clash_compressed_pdf(), true);
+        assert_eq!(clash_counts(&text), (1, 1), "compressed: {text:?}");
+    }
+
+    /// `/Filter` of the single form stream in the compressed fixture.
+    fn form_filter(doc: &lopdf::Document) -> Option<String> {
+        for object in doc.objects.values() {
+            if let Ok(stream) = object.as_stream() {
+                let is_form = stream
+                    .dict
+                    .get(b"Subtype")
+                    .and_then(lopdf::Object::as_name)
+                    .is_ok_and(|name| name == b"Form");
+                if is_form {
+                    return stream
+                        .dict
+                        .get(b"Filter")
+                        .and_then(lopdf::Object::as_name)
+                        .ok()
+                        .map(|name| String::from_utf8_lossy(name).into_owned());
+                }
+            }
+        }
+        None
+    }
+
+    /// Decompressed bytes of the single form stream in the fixture.
+    fn form_content_bytes(doc: &lopdf::Document) -> Vec<u8> {
+        for object in doc.objects.values() {
+            if let Ok(stream) = object.as_stream() {
+                let is_form = stream
+                    .dict
+                    .get(b"Subtype")
+                    .and_then(lopdf::Object::as_name)
+                    .is_ok_and(|name| name == b"Form");
+                if is_form {
+                    return stream.decompressed_content().expect("form must decode");
+                }
+            }
+        }
+        panic!("fixture must contain a form stream");
+    }
+
+    /// Two forms reusing the page's `F1` for different fonts decode as
+    /// exactly one `P` (page), one `Q` (`M1`) and one `R` (`M2`).
+    #[test]
+    fn two_clashing_forms_each_decode_with_their_own_font() {
+        let text = extract_text_from_bytes(&font_name_clash_two_forms_pdf()).unwrap();
+        for letter in ['P', 'Q', 'R'] {
+            assert_eq!(
+                text.chars().filter(|&c| c == letter).count(),
+                1,
+                "expected exactly one {letter}: {text:?}"
+            );
+        }
+    }
+
+    /// A form without its own `/Resources` keeps using the page's font: both
+    /// `A` letters read as `P` and nothing is renamed.
+    #[test]
+    fn form_without_resources_keeps_the_page_font() {
+        let mut doc =
+            lopdf::Document::load_mem(&font_name_clash_pdf(false)).expect("fixture must load");
+        doc.get_object_mut((8, 0))
+            .expect("form must exist")
+            .as_stream_mut()
+            .expect("form must be a stream")
+            .dict
+            .remove(b"Resources");
+        let report = rename_form_fonts(&mut doc);
+        assert_eq!(report.renamed, 0, "resourceless form needs no rename");
+        assert_eq!(report.skipped, 0, "resourceless form is not a failure");
+        let doc = extract_doc(doc, true);
+        let mut text = String::new();
+        {
+            let mut output = pdf_extract::PlainTextOutput::new(&mut text);
+            pdf_extract::output_doc(&doc, &mut output).expect("rest must extract");
+        }
+        assert_eq!(
+            text.chars().filter(|&c| c == 'P').count(),
+            2,
+            "both letters use the page font: {text:?}"
+        );
+        assert!(!text.contains('Q'), "no form font involved: {text:?}");
+    }
+
+    /// A form whose content cannot be decoded (bogus filter) is left
+    /// untouched, counted as skipped, and the rest still extracts.
+    #[test]
+    fn undecodable_form_is_skipped_but_rest_extracts() {
+        let mut doc =
+            lopdf::Document::load_mem(&font_name_clash_pdf(false)).expect("fixture must load");
+        let stream = doc
+            .get_object_mut((8, 0))
+            .expect("form must exist")
+            .as_stream_mut()
+            .expect("form must be a stream");
+        stream.set_content(b"%garbage, not content operators".to_vec());
+        stream
+            .dict
+            .set("Filter", lopdf::Object::Name(b"FooDecode".to_vec()));
+        let report = rename_form_fonts(&mut doc);
+        assert_eq!(report.renamed, 0, "nothing could be renamed");
+        assert_eq!(report.skipped, 1, "one form must be skipped");
+        let untouched = doc
+            .get_object((8, 0))
+            .expect("form must exist")
+            .as_stream()
+            .expect("form must be a stream");
+        assert!(
+            untouched
+                .dict
+                .get(b"Filter")
+                .and_then(lopdf::Object::as_name)
+                .is_ok_and(|name| name == b"FooDecode"),
+            "skipped form must be left completely untouched"
+        );
+        let text = extract_text_from_bytes(&{
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).expect("fixture must save");
+            bytes
+        })
+        .unwrap();
+        assert!(text.contains('P'), "page text must still extract: {text:?}");
+    }
+
+    /// Two forms borrowing the same `/Resources` object each get their own
+    /// names: the shared object keeps the old names for other borrowers, and
+    /// both forms still decode with their own font.
+    #[test]
+    fn shared_form_resources_stay_independent() {
+        let mut doc = lopdf::Document::load_mem(&font_name_clash_shared_resources_pdf())
+            .expect("fixture must load");
+        let report = rename_form_fonts(&mut doc);
+        assert_eq!(report.renamed, 2, "both forms must be renamed");
+        assert_eq!(report.skipped, 0, "no form may be skipped");
+        let shared_font = doc
+            .get_object((13, 0))
+            .expect("shared resources must exist")
+            .as_dict()
+            .expect("shared resources must stay a dict")
+            .get(b"Font")
+            .expect("shared font entry must survive")
+            .as_dict()
+            .expect("shared font must stay a dict");
+        assert!(
+            shared_font.get(b"F1").is_ok(),
+            "shared object must keep the old names: {shared_font:?}"
+        );
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("fixture must save");
+        let text = extract_text_from_bytes(&bytes).unwrap();
+        assert_eq!(
+            text.chars().filter(|&c| c == 'P').count(),
+            1,
+            "page draws one P: {text:?}"
+        );
+        assert_eq!(
+            text.chars().filter(|&c| c == 'Q').count(),
+            2,
+            "both forms draw Q: {text:?}"
+        );
+    }
+
+    /// Per-page extraction matches the whole-text result on the fixture.
+    #[test]
+    fn by_pages_matches_whole_text_on_clash_fixture() {
+        let pages = extract_text_by_pages_from_bytes(&font_name_clash_pdf(false)).unwrap();
+        assert_eq!(pages.len(), 1, "one-page fixture: {pages:?}");
+        assert_eq!(clash_counts(&pages[0]), (1, 1), "per-page: {:?}", pages[0]);
     }
 
     #[test]

@@ -118,7 +118,7 @@ tempfile = "3.8"
 terminal_size = "0.4"
 
 # Pure-Rust PDF text extraction (no C toolchain; same constraint as hayro)
-pdf-extract = "0.12"
+pdf-extract = "0.12.1"
 lopdf = "0.42"
 
 # Hunspell-compatible spell-check backend (pure Rust, no_std; same

@@ -13,6 +13,7 @@ mod extract;
 mod fidelity;
 mod outline;
 mod quality;
+mod sanitize;
 
 #[cfg(test)]
 mod fixtures;

@@ -580,7 +580,7 @@ Exit codes: see the table.
 
 ### texforge pdf text
 
-Print the PDF text as a reader or accessibility tool would see it.
+Print the PDF text as a reader or accessibility tool would see it. Text is decoded font by font, so fonts of included figures never decode with a page font of the same resource name.
 
 ```
 texforge pdf text [--raw]
