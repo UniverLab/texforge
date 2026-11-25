@@ -15,14 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- `texforge pdf text`, `pdf pages` and `pdf check` now yield the full text of a PDF whose font lacks a text mapping, marking each unmapped character with `U+FFFD` and printing one warning with the count on stderr instead of failing.
+- `texforge pdf text`, `pdf pages` and `pdf check` now yield the full text of a PDF whose font genuinely lacks a text mapping for some characters (checked on a synthetic fixture), marking each unmapped character with `U+FFFD` and printing one warning with the count on stderr instead of failing; no character is ever guessed through a default encoding.
 - `texforge bib check` verifies DOI/arXiv ids in bibliography against Crossref/arXiv.
 
 - New `diagram-design` diagram style preset: warm paper-tint nodes, muted brown lines and arrows, ink text, a sans-serif face and extra spacing, applied consistently across Mermaid, D2 and Graphviz.
 - `texforge build` now converts SVG files included via `\includegraphics` to vector PDF automatically (same PNG fallback as diagrams); bare stems resolve to SVG only when no `.pdf`/`.png`/`.jpg`/`.jpeg`/`.eps` sits beside it, only `\input`-reachable files are rewritten, and `\graphicspath` is not supported.
 - `texforge build --values <file>... [DIR]` now accepts an optional template folder `DIR` (default `.`), writing the resulting PDF to the current directory rather than inside `DIR`.
 - `texforge pdf check` no longer reports LaTeX spacing lengths (`\vspace*{...}`, `\vskip`/`\hskip`/`\kern`/`\vglue`/`\hglue` unbraced glue) as missing source words; prose measurements like `3cm` are still checked.
-- `texforge pdf text` (and `pdf pages`, `stats`, `outline`, `pdf check`) decodes text font by font, so fonts of included figures never decode with a page font of the same resource name.
+- `texforge pdf text` (and `pdf pages`, `stats`, `outline`, `pdf check`) decodes text font by font, so fonts of included figures never decode with a page font of the same resource name. This also fixes PDFs on which `pdf text` returned wrong text with exit 0, or failed with a missing-mapping error, only because an included figure and its page used the same font resource name.
 - `texforge preview` deletes stale `page-<n>.png` files from the output folder before rasterizing, so an old unpadded name never sits beside its zero-padded replacement.
 - `texforge build` keeps the engine log at `build/<entry-stem>.log` (`--log <path>` overrides it), reports overfull boxes wider than 1pt by file and line, and `--max-overfull <pt>` fails after writing the PDF when any box exceeds the value.
 - `texforge new -t` now also takes a path to a local template folder (`./my-template`), used in place without installing; the `template` recorded in `project.toml` is the folder manifest's `id`.
