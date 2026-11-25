@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `texforge new` prints where each filled placeholder came from (`(from user config <path>)`, `(from project config ./.texforge/config.toml)`, `(from template default)` and, for interpolated defaults, which source supplied each `{{user.name}}`/`{{user.email}}`/`{{institution.name}}` token), skipping values supplied by `--values` files.
 - `texforge template source add <name> <repo-or-url> [--ref <ref>] [--no-check]`, `texforge template source list [--json]` and `texforge template source remove <name>` manage those extra registries from the CLI instead of editing the config file by hand.
 - The embedded skill now guides agents to suggest contributing back: reporting texforge or official-template defects as drafted issues, offering good documents as templates, and offering the user's own templates repository.
+- `texforge build` now runs each TeX pass in its own Tectonic process until the auxiliary files settle (at most 6 passes plus the final PDF pass), working around stretched lines in multi-pass documents (tectonic#1412); `TEXFORGE_SINGLE_PROCESS=1` restores the single-process build.
 
 ### Added
 

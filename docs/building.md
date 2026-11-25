@@ -52,6 +52,27 @@ texforge build --max-overfull 5     # fail when any box exceeds 5pt
 wider than the given value. Without the flag the exit status is unchanged.
 `texforge check` does not read the log.
 
+## Passes
+
+TeX needs more than one pass when a document has a table of contents,
+cross-references or a bibliography: each pass writes auxiliary files
+(`.aux`, `.toc`, `.bbl`, ...) that the next pass reads. texforge runs
+each pass in its own Tectonic process and repeats the intermediate
+passes until those auxiliary files stop changing (at least 2 passes, at
+most 6), then runs one final pass that writes the PDF. Every build uses
+a fresh temporary build directory, so no stale auxiliary file from an
+older build is ever read.
+
+One process per pass works around a Tectonic issue where glyph
+measurements cached in one pass leak into the next and stretch lines
+(tectonic#1412): on a 53-page report the multi-process build takes
+6.7 s instead of 5.0 s and the wrongly tall lines are gone.
+
+Set `TEXFORGE_SINGLE_PROCESS=1` to build in a single process again.
+When the installed Tectonic does not support one process per pass (no
+`--reruns`/`--outfmt`), texforge prints a warning and falls back to a
+single process automatically.
+
 ## Building a template folder
 
 A folder carrying a `template.toml` — with or without a `project.toml` —

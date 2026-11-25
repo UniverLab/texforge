@@ -1,6 +1,7 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
 pub(crate) mod log;
+pub(super) mod passes;
 pub(crate) mod tectonic_version;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,9 +40,7 @@ pub fn compile(
 ) -> Result<(Vec<CompileWarning>, String)> {
     let tectonic = find_tectonic()?;
 
-    let output = tectonic_command(&tectonic, root, entry, epoch)
-        .output()
-        .with_context(|| format!("Failed to run tectonic at {}", tectonic.display()))?;
+    let output = passes::run_passes(&tectonic, root, entry, epoch)?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1248,5 +1247,221 @@ mod tests {
             );
             assert!(!url.contains("0.15.0"), "{target}: {url}");
         }
+    }
+
+    /// A Tectonic run failed for want of a network fetch when its message
+    /// names the bundle/package or the failed download itself.
+    fn fetch_failed(msg: &str) -> bool {
+        [
+            "failed to download",
+            "failed to retrieve",
+            "timed out",
+            "Could not resolve",
+            "Temporary failure",
+            "Connection refused",
+            "connection failed",
+            "certificate",
+        ]
+        .iter()
+        .any(|fragment| msg.contains(fragment))
+    }
+
+    /// The document of tectonic#1412 plus a label/ref and a one-entry
+    /// bibliography, built through `compile`: one process per pass must
+    /// measure the bold 12pt box right (`8.184pt`, not `37.044pt`),
+    /// resolve the reference and the citation, and leave no `??` in the
+    /// PDF text. Skips without Tectonic, and when `ebgaramond` cannot be
+    /// fetched.
+    #[test]
+    fn per_pass_build_measures_glyph_boxes_and_resolves_references() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass[a4paper,12pt]{report}\n\
+             \\usepackage[T1]{fontenc}\n\
+             \\usepackage[lining]{ebgaramond}\n\
+             \\begin{document}\n\
+             \\tableofcontents\n\
+             \\setbox1\\hbox{{\\fontsize{54}{54}\\selectfont A}}\
+             \\typeout{REG54-A ht=\\the\\ht1}\n\
+             \\setbox1\\hbox{{\\fontsize{30}{34}\\selectfont\\bfseries A}}\
+             \\typeout{BOLD30-A ht=\\the\\ht1}\n\
+             \\chapter{Uno}\\label{ch:uno}\n\
+             \\setbox0\\hbox{\\textbf{Arquitectura}}\
+             \\typeout{BOLD12 ht=\\the\\ht0}\n\
+             See chapter~\\ref{ch:uno} and \\cite{k}.\n\
+             \\bibliographystyle{plain}\n\
+             \\bibliography{refs}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("refs.bib"),
+            "@book{k,\n  author = {A. Uthor},\n  title = {A Book},\n  publisher = {P},\n  year = {2000}\n}\n",
+        )
+        .unwrap();
+        let (_warnings, raw) = match compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        ) {
+            Ok(ok) => ok,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("ebgaramond") || fetch_failed(&msg) {
+                    eprintln!("skipping: the ebgaramond package cannot be fetched");
+                    return;
+                }
+                panic!("compile failed: {msg}");
+            }
+        };
+        let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+        assert!(
+            log.contains("BOLD12 ht=8.184pt"),
+            "one process per pass must measure the bold box right: {log}"
+        );
+        assert!(
+            !raw.contains("??"),
+            "no pass may leave references unresolved: {raw}"
+        );
+        let pdf = dir.path().join("main.pdf");
+        assert!(pdf.exists(), "the final pass must write the PDF");
+        let text = crate::pdftext::extract_text(&pdf).unwrap();
+        assert!(!text.contains("??"), "references must resolve: {text}");
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("chapter 1") && flat.contains("Uthor"),
+            "the reference and the citation must resolve: {flat}"
+        );
+    }
+
+    /// Every auxiliary-file extension that must never land beside the
+    /// user's sources after a build through the real pipeline.
+    fn stray_aux_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut stray = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stray.extend(stray_aux_files(&path));
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext, "aux" | "toc" | "bbl" | "xdv" | "log"))
+            {
+                stray.push(path);
+            }
+        }
+        stray
+    }
+
+    /// A successful build of a temp project leaves no `.aux`, `.toc`,
+    /// `.bbl`, `.xdv` or `.log` file in the project directory: they live
+    /// in the temp build directory. The log goes to a temp path too, so
+    /// even the kept engine log cannot pollute the project. Skips without
+    /// Tectonic.
+    #[test]
+    fn successful_build_keeps_aux_files_out_of_the_project() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\
+             \\begin{document}\n\
+             \\tableofcontents\n\
+             \\section{Hello}\\label{sec:hello}\n\
+             See section~\\ref{sec:hello}.\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("project.toml"),
+            "[document]\ntitle = \"Auxfree\"\nauthor = \"A\"\ntemplate = \"general\"\n\n\
+             [build]\nentry = \"main.tex\"\n",
+        )
+        .unwrap();
+        let project = crate::domain::project::Project {
+            root: dir.path().to_path_buf(),
+            config: crate::domain::project::ProjectConfig {
+                document: crate::domain::project::DocumentConfig {
+                    title: "Auxfree".to_string(),
+                    author: "A".to_string(),
+                    template: "general".to_string(),
+                },
+                build: crate::domain::project::BuildConfig {
+                    entry: "main.tex".to_string(),
+                    bibliography: None,
+                    reproducible: None,
+                },
+                diagrams: None,
+                highlight: None,
+            },
+        };
+        let build_dir = tempfile::tempdir().unwrap();
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("engine.log");
+        let (pdf_src, _warnings, _raw) = crate::commands::build::compile_project(
+            &project,
+            build_dir.path(),
+            false,
+            None,
+            &log_path,
+        )
+        .unwrap();
+        assert!(pdf_src.exists(), "the engine must still write its PDF");
+        let stray = stray_aux_files(dir.path());
+        assert!(stray.is_empty(), "nothing auxiliary may stay: {stray:?}");
+    }
+
+    /// With `TEXFORGE_SINGLE_PROCESS` set, `compile` builds through the
+    /// old single call and never takes the fallback branch, so no
+    /// fallback warning is produced. Skips without Tectonic.
+    #[test]
+    fn single_process_env_builds_through_the_old_call() {
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::test_sync::EnvGuard::capture(&["TEXFORGE_SINGLE_PROCESS"]);
+        std::env::set_var("TEXFORGE_SINGLE_PROCESS", "1");
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\nSingle process.\n\\end{document}\n",
+        )
+        .unwrap();
+        let (_warnings, _raw) = compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
+        assert!(dir.path().join("main.pdf").exists());
     }
 }
