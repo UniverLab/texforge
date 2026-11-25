@@ -1,8 +1,9 @@
 //! Raw text extraction from the PDF, plus ligature/hyphen normalization.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use anyhow::Result;
 
@@ -21,14 +22,23 @@ const LIGATURES: &[(char, &str)] = &[
 ///
 /// The four extractors below all pass `true`: form `XObject` fonts are given
 /// per-form resource names so a figure reusing a page's font name no longer
-/// decodes with the page font's map (or vice versa). Passing `false` runs
-/// the same fixture unsanitized, which lets a test prove the fixture
+/// decodes with the page font's map (or vice versa), and simple fonts with
+/// incomplete `/ToUnicode` maps are completed with `U+FFFD`. Passing `false`
+/// runs the same fixture unsanitized, which lets a test prove the fixture
 /// reproduces the defect.
-pub(crate) fn extract_doc(mut doc: lopdf::Document, sanitize: bool) -> lopdf::Document {
+#[cfg(test)]
+pub(crate) fn extract_doc(doc: lopdf::Document, sanitize: bool) -> lopdf::Document {
     if sanitize {
-        super::sanitize::rename_form_fonts(&mut doc);
+        prepare_doc(doc).0
+    } else {
+        doc
     }
-    doc
+}
+
+fn prepare_doc(mut doc: lopdf::Document) -> (lopdf::Document, usize) {
+    super::sanitize::rename_form_fonts(&mut doc);
+    let patched = super::sanitize::complete_unicode_maps(&mut doc);
+    (doc, patched)
 }
 
 /// Load one document, decrypting with the empty password when it reports
@@ -79,14 +89,19 @@ fn all_pages(doc: &lopdf::Document) -> Result<Vec<String>, pdf_extract::OutputEr
 
 /// Extract raw PDF text (ligatures left as `ToUnicode` mapped them).
 pub fn extract_text(path: &Path) -> Result<String> {
-    match guarded(|| whole_text(&extract_doc(load_doc(lopdf::Document::load(path))?, true))) {
-        Ok(text) => Ok(text),
-        Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
+    let outcome = guarded(|| {
+        let (doc, patched) = prepare_doc(load_doc(lopdf::Document::load(path))?);
+        Ok((whole_text(&doc)?, patched))
+    });
+    match outcome {
+        Ok((text, patched)) => {
+            let label = path.display().to_string();
+            let count = text.chars().filter(|&c| c == '\u{FFFD}').count();
+            warn_if_unmapped(&label, patched, count, Some(&label));
+            Ok(text)
+        }
+        Err(GuardError::Extract(message) | GuardError::Panicked(message)) => Err(anyhow::anyhow!(
             "failed to extract text from {}: {message}",
-            path.display()
-        )),
-        Err(GuardError::Panicked(message)) => Err(anyhow::anyhow!(
-            "failed to extract text from {}: {INCOMPLETE_MAP} ({message})",
             path.display()
         )),
     }
@@ -95,32 +110,40 @@ pub fn extract_text(path: &Path) -> Result<String> {
 /// Extract raw PDF text from bytes.
 #[allow(dead_code)]
 pub fn extract_text_from_bytes(data: &[u8]) -> Result<String> {
-    match guarded(|| {
-        whole_text(&extract_doc(
-            load_doc(lopdf::Document::load_mem(data))?,
-            true,
-        ))
-    }) {
-        Ok(text) => Ok(text),
-        Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
+    let outcome = guarded(|| {
+        let (doc, patched) = prepare_doc(load_doc(lopdf::Document::load_mem(data))?);
+        Ok((whole_text(&doc)?, patched))
+    });
+    match outcome {
+        Ok((text, patched)) => {
+            let count = text.chars().filter(|&c| c == '\u{FFFD}').count();
+            warn_if_unmapped("PDF bytes", patched, count, None);
+            Ok(text)
+        }
+        Err(GuardError::Extract(message) | GuardError::Panicked(message)) => Err(anyhow::anyhow!(
             "failed to extract text from PDF bytes: {message}"
-        )),
-        Err(GuardError::Panicked(message)) => Err(anyhow::anyhow!(
-            "failed to extract text from PDF bytes: {INCOMPLETE_MAP} ({message})"
         )),
     }
 }
 
 /// Extract raw text one page at a time (1-based order).
 pub fn extract_text_by_pages(path: &Path) -> Result<Vec<String>> {
-    match guarded(|| all_pages(&extract_doc(load_doc(lopdf::Document::load(path))?, true))) {
-        Ok(pages) => Ok(pages),
-        Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
+    let outcome = guarded(|| {
+        let (doc, patched) = prepare_doc(load_doc(lopdf::Document::load(path))?);
+        Ok((all_pages(&doc)?, patched))
+    });
+    match outcome {
+        Ok((pages, patched)) => {
+            let label = path.display().to_string();
+            let count: usize = pages
+                .iter()
+                .map(|p| p.chars().filter(|&c| c == '\u{FFFD}').count())
+                .sum();
+            warn_if_unmapped(&label, patched, count, Some(&label));
+            Ok(pages)
+        }
+        Err(GuardError::Extract(message) | GuardError::Panicked(message)) => Err(anyhow::anyhow!(
             "failed to extract per-page text from {}: {message}",
-            path.display()
-        )),
-        Err(GuardError::Panicked(message)) => Err(anyhow::anyhow!(
-            "failed to extract per-page text from {}: {INCOMPLETE_MAP} ({message})",
             path.display()
         )),
     }
@@ -131,36 +154,61 @@ pub fn extract_text_by_pages(path: &Path) -> Result<Vec<String>> {
 /// Used by the fixture tests and by callers that already hold the PDF in memory.
 #[allow(dead_code)]
 pub fn extract_text_by_pages_from_bytes(data: &[u8]) -> Result<Vec<String>> {
-    match guarded(|| {
-        all_pages(&extract_doc(
-            load_doc(lopdf::Document::load_mem(data))?,
-            true,
-        ))
-    }) {
-        Ok(pages) => Ok(pages),
-        Err(GuardError::Extract(message)) => Err(anyhow::anyhow!(
+    let outcome = guarded(|| {
+        let (doc, patched) = prepare_doc(load_doc(lopdf::Document::load_mem(data))?);
+        Ok((all_pages(&doc)?, patched))
+    });
+    match outcome {
+        Ok((pages, patched)) => {
+            let count: usize = pages
+                .iter()
+                .map(|p| p.chars().filter(|&c| c == '\u{FFFD}').count())
+                .sum();
+            warn_if_unmapped("PDF bytes", patched, count, None);
+            Ok(pages)
+        }
+        Err(GuardError::Extract(message) | GuardError::Panicked(message)) => Err(anyhow::anyhow!(
             "failed to extract per-page text from PDF bytes: {message}"
-        )),
-        Err(GuardError::Panicked(message)) => Err(anyhow::anyhow!(
-            "failed to extract per-page text from PDF bytes: {INCOMPLETE_MAP} ({message})"
         )),
     }
 }
 
-/// The cause attached to a caught `pdf-extract` panic: the crate aborts with
-/// `expect("missing unicode map and encoding")` when a simple font carries a
-/// `/ToUnicode` map that lacks a used character code and no `/Encoding`.
-const INCOMPLETE_MAP: &str = "the PDF has a font with a ToUnicode map that lacks a used \
-    character and no encoding";
+static WARNED_FILES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn warn_if_unmapped(label: &str, patched: usize, count: usize, dedup_key: Option<&str>) {
+    if patched == 0 {
+        return;
+    }
+    if let Some(warning) = format_unmapped_warning(label, count, dedup_key) {
+        eprintln!("{warning}");
+    }
+}
+
+fn format_unmapped_warning(label: &str, count: usize, dedup_key: Option<&str>) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    if let Some(key) = dedup_key {
+        let mut warned = WARNED_FILES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !warned.insert(key.to_string()) {
+            return None;
+        }
+    }
+    Some(format!(
+        "warning: {label}: {count} character(s) have no text mapping in the PDF and appear as \
+         U+FFFD (the PDF's own fonts lack them)"
+    ))
+}
 
 /// Serializes the panic-hook swap in [`guarded`]: without it, two threads
 /// would install and restore the silent hook around each other and a panic
 /// message could leak onto stderr (or the wrong hook could be restored).
 static GUARD: Mutex<()> = Mutex::new(());
 
-/// How a guarded `pdf-extract` call failed. The split keeps ordinary
-/// extraction errors on their existing messages while panics get the
-/// [`INCOMPLETE_MAP`] cause; callers format each side.
+/// How a guarded `pdf-extract` call failed.
 #[derive(Debug)]
 enum GuardError {
     Extract(String),
@@ -363,54 +411,28 @@ mod tests {
         }
     }
 
-    /// The panicking fixture must surface as an `Err` naming the cause, not
-    /// as a panic: the outer `catch_unwind` proves the guard caught it (an
-    /// escaping panic would make the outer guard return `Err` and fail the
-    /// `expect`), and the silenced hook keeps stderr quiet.
     #[test]
-    fn missing_unicode_map_bytes_returns_tounicode_error() {
-        let outcome =
-            std::panic::catch_unwind(|| extract_text_from_bytes(&missing_unicode_map_pdf()));
-        let result = outcome.expect("guard must not let the pdf-extract panic escape");
-        let err = result.expect_err("incomplete ToUnicode map must fail extraction");
-        let message = err.to_string();
+    fn missing_unicode_map_bytes_extracts_with_fffd() {
+        let text = extract_text_from_bytes(&missing_unicode_map_pdf())
+            .expect("incomplete ToUnicode map must extract with U+FFFD");
         assert!(
-            message.contains("ToUnicode"),
-            "error must name the cause: {message}"
+            text.contains("A\u{FFFD}"),
+            "expected A followed by FFFD, got {text:?}"
         );
-        assert!(
-            message.contains("no encoding"),
-            "error must name the cause: {message}"
-        );
-        assert!(
-            message.contains("missing unicode map and encoding"),
-            "error must carry the extractor panic payload: {message}"
-        );
-        assert!(
-            message.contains("PDF bytes"),
-            "bytes variant must say PDF bytes: {message}"
-        );
+        assert!(!text.contains('B'), "must not guess unmapped B: {text:?}");
     }
 
     #[test]
-    fn missing_unicode_map_pages_bytes_returns_tounicode_error() {
-        let outcome = std::panic::catch_unwind(|| {
-            extract_text_by_pages_from_bytes(&missing_unicode_map_pdf())
-        });
-        let result = outcome.expect("guard must not let the pdf-extract panic escape");
-        let err = result.expect_err("incomplete ToUnicode map must fail extraction");
-        let message = err.to_string();
+    fn missing_unicode_map_pages_bytes_extracts_with_fffd() {
+        let pages = extract_text_by_pages_from_bytes(&missing_unicode_map_pdf())
+            .expect("incomplete ToUnicode map must extract per page with U+FFFD");
         assert!(
-            message.contains("ToUnicode"),
-            "error must name the cause: {message}"
+            pages.iter().any(|page| page.contains("A\u{FFFD}")),
+            "expected A followed by FFFD on some page, got {pages:?}"
         );
         assert!(
-            message.contains("per-page text"),
-            "per-page variant must say per-page text: {message}"
-        );
-        assert!(
-            message.contains("PDF bytes"),
-            "bytes variant must say PDF bytes: {message}"
+            pages.iter().all(|page| !page.contains('B')),
+            "must not guess unmapped B: {pages:?}"
         );
     }
 
@@ -419,40 +441,61 @@ mod tests {
         let text = extract_text_from_bytes(&missing_unicode_map_with_encoding_pdf())
             .expect("encoding variant must extract");
         assert!(text.contains("AB"), "expected AB, got {text:?}");
+        assert!(!text.contains('\u{FFFD}'), "unexpected FFFD in {text:?}");
         let pages = extract_text_by_pages_from_bytes(&missing_unicode_map_with_encoding_pdf())
             .expect("encoding variant must extract per page");
         assert!(
             pages.iter().any(|page| page.contains("AB")),
             "expected AB on some page, got {pages:?}"
         );
+        assert!(
+            pages.iter().all(|page| !page.contains('\u{FFFD}')),
+            "unexpected FFFD in {pages:?}"
+        );
     }
 
-    /// Path variants report the file they failed on.
+    /// Path variants extract with U+FFFD instead of failing.
     #[test]
-    fn missing_unicode_map_path_errors_name_the_file() {
+    fn missing_unicode_map_path_extracts_with_fffd() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing-map.pdf");
         std::fs::write(&path, missing_unicode_map_pdf()).unwrap();
-        let err = extract_text(&path).expect_err("incomplete ToUnicode map must fail");
-        let message = err.to_string();
+        let text = extract_text(&path).expect("incomplete ToUnicode map must extract");
         assert!(
-            message.contains("ToUnicode"),
-            "error must name the cause: {message}"
+            text.contains("A\u{FFFD}"),
+            "expected A followed by FFFD, got {text:?}"
+        );
+        assert!(!text.contains('B'), "must not guess unmapped B: {text:?}");
+        let pages =
+            extract_text_by_pages(&path).expect("incomplete ToUnicode map must extract per page");
+        assert!(
+            pages.iter().any(|page| page.contains("A\u{FFFD}")),
+            "expected A followed by FFFD on some page, got {pages:?}"
         );
         assert!(
-            message.contains(&*path.to_string_lossy()),
-            "error must name the file: {message}"
+            pages.iter().all(|page| !page.contains('B')),
+            "must not guess unmapped B: {pages:?}"
         );
-        let err = extract_text_by_pages(&path).expect_err("incomplete ToUnicode map must fail");
-        let message = err.to_string();
-        assert!(
-            message.contains("ToUnicode"),
-            "error must name the cause: {message}"
+    }
+
+    #[test]
+    fn format_unmapped_warning_deduplicates_paths_and_skips_zero() {
+        let unique = format!("dedup-test-{:?}.pdf", std::thread::current().id());
+        assert_eq!(format_unmapped_warning(&unique, 0, Some(&unique)), None);
+        let first = format_unmapped_warning(&unique, 3, Some(&unique));
+        assert_eq!(
+            first.as_deref(),
+            Some(
+                format!(
+                    "warning: {unique}: 3 character(s) have no text mapping in the PDF and \
+                     appear as U+FFFD (the PDF's own fonts lack them)"
+                )
+                .as_str()
+            )
         );
-        assert!(
-            message.contains(&*path.to_string_lossy()),
-            "error must name the file: {message}"
-        );
+        assert_eq!(format_unmapped_warning(&unique, 3, Some(&unique)), None);
+        assert!(format_unmapped_warning("PDF bytes", 2, None).is_some());
+        assert!(format_unmapped_warning("PDF bytes", 2, None).is_some());
     }
 
     /// Two threads through the guard at once (one panicking, one fine) must

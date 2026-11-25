@@ -220,3 +220,213 @@ fn detach_resources(doc: &mut Document, id: ObjectId, target: ObjectId, font: Ob
             true
         })
 }
+
+/// The 14 standard PDF fonts (`pdf-extract`'s `is_core_font` list).
+const CORE_FONTS: &[&[u8]] = &[
+    b"Courier",
+    b"Courier-Bold",
+    b"Courier-BoldOblique",
+    b"Courier-Oblique",
+    b"Helvetica",
+    b"Helvetica-Bold",
+    b"Helvetica-BoldOblique",
+    b"Helvetica-Oblique",
+    b"Symbol",
+    b"Times-Bold",
+    b"Times-BoldItalic",
+    b"Times-Italic",
+    b"Times-Roman",
+    b"ZapfDingbats",
+];
+
+/// Complete `/ToUnicode` `CMap`s on simple fonts that lack `/Encoding` so
+/// unmapped byte codes decode to `U+FFFD` instead of panicking in `pdf-extract`.
+///
+/// Returns the number of font dictionaries patched.
+pub(super) fn complete_unicode_maps(doc: &mut Document) -> usize {
+    let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    let mut patched = 0;
+    for id in ids {
+        let Some(cmap_id) = font_cmap_to_patch(doc, id) else {
+            continue;
+        };
+        if patch_cmap_stream(doc, cmap_id) {
+            patched += 1;
+        }
+    }
+    patched
+}
+
+fn font_cmap_to_patch(doc: &Document, id: ObjectId) -> Option<ObjectId> {
+    let dict = doc.get_object(id).ok()?.as_dict().ok()?;
+    if dict.has(b"Encoding") {
+        return None;
+    }
+    let subtype = dict.get(b"Subtype").and_then(Object::as_name).ok()?;
+    if matches!(subtype, b"Type0" | b"Type3") {
+        return None;
+    }
+    if let Ok(base_font) = dict.get(b"BaseFont").and_then(Object::as_name) {
+        if CORE_FONTS.contains(&base_font) {
+            return None;
+        }
+    }
+    match dict.get(b"ToUnicode").ok()? {
+        Object::Reference(cmap_id) => Some(*cmap_id),
+        _ => None,
+    }
+}
+
+fn patch_cmap_stream(doc: &mut Document, id: ObjectId) -> bool {
+    let Ok(raw) = doc
+        .get_object(id)
+        .and_then(Object::as_stream)
+        .and_then(|stream| stream.decompressed_content())
+    else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&raw);
+    if text.contains("<00> <FFFD>") {
+        return false;
+    }
+    let Some(pos) = [text.find("beginbfchar"), text.find("beginbfrange")]
+        .into_iter()
+        .flatten()
+        .min()
+        .or_else(|| text.find("endcmap"))
+    else {
+        return false;
+    };
+    let insert_at = text[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let filler = fffd_filler_cmap();
+    let mut patched = String::with_capacity(text.len() + filler.len());
+    patched.push_str(&text[..insert_at]);
+    patched.push_str(&filler);
+    patched.push_str(&text[insert_at..]);
+    let Ok(stream) = doc.get_object_mut(id).and_then(Object::as_stream_mut) else {
+        return false;
+    };
+    stream.set_plain_content(patched.into_bytes());
+    true
+}
+
+fn fffd_filler_cmap() -> String {
+    let mut out = String::new();
+    for start in [0u16, 100, 200] {
+        let end = (start + 99).min(255);
+        let count = end - start + 1;
+        out.push_str(&format!("{count} beginbfchar\n"));
+        for code in start..=end {
+            out.push_str(&format!("<{code:02X}> <FFFD>\n"));
+        }
+        out.push_str("endbfchar\n");
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::extract::extract_text_from_bytes;
+    use super::super::fixtures::{missing_unicode_map_pdf, missing_unicode_map_with_encoding_pdf};
+    use super::*;
+
+    fn replace_cmap(doc: &mut Document, new_cmap: &str) {
+        let cmap_id = doc
+            .objects
+            .values()
+            .find_map(|obj| {
+                let dict = obj.as_dict().ok()?;
+                match dict.get(b"ToUnicode").ok()? {
+                    Object::Reference(target) => Some(*target),
+                    _ => None,
+                }
+            })
+            .expect("fixture must have ToUnicode reference");
+        let stream = doc
+            .get_object_mut(cmap_id)
+            .expect("cmap stream must exist")
+            .as_stream_mut()
+            .expect("cmap must be a stream");
+        stream.set_plain_content(new_cmap.as_bytes().to_vec());
+    }
+
+    #[test]
+    fn complete_unicode_maps_patches_once_and_skips_encoded() {
+        let mut doc = Document::load_mem(&missing_unicode_map_pdf()).expect("fixture must load");
+        assert_eq!(complete_unicode_maps(&mut doc), 1);
+        assert_eq!(complete_unicode_maps(&mut doc), 0);
+
+        let mut encoded = Document::load_mem(&missing_unicode_map_with_encoding_pdf())
+            .expect("encoded fixture must load");
+        assert_eq!(complete_unicode_maps(&mut encoded), 0);
+    }
+
+    #[test]
+    fn complete_unicode_maps_skips_core_fonts() {
+        let mut doc = Document::load_mem(&missing_unicode_map_pdf()).expect("fixture must load");
+        for obj in doc.objects.values_mut() {
+            if let Ok(dict) = obj.as_dict_mut() {
+                if dict.has(b"ToUnicode") {
+                    dict.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+                }
+            }
+        }
+        assert_eq!(complete_unicode_maps(&mut doc), 0);
+    }
+
+    #[test]
+    fn complete_unicode_maps_patches_before_endcmap_when_no_bf_blocks() {
+        let mut doc = Document::load_mem(&missing_unicode_map_pdf()).expect("fixture must load");
+        let empty_cmap = [
+            "/CIDInit /ProcSet findresource begin",
+            "12 dict begin",
+            "begincmap",
+            "1 begincodespacerange",
+            "<00> <FF>",
+            "endcodespacerange",
+            "endcmap",
+            "end",
+            "end",
+        ]
+        .join("\n");
+        replace_cmap(&mut doc, &empty_cmap);
+        assert_eq!(complete_unicode_maps(&mut doc), 1);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("patched doc must save");
+        let text = extract_text_from_bytes(&bytes).expect("must extract");
+        assert!(
+            text.contains("\u{FFFD}\u{FFFD}"),
+            "expected two FFFDs, got {text:?}"
+        );
+    }
+
+    #[test]
+    fn complete_unicode_maps_preserves_bfrange_over_filler() {
+        let mut doc = Document::load_mem(&missing_unicode_map_pdf()).expect("fixture must load");
+        let range_cmap = [
+            "/CIDInit /ProcSet findresource begin",
+            "12 dict begin",
+            "begincmap",
+            "1 begincodespacerange",
+            "<00> <FF>",
+            "endcodespacerange",
+            "1 beginbfrange",
+            "<41> <41> <0041>",
+            "endbfrange",
+            "endcmap",
+            "end",
+            "end",
+        ]
+        .join("\n");
+        replace_cmap(&mut doc, &range_cmap);
+        assert_eq!(complete_unicode_maps(&mut doc), 1);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("patched doc must save");
+        let text = extract_text_from_bytes(&bytes).expect("must extract");
+        assert!(
+            text.contains("A\u{FFFD}"),
+            "expected A followed by FFFD, got {text:?}"
+        );
+        assert!(!text.contains('B'), "B must remain unmapped: {text:?}");
+    }
+}

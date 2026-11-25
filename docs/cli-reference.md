@@ -567,9 +567,10 @@ Inspect the compiled PDF. Every action is a subcommand below.
 texforge pdf <text|info|pages|check>
 ```
 
-A PDF whose text the extractor cannot read (for example a font whose text
-mapping is incomplete) is reported as an error naming the file instead of
-aborting.
+When a PDF font lacks a text mapping for some characters, extraction still
+yields the document's text with `U+FFFD` in place of each unmapped character and
+prints one warning with the count on stderr instead of failing. Other
+extractor errors or panics are reported naming the file instead of aborting.
 Example:
 
 ```
