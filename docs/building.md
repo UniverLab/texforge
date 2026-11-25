@@ -8,7 +8,10 @@ order: 4
 
 ## `texforge build`
 
-Compiles the project to `<title>.pdf` in the project root:
+Compiles the project to `<title>.pdf` in the project root. The file name is the
+`[document] title` in lowercase with every run of characters other than letters
+and digits replaced by one hyphen, and no leading or trailing hyphen, so
+`My Thesis: Final Version` becomes `my-thesis-final-version.pdf`:
 
 1. Copies sources into a temporary build directory (originals are never
    modified).
@@ -18,7 +21,94 @@ Compiles the project to `<title>.pdf` in the project root:
    project root.
 
 On the first run texforge downloads the Tectonic binary into
-`~/.texforge/bin/` automatically.
+`~/.texforge/bin/` automatically. On the next build (or `texforge doctor`)
+an outdated managed copy is updated to the supported version automatically;
+when the Tectonic that runs is older than the supported version — for
+example one earlier in `PATH` — the build warns about it and continues.
+
+## Engine log and overfull boxes
+
+After every compile — successful or not — the engine's complete log text is
+kept at `build/<entry-stem>.log` under the project root (`build/` is
+created when needed and removed by `texforge clean`). `--log <path>`
+writes it elsewhere instead; relative paths resolve against the current
+directory. For `build --values` the default is `<pdf-stem>.log` next to the
+PDF.
+
+Overfull horizontal boxes wider than 1pt are reported after the existing
+warning output: one summary line (`◇ N overfull box(es), worst Wpt`) plus
+one `file:line` detail per box, widest first — at most 10 unless
+`--verbose` lists them all. A box with no source line (one the engine
+raised while `\output` was active) is labelled `output routine`. Builds
+with no box wider than 1pt print exactly what they print today.
+
+```bash
+texforge build --log engine.log     # keep the log at a custom path
+texforge build --max-overfull 5     # fail when any box exceeds 5pt
+```
+
+`--max-overfull <pt>` still writes the PDF but exits non-zero with
+`overfull box of Wpt exceeds --max-overfull Mpt` when any reported box is
+wider than the given value. Without the flag the exit status is unchanged.
+`texforge check` does not read the log.
+
+## Passes
+
+TeX needs more than one pass when a document has a table of contents,
+cross-references or a bibliography: each pass writes auxiliary files
+(`.aux`, `.toc`, `.bbl`, ...) that the next pass reads. texforge runs
+each pass in its own Tectonic process and repeats the intermediate
+passes until those auxiliary files stop changing (at least 2 passes, at
+most 6), then runs one final pass that writes the PDF. Every build uses
+a fresh temporary build directory, so no stale auxiliary file from an
+older build is ever read.
+
+One process per pass works around a Tectonic issue where glyph
+measurements cached in one pass leak into the next and stretch lines
+(tectonic#1412): on a 53-page report the multi-process build takes
+6.7 s instead of 5.0 s and the wrongly tall lines are gone.
+
+Set `TEXFORGE_SINGLE_PROCESS=1` to build in a single process again.
+When the installed Tectonic does not support one process per pass (no
+`--reruns`/`--outfmt`), texforge prints a warning and falls back to a
+single process automatically.
+
+## Building a template folder
+
+A folder carrying a `template.toml` — with or without a `project.toml` —
+builds straight to a filled PDF, without creating a project first:
+
+```bash
+texforge build --values client.toml
+texforge build --values client.toml --out ../nda-acme.pdf
+texforge build --values client.toml templates/nda
+```
+
+Pass an optional `DIR` after `--values <file>` to build a template folder
+from another directory (`DIR` defaults to `.` and is only valid with
+`--values`). Placeholders are rendered into a temporary copy outside the folder, then the
+normal pipeline runs on that copy: the folder itself is never modified and
+nothing is ever written inside it. Only `.tex` files are substituted, with
+the same rules as `texforge new`; every other file is copied byte-for-byte,
+except `template.toml`, `.git/`, `build/`, `.texforge/`, every values file and
+`*.pdf`, which are skipped. A missing required placeholder fails the run
+naming each one and the values files, before anything compiles. `--values`
+is repeatable: files merge in command-line order with later files winning
+key by key. When the
+folder also has a `project.toml`, its title, entry, bibliography, highlight,
+diagrams and reproducible settings apply; with only a `template.toml`, the
+entry is `main.tex` and the title is the manifest's display name. The PDF
+lands at `--out`, or at `<folder-name>.pdf` in the current directory (where
+the command runs, not inside `DIR`) when `--out` is omitted, and the run ends with
+`wrote <path>`; `--values` on a folder with no `template.toml` is an error.
+Relative `--values` and `--out` paths resolve against the current directory too, so
+`--out ../name.pdf` places the PDF next to the folder. No existing file of
+the folder is modified: the sources compile from a temporary copy, and
+`*.pdf` files are never staged, so a previous PDF does not feed back into
+the next build. Without `--values`, a folder
+that also has a `project.toml` builds as a plain project; a folder with only
+a `template.toml` fails telling you `--values` is needed. `--values` cannot
+be combined with `--watch`.
 
 ## Reproducible builds
 
@@ -56,7 +146,10 @@ texforge build --watch --delay 5  # custom debounce delay in seconds
 ```
 
 The terminal shows a live session timer, build count and the result of the
-last build. Press `Ctrl+C` to stop.
+last build. Press `Ctrl+C` to stop. The header banner follows the terminal
+width — the large font at 82 columns or wider, the compact one below that.
+When stdout is not a TTY no banner is printed. See the
+[CLI reference](cli-reference.md#startup-banner).
 
 ## Cleaning
 
@@ -66,7 +159,7 @@ texforge clean   # remove build artifacts
 
 ## Preview
 
-`texforge preview` rasterizes the compiled PDF to PNG pages for quick visual review or for embedding in documentation:
+`texforge preview` rasterizes the compiled PDF to PNG pages for quick visual review or for embedding in documentation. Before rasterizing, stale `page-<n>.png` files are removed from the output folder (all of them, or only those for `--page <n>`); other files are left alone:
 
 ```bash
 # Rasterize all pages (writes to ./preview/)

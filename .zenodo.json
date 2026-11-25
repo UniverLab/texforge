@@ -1,0 +1,26 @@
+{
+  "title": "texforge",
+  "upload_type": "software",
+  "description": "Texforge is a unified LaTeX workspace — one tool for writing, rendering diagrams (Mermaid, Graphviz), and building PDFs. Set it up once and stay focused on your document.",
+  "creators": [
+    {
+      "name": "Martinez Bolivar, Jheison",
+      "affiliation": "UniverLab",
+      "orcid": "https://orcid.org/0009-0007-3668-102X"
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "latex",
+    "pdf",
+    "tectonic",
+    "cli"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/UniverLab/texforge",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

@@ -35,6 +35,10 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
 
+# YAML values files for `texforge new --values`: a maintained, pure-Rust fork
+# of the unmaintained serde_yaml.
+serde_norway = "0.9"
+
 # JSON output (texforge stats --json)
 serde_json = "1.0"
 
@@ -59,11 +63,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Archive extraction (GitHub tarballs + tectonic zip on Windows)
 flate2 = "1.1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # SHA256 verification of release assets for `texforge update`
 # (already in the lock transitively — no new heavy dependency)
 sha2 = "0.10"
+
+# Minisign signature verification of `SHA256SUMS.txt` for `texforge update`
+minisign-verify = "0.3"
 
 # File watching for --watch mode
 notify = { version = "8", features = ["macos_fsevent"] }
@@ -107,8 +114,11 @@ png = "0.17"
 # Temporary directories for build
 tempfile = "3.8"
 
+# Terminal width for the startup banner font choice
+terminal_size = "0.4"
+
 # Pure-Rust PDF text extraction (no C toolchain; same constraint as hayro)
-pdf-extract = "0.12"
+pdf-extract = "0.12.1"
 lopdf = "0.42"
 
 # Hunspell-compatible spell-check backend (pure Rust, no_std; same
@@ -116,6 +126,10 @@ lopdf = "0.42"
 # minor: spellbook's own README calls it alpha and warns any part of the API
 # may break.
 spellbook = "0.4"
+
+[dev-dependencies]
+# Test-only keypair generation for the signed-checksum fixtures (`texforge update`)
+minisign = "0.10"
 
 [lints.clippy]
 needless_pass_by_value = "warn"

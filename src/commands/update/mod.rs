@@ -35,6 +35,10 @@ use serde::Deserialize;
 
 use crate::version::SemVer;
 
+mod signature;
+
+use signature::{verify_sums, PUBLIC_KEY};
+
 /// The GitHub repository whose stable releases contain texforge binaries.
 pub const GITHUB_OWNER: &str = "UniverLab";
 pub const GITHUB_REPO: &str = "texforge";
@@ -579,23 +583,52 @@ pub fn download_and_extract_with(
     }
 }
 
-/// Verify the archive against the release's `SHA256SUMS.txt` when the
-/// release ships one. A missing checksum file (older releases) or a missing
-/// line for this asset skips verification — deliberately more lenient than
-/// `scripts/install.sh`, which errors on a missing line; a present-but-
-/// mismatched digest is fatal.
+/// Verify the archive against the release's signed `SHA256SUMS.txt`.
+///
+/// From 1.0.0 releases sign `SHA256SUMS.txt` with minisign
+/// (`SHA256SUMS.txt.minisig` next to it) and the signature is verified
+/// before the checksums are trusted: a 1.x release with no sums file, no
+/// signature file, or a bad signature is fatal. 0.x releases predate
+/// signing, so a missing sums file skips verification there and a missing
+/// signature file skips only the signature check — the SHA256 comparison
+/// still runs; a present-but-mismatched digest is fatal on every version.
 fn verify_checksum_if_present(
     downloader: &dyn BinaryDownloader,
     version: &SemVer,
     asset: &str,
     bytes: &[u8],
 ) -> Result<()> {
+    verify_checksum_with_key(downloader, version, asset, bytes, PUBLIC_KEY)
+}
+
+fn verify_checksum_with_key(
+    downloader: &dyn BinaryDownloader,
+    version: &SemVer,
+    asset: &str,
+    bytes: &[u8],
+    public_key: &str,
+) -> Result<()> {
     let url = format!(
         "https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/v{version}/SHA256SUMS.txt"
     );
     let Ok(sums) = downloader.download(&url) else {
+        if version.major >= 1 {
+            bail!("Release v{version} has no SHA256SUMS.txt");
+        }
         return Ok(());
     };
+
+    let sig_url = format!("{url}.minisig");
+    match downloader.download(&sig_url) {
+        Ok(signature) => {
+            verify_sums(public_key, &sums, &String::from_utf8_lossy(&signature))?;
+        }
+        Err(_) => {
+            if version.major >= 1 {
+                bail!("Release v{version} has no SHA256SUMS.txt.minisig; refusing to install an unsigned release");
+            }
+        }
+    }
 
     let text = String::from_utf8_lossy(&sums);
     // `sha256sum -b` (binary mode) prefixes the file name with `*`; plain
@@ -661,9 +694,12 @@ fn extract_binary_from_zip(bytes: &[u8], bin_name: &str, dest: &Path) -> Result<
         let mut entry = archive
             .by_index(index)
             .context("failed to read zip archive entry")?;
-        let name = entry.name();
-        let leaf = name.rsplit('/').next().unwrap_or(name);
-        if leaf != bin_name {
+        let is_match = {
+            let name = entry.name()?;
+            let leaf = name.rsplit('/').next().unwrap_or(name.as_ref());
+            leaf == bin_name
+        };
+        if !is_match {
             continue;
         }
         let mut file =

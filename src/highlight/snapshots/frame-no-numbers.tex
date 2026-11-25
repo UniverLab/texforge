@@ -3,9 +3,14 @@
 \makeatletter
 \@ifpackageloaded{color}{}{\@ifpackageloaded{xcolor}{}{\usepackage{color}}}%
 \makeatother
+\makeatletter
+\@ifpackageloaded{DejaVuSansMono}{}{\usepackage{DejaVuSansMono}}%
+\@ifpackageloaded{fontspec}{\renewcommand{\ttfamily}{\fontencoding{T1}\fontfamily{\ttdefault}\selectfont}}{}%
+\makeatother
 \newcommand{\tfxcodestyle}{\ttfamily\small\setlength{\parindent}{0pt}\setlength{\parskip}{0pt}}
 \newcommand{\tfxsmash}[1]{\setbox0=\hbox{#1}\ht0=0pt\dp0=0pt\box0}
 \newcommand{\tfxsp}{\nobreakspace{}}
+\newcommand{\tfxnoselect}[1]{{\special{pdf:literal direct /Span << /ActualText <FEFF> >> BDC}#1\special{pdf:literal direct EMC}}}
 \definecolor{tfxtint}{rgb}{0.965,0.973,0.980}
 \definecolor{tfxframe}{rgb}{0.765,0.780,0.796}
 \definecolor{tfxcol005cc5}{rgb}{0.000,0.361,0.773}

@@ -1,5 +1,9 @@
 //! LaTeX compilation engine — wraps Tectonic.
 
+pub(crate) mod log;
+pub(super) mod passes;
+pub(crate) mod tectonic_version;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
@@ -33,12 +37,10 @@ pub fn compile(
     verbose: bool,
     epoch: Option<u64>,
     line_map: &LineMap,
-) -> Result<Vec<CompileWarning>> {
+) -> Result<(Vec<CompileWarning>, String)> {
     let tectonic = find_tectonic()?;
 
-    let output = tectonic_command(&tectonic, root, entry, epoch)
-        .output()
-        .with_context(|| format!("Failed to run tectonic at {}", tectonic.display()))?;
+    let output = passes::run_passes(&tectonic, root, entry, epoch)?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -49,13 +51,17 @@ pub fn compile(
 
     if output.status.success() {
         print_warnings(&warnings, verbose);
-        return Ok(warnings);
+        return Ok((warnings, raw));
     }
 
     let mut errors = parse_errors(&raw);
     remap_errors(&mut errors, line_map);
     if errors.is_empty() {
-        anyhow::bail!("Compilation failed:\n{}", raw.trim());
+        return Err(CompileFailure {
+            message: format!("Compilation failed:\n{}", raw.trim()),
+            raw,
+        }
+        .into());
     }
 
     let mut msg = String::from("Compilation failed:\n\n");
@@ -65,7 +71,11 @@ pub fn compile(
             e.file, e.line, e.message
         ));
     }
-    anyhow::bail!("{}", msg.trim());
+    Err(CompileFailure {
+        message: msg.trim().to_string(),
+        raw,
+    }
+    .into())
 }
 
 /// Rewrite one parsed `file:line` location through the build-copy line
@@ -126,6 +136,22 @@ struct CompileError {
     message: String,
 }
 
+/// A failed engine run: the display message plus the engine's complete log,
+/// so callers can persist the log even when compilation fails.
+#[derive(Debug)]
+pub(crate) struct CompileFailure {
+    message: String,
+    pub(crate) raw: String,
+}
+
+impl std::fmt::Display for CompileFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CompileFailure {}
+
 /// Parse tectonic/TeX error output into structured errors.
 fn parse_errors(raw: &str) -> Vec<CompileError> {
     let mut errors = Vec::new();
@@ -179,13 +205,16 @@ fn parse_tectonic_error(rest: &str, errors: &mut Vec<CompileError>) {
 }
 
 /// A single TeX/Tectonic warning parsed from compiler output.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct CompileWarning {
     file: String,
     line: usize,
     severity: Severity,
     kind: &'static str,
     message: String,
+    /// The `N` in `Overfull \hbox (Npt too wide)`; `None` for every other
+    /// warning kind. Only hbox warnings carry a width by construction.
+    width_pt: Option<f32>,
 }
 
 /// Recognized warning shapes: (substring fragment, canonical kind name).
@@ -210,6 +239,16 @@ fn warning_kind(line: &str) -> Option<&'static str> {
         return Some("package warning");
     }
     None
+}
+
+/// The overfull width for a classified warning: only `overfull hbox`
+/// warnings carry one, parsed from `Overfull \hbox (Npt too wide)`.
+fn warning_width(kind: &str, message: &str) -> Option<f32> {
+    if kind == "overfull hbox" {
+        log::parse_width(message)
+    } else {
+        None
+    }
 }
 
 /// Pull a line number out of TeX warning markers: `at lines 41--42` and
@@ -275,12 +314,14 @@ fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
         if let Some(rest) = trimmed.strip_prefix("warning: ") {
             if let Some((file, line, message)) = parse_tectonic_warning_prefix(rest) {
                 if let Some(kind) = warning_kind(&message) {
+                    let width_pt = warning_width(kind, &message);
                     warnings.push(CompileWarning {
                         file,
                         line,
                         severity: Severity::Warning,
                         kind,
                         message,
+                        width_pt,
                     });
                     continue;
                 }
@@ -289,12 +330,14 @@ fn parse_warnings(raw: &str) -> Vec<CompileWarning> {
         let Some(kind) = warning_kind(trimmed) else {
             continue;
         };
+        let width_pt = warning_width(kind, trimmed);
         warnings.push(CompileWarning {
             file: file_stack.last().cloned().unwrap_or_default(),
             line: extract_line(trimmed),
             severity: Severity::Warning,
             kind,
             message: trimmed.to_string(),
+            width_pt,
         });
     }
 
@@ -364,9 +407,31 @@ fn print_warnings(warnings: &[CompileWarning], verbose: bool) {
     }
 }
 
+/// Refresh the managed Tectonic copy when it is older than the pinned
+/// version. A missing home directory is `Absent`, never a new error —
+/// `doctor` must not newly fail because of the refresh.
+pub(crate) fn refresh_managed_tectonic() -> tectonic_version::Refresh {
+    tectonic_managed_path()
+        .map(|m| {
+            tectonic_version::refresh_managed_if_outdated(&m, TECTONIC_VERSION, &install_tectonic)
+        })
+        .unwrap_or(tectonic_version::Refresh::Absent)
+}
+
 /// Find the tectonic binary in PATH or known locations, auto-installing if needed.
 fn find_tectonic() -> Result<std::path::PathBuf> {
+    refresh_managed_tectonic();
     if let Some(path) = locate_tectonic() {
+        if let Some(version) = tectonic_version::query_tectonic_version(&path) {
+            if tectonic_version::is_older(&version, TECTONIC_VERSION) {
+                eprintln!(
+                    "warning: Tectonic {} at {} is older than the {} that texforge supports; BibTeX fixes are missing. Remove it from PATH or run 'texforge doctor'.",
+                    version,
+                    path.display(),
+                    TECTONIC_VERSION
+                );
+            }
+        }
         return Ok(path);
     }
     eprintln!("Tectonic not found. Installing automatically...");
@@ -415,6 +480,19 @@ const TECTONIC_BIN: &str = "tectonic.exe";
 #[cfg(not(windows))]
 const TECTONIC_BIN: &str = "tectonic";
 
+pub(crate) const TECTONIC_VERSION: &str = "0.17.0";
+
+fn tectonic_download_url(target: &str) -> String {
+    let filename = if target.contains("windows") {
+        format!("tectonic-{TECTONIC_VERSION}-{target}.zip")
+    } else {
+        format!("tectonic-{TECTONIC_VERSION}-{target}.tar.gz")
+    };
+    format!(
+        "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{TECTONIC_VERSION}/{filename}"
+    )
+}
+
 fn tectonic_managed_path() -> Result<std::path::PathBuf> {
     dirs::home_dir()
         .map(|h| h.join(".texforge").join("bin").join(TECTONIC_BIN))
@@ -424,19 +502,10 @@ fn tectonic_managed_path() -> Result<std::path::PathBuf> {
 /// Download and install tectonic to the given path.
 fn install_tectonic(dest: &std::path::Path) -> Result<()> {
     let target = current_target()?;
-    let version = "0.15.0";
-    let (filename, is_zip) = if target.contains("windows") {
-        (format!("tectonic-{}-{}.zip", version, target), true)
-    } else {
-        (format!("tectonic-{}-{}.tar.gz", version, target), false)
-    };
+    let is_zip = target.contains("windows");
+    let url = tectonic_download_url(target);
 
-    let url = format!(
-        "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{}/{}",
-        version, filename
-    );
-
-    eprintln!("Downloading tectonic {}...", version);
+    eprintln!("Downloading tectonic {}...", TECTONIC_VERSION);
 
     let response = reqwest::blocking::Client::new()
         .get(&url)
@@ -493,7 +562,11 @@ fn install_from_zip(bytes: &[u8], dest: &std::path::Path) -> Result<()> {
     let mut archive = zip::ZipArchive::new(cursor)?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        if file.name().ends_with("tectonic.exe") || file.name() == "tectonic.exe" {
+        let is_match = {
+            let name = file.name()?;
+            name.ends_with("tectonic.exe") || name == "tectonic.exe"
+        };
+        if is_match {
             std::io::copy(&mut file, &mut std::fs::File::create(dest)?)?;
             return Ok(());
         }
@@ -773,6 +846,7 @@ mod tests {
         assert_eq!(warnings[0].severity, Severity::Warning);
         assert_eq!(warnings[0].kind, "underfull hbox");
         assert!(warnings[0].message.contains("badness 1856"));
+        assert_eq!(warnings[0].width_pt, None);
     }
 
     #[test]
@@ -783,6 +857,7 @@ mod tests {
         assert_eq!(warnings[0].kind, "overfull hbox");
         assert_eq!(warnings[0].line, 41);
         assert_eq!(warnings[0].file, "");
+        assert_eq!(warnings[0].width_pt, Some(12.0));
     }
 
     #[test]
@@ -849,6 +924,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "underfull hbox",
                 message: "Underfull \\hbox (badness 1856)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "main.tex".into(),
@@ -856,6 +932,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "underfull hbox",
                 message: "Underfull \\hbox (badness 2000)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "skills.tex".into(),
@@ -863,6 +940,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "package warning",
                 message: "Package hyperref Warning: ...".into(),
+                width_pt: None,
             },
         ];
         let out = format_warnings(&warnings, false);
@@ -879,6 +957,7 @@ mod tests {
             severity: Severity::Warning,
             kind: "underfull hbox",
             message: "Underfull \\hbox (badness 1856) in paragraph at lines 58--59".into(),
+            width_pt: None,
         }];
         let out = format_warnings(&warnings, true);
         assert!(out.contains("WARNING [main.tex:58] underfull hbox:"));
@@ -901,6 +980,7 @@ mod tests {
             severity: Severity::Warning,
             kind: "engine warning",
             message: "something engine-wide happened".into(),
+            width_pt: None,
         }];
         let out = format_warnings(&warnings, false);
         assert_eq!(out, "WARNINGS (1)\n  main.tex: 1 engine warning\n");
@@ -916,6 +996,7 @@ mod tests {
         assert_eq!(warnings[0].line, 8);
         assert_eq!(warnings[0].kind, "overfull hbox");
         assert!(warnings[0].message.contains("Overfull"));
+        assert_eq!(warnings[0].width_pt, Some(12.0));
     }
 
     #[test]
@@ -945,6 +1026,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull \\hbox (12.0pt too wide)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "main.tex".into(),
@@ -952,6 +1034,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull \\hbox (12.0pt too wide)".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "main.tex".into(),
@@ -959,6 +1042,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull \\hbox (9.0pt too wide)".into(),
+                width_pt: None,
             },
         ];
         let out = format_warnings(&warnings, false);
@@ -996,11 +1080,12 @@ mod tests {
         // Source line 5 holds the long code line.
         let map = crate::highlight::process(
             dir.path(),
+            dir.path(),
             "main.tex",
             crate::highlight::Settings::default(),
         )
         .unwrap();
-        let warnings = compile(dir.path(), "main.tex", false, None, &map).unwrap();
+        let (warnings, _raw) = compile(dir.path(), "main.tex", false, None, &map).unwrap();
         let overfull: Vec<_> = warnings
             .iter()
             .filter(|w| w.kind == "overfull hbox")
@@ -1053,6 +1138,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull".into(),
+                width_pt: None,
             },
             CompileWarning {
                 file: "other.tex".into(),
@@ -1060,6 +1146,7 @@ mod tests {
                 severity: Severity::Warning,
                 kind: "overfull hbox",
                 message: "Overfull".into(),
+                width_pt: None,
             },
         ];
         remap_warnings(&mut warnings, &map);
@@ -1072,6 +1159,7 @@ mod tests {
             severity: Severity::Warning,
             kind: "overfull hbox",
             message: "Overfull".into(),
+            width_pt: None,
         }];
         remap_warnings(&mut warnings, &LineMap::default());
         assert_eq!(warnings[0].line, 3);
@@ -1128,6 +1216,7 @@ mod tests {
         // Source line 7 holds the undefined command.
         let map = crate::highlight::process(
             dir.path(),
+            dir.path(),
             "main.tex",
             crate::highlight::Settings::default(),
         )
@@ -1139,5 +1228,240 @@ mod tests {
             "the error must point at source line 7: {msg}"
         );
         assert!(!msg.contains("ERROR [main.tex:21]"), "{msg}");
+    }
+
+    #[test]
+    fn download_url_uses_pinned_version_for_all_targets() {
+        for target in [
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let url = tectonic_download_url(target);
+            assert!(url.contains(TECTONIC_VERSION), "{target}: {url}");
+            assert!(
+                url.contains(&format!("tectonic-{TECTONIC_VERSION}-{target}")),
+                "{target}: {url}"
+            );
+            assert!(!url.contains("0.15.0"), "{target}: {url}");
+        }
+    }
+
+    /// A Tectonic run failed for want of a network fetch when its message
+    /// names the bundle/package or the failed download itself.
+    fn fetch_failed(msg: &str) -> bool {
+        [
+            "failed to download",
+            "failed to retrieve",
+            "timed out",
+            "Could not resolve",
+            "Temporary failure",
+            "Connection refused",
+            "connection failed",
+            "certificate",
+        ]
+        .iter()
+        .any(|fragment| msg.contains(fragment))
+    }
+
+    /// The document of tectonic#1412 plus a label/ref and a one-entry
+    /// bibliography, built through `compile`: one process per pass must
+    /// measure the bold 12pt box right (`8.184pt`, not `37.044pt`),
+    /// resolve the reference and the citation, and leave no `??` in the
+    /// PDF text. Skips without Tectonic, and when `ebgaramond` cannot be
+    /// fetched.
+    #[test]
+    fn per_pass_build_measures_glyph_boxes_and_resolves_references() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass[a4paper,12pt]{report}\n\
+             \\usepackage[T1]{fontenc}\n\
+             \\usepackage[lining]{ebgaramond}\n\
+             \\begin{document}\n\
+             \\tableofcontents\n\
+             \\setbox1\\hbox{{\\fontsize{54}{54}\\selectfont A}}\
+             \\typeout{REG54-A ht=\\the\\ht1}\n\
+             \\setbox1\\hbox{{\\fontsize{30}{34}\\selectfont\\bfseries A}}\
+             \\typeout{BOLD30-A ht=\\the\\ht1}\n\
+             \\chapter{Uno}\\label{ch:uno}\n\
+             \\setbox0\\hbox{\\textbf{Arquitectura}}\
+             \\typeout{BOLD12 ht=\\the\\ht0}\n\
+             See chapter~\\ref{ch:uno} and \\cite{k}.\n\
+             \\bibliographystyle{plain}\n\
+             \\bibliography{refs}\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("refs.bib"),
+            "@book{k,\n  author = {A. Uthor},\n  title = {A Book},\n  publisher = {P},\n  year = {2000}\n}\n",
+        )
+        .unwrap();
+        let (_warnings, raw) = match compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        ) {
+            Ok(ok) => ok,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("ebgaramond") || fetch_failed(&msg) {
+                    eprintln!("skipping: the ebgaramond package cannot be fetched");
+                    return;
+                }
+                panic!("compile failed: {msg}");
+            }
+        };
+        let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+        assert!(
+            log.contains("BOLD12 ht=8.184pt"),
+            "one process per pass must measure the bold box right: {log}"
+        );
+        assert!(
+            !raw.contains("??"),
+            "no pass may leave references unresolved: {raw}"
+        );
+        let pdf = dir.path().join("main.pdf");
+        assert!(pdf.exists(), "the final pass must write the PDF");
+        let text = crate::pdftext::extract_text(&pdf).unwrap();
+        assert!(!text.contains("??"), "references must resolve: {text}");
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("chapter 1") && flat.contains("Uthor"),
+            "the reference and the citation must resolve: {flat}"
+        );
+    }
+
+    /// Every auxiliary-file extension that must never land beside the
+    /// user's sources after a build through the real pipeline.
+    fn stray_aux_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut stray = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stray.extend(stray_aux_files(&path));
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext, "aux" | "toc" | "bbl" | "xdv" | "log"))
+            {
+                stray.push(path);
+            }
+        }
+        stray
+    }
+
+    /// A successful build of a temp project leaves no `.aux`, `.toc`,
+    /// `.bbl`, `.xdv` or `.log` file in the project directory: they live
+    /// in the temp build directory. The log goes to a temp path too, so
+    /// even the kept engine log cannot pollute the project. Skips without
+    /// Tectonic.
+    #[test]
+    fn successful_build_keeps_aux_files_out_of_the_project() {
+        // Spawns tectonic: the child inherits the process env, so hold
+        // ENV_LOCK or a concurrent HOME swap gives it a cold bundle cache.
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\
+             \\begin{document}\n\
+             \\tableofcontents\n\
+             \\section{Hello}\\label{sec:hello}\n\
+             See section~\\ref{sec:hello}.\n\
+             \\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("project.toml"),
+            "[document]\ntitle = \"Auxfree\"\nauthor = \"A\"\ntemplate = \"general\"\n\n\
+             [build]\nentry = \"main.tex\"\n",
+        )
+        .unwrap();
+        let project = crate::domain::project::Project {
+            root: dir.path().to_path_buf(),
+            config: crate::domain::project::ProjectConfig {
+                document: crate::domain::project::DocumentConfig {
+                    title: "Auxfree".to_string(),
+                    author: "A".to_string(),
+                    template: "general".to_string(),
+                },
+                build: crate::domain::project::BuildConfig {
+                    entry: "main.tex".to_string(),
+                    bibliography: None,
+                    reproducible: None,
+                },
+                diagrams: None,
+                highlight: None,
+            },
+        };
+        let build_dir = tempfile::tempdir().unwrap();
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("engine.log");
+        let (pdf_src, _warnings, _raw) = crate::commands::build::compile_project(
+            &project,
+            build_dir.path(),
+            false,
+            None,
+            &log_path,
+        )
+        .unwrap();
+        assert!(pdf_src.exists(), "the engine must still write its PDF");
+        let stray = stray_aux_files(dir.path());
+        assert!(stray.is_empty(), "nothing auxiliary may stay: {stray:?}");
+    }
+
+    /// With `TEXFORGE_SINGLE_PROCESS` set, `compile` builds through the
+    /// old single call and never takes the fallback branch, so no
+    /// fallback warning is produced. Skips without Tectonic.
+    #[test]
+    fn single_process_env_builds_through_the_old_call() {
+        let _env = crate::test_sync::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::test_sync::EnvGuard::capture(&["TEXFORGE_SINGLE_PROCESS"]);
+        std::env::set_var("TEXFORGE_SINGLE_PROCESS", "1");
+        if locate_tectonic().is_none() {
+            eprintln!("skipping: tectonic not available in environment");
+            return;
+        }
+        let _tectonic = crate::test_support::tectonic_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\nSingle process.\n\\end{document}\n",
+        )
+        .unwrap();
+        let (_warnings, _raw) = compile(
+            dir.path(),
+            "main.tex",
+            false,
+            None,
+            &crate::highlight::LineMap::default(),
+        )
+        .unwrap();
+        assert!(dir.path().join("main.pdf").exists());
     }
 }

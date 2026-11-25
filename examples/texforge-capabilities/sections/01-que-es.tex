@@ -1,0 +1,60 @@
+% Capitulo 1: que es texforge y como se produjo este documento.
+\section{Qué es texforge}\label{sec:que-es}
+
+texforge es un compilador de documentos \LaTeX{} que se distribuye como un
+único binario de línea de comandos y lleva dentro su propio motor de
+composición, tectonic~\cite{tectonic}. Quien escribe no instala TeX Live ni
+MiKTeX, no configura espejos de paquetes ni espera descargas de varios
+gibas: crea un proyecto, escribe y compila. El motor gestionado se descarga
+solo la primera vez que se compila y vive bajo \texttt{\$HOME/.texforge},
+fuera del documento y fuera del control de versiones del usuario.
+
+El flujo cabe en tres verbos. \texttt{texforge new} crea un proyecto con su
+\texttt{project.toml}; \texttt{texforge check} revisa el fuente sin compilar
+y avisa de citas rotas, etiquetas sin resolver y palabras desconocidas;
+\texttt{texforge build} compone el PDF en \texttt{build/}. Entre la
+escritura y el PDF hay además un preprocesador que detecta los entornos de
+diagramas y de código, los dibuja o resalta en Rust puro y trabaja sobre
+copias en el directorio de compilación: los \texttt{.tex} originales nunca
+se modifican, así que lo que se versiona es siempre lo que se escribió.
+
+El motor gestionado merece una línea propia. Tectonic vive bajo
+\texttt{\$HOME/.texforge}, fuera de los proyectos, y \texttt{texforge
+  doctor} lo mantiene al día: actualiza el motor gestionado a la versión
+soportada y avisa si el Tectonic del \texttt{PATH} es más viejo que el que
+texforge espera. Nada de esto toca la configuración del usuario ni sus
+cachés personales: la compilación usa sus propios temporales y el proyecto
+solo guarda el fuente, el \texttt{project.toml} y el PDF.
+
+\begin{notebox}
+  Si vienes de una distribución clásica, la diferencia se nota el primer
+  día: no hay que elegir qué colección instalar ni qué espejo usar.
+  El primer \texttt{build} tarda lo que tarde en llegar el motor; los
+  siguientes solo componen.
+\end{notebox}
+
+Este mismo documento es la prueba. Su fuente vive en
+\texttt{examples/texforge-capabilities} y su organización es la de todo
+proyecto: un \texttt{main.tex} con el preámbulo editorial, nueve capítulos
+en \texttt{sections/} incluidos desde el principal, la bibliografía en
+\texttt{bib/references.bib} y un guion de análisis en
+\texttt{scripts/stats.py} cuyos fragmentos se citan desde los listados.
+Cada directorio tiene un oficio y el principal los cose: el texto en las
+secciones, los datos en la bibliografía y el código de ejemplo junto al
+documento que lo explica. Se compiló con \texttt{texforge build} desde
+ese directorio, se revisó con \texttt{texforge check} y
+\texttt{texforge spell}, se formateó con \texttt{texforge fmt} y se
+inspeccionó con \texttt{texforge pdf text}, \texttt{info}, \texttt{pages} y
+\texttt{check}. Nada de lo que sigue está pegado como imagen: cada
+diagrama se generó al compilar, cada listado se resaltó al compilar y
+cada cita se resolvió desde el \texttt{.bib}.
+
+La portada, la cabecera con el título, el pie con la página, los
+titulares con número en color de acento y las cajas de aviso salen del
+preámbulo, que sigue el lenguaje visual de las plantillas de UniverLab:
+Garamond para el texto, Source Sans Pro para los titulares, microtipografía
+y una paleta definida una sola vez con un único acento granate. El
+capítulo~\ref{sec:flujo} detalla el flujo y los comandos, el
+capítulo~\ref{sec:diagramas} muestra los cuatro diagramas con sus
+referencias, y el capítulo~\ref{sec:novedades} resume lo nuevo de la
+versión 1.0.

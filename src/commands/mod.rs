@@ -1,6 +1,8 @@
 //! Command implementations.
 
+pub mod bib;
 pub mod build;
+pub mod build_template;
 pub mod check;
 pub mod clean;
 pub mod config;
@@ -8,11 +10,15 @@ pub mod doctor;
 pub mod fmt;
 pub mod init;
 pub mod new;
+pub mod new_local;
+pub mod new_origins;
 pub mod outline;
 pub mod pdf;
 pub mod preview;
+pub mod skill;
 pub mod spell;
 pub mod stats;
 pub mod template;
+pub mod template_source;
 pub mod uninstall;
 pub mod update;

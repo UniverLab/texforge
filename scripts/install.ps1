@@ -2,8 +2,9 @@
 # Usage: irm https://raw.githubusercontent.com/UniverLab/texforge/main/scripts/install.ps1 | iex
 #
 # Options (set as env vars before running):
-#   $env:VERSION    = "0.1.0"           # pin a specific version
-#   $env:INSTALL_DIR = "C:\\my\\bin"      # custom install directory
+#   $env:VERSION       = "0.1.0"         # pin a specific version
+#   $env:INSTALL_DIR   = "C:\\my\\bin"    # custom install directory
+#   $env:SKIP_SIGNATURE = "1"            # skip the minisign signature check
 
 $ErrorActionPreference = "Stop"
 
@@ -55,18 +56,52 @@ try {
     Fail "Download failed: $_`nURL: $Url"
 }
 
-# --- verify checksum ---
-# Match against SHA256SUMS.txt from the same release. Missing sums file (older
-# releases) -> skip; a present-but-mismatched checksum is fatal.
+# --- verify signature and checksum ---
+# From v1.0.0 releases sign SHA256SUMS.txt with minisign (SHA256SUMS.txt.minisig
+# next to it), and the signature is verified before the checksums are trusted.
+# 0.x releases predate signing, so a missing sums file skips verification there
+# and a missing signature file skips only the signature check; on 1.x either is
+# fatal, as is a bad signature. A present-but-mismatched checksum is fatal on
+# every version.
+$PubKey  = "RWRDOZx1ameWKtWCHDVp3YmIsBiJszM2U4SJbCMkZ8/iSkW9Pi1yWzDD"
+$Legacy  = $Tag -like "v0.*"
+$SkipSig = [bool]$env:SKIP_SIGNATURE
 $SumsUrl = "https://github.com/$Repo/releases/download/$Tag/SHA256SUMS.txt"
+$SigUrl  = "https://github.com/$Repo/releases/download/$Tag/SHA256SUMS.txt.minisig"
 $SumsOk  = $false
 try {
     Invoke-WebRequest -Uri $SumsUrl -OutFile "$Tmp\SHA256SUMS.txt" -UseBasicParsing
     $SumsOk = $true
 } catch {
-    Info "checksum" "SHA256SUMS.txt not found for $Tag - skipping verification"
+    if ($Legacy) {
+        Info "checksum" "SHA256SUMS.txt not found for $Tag - skipping verification"
+    } else {
+        Fail "release $Tag has no SHA256SUMS.txt"
+    }
 }
 if ($SumsOk) {
+    $SigOk = $false
+    try {
+        Invoke-WebRequest -Uri $SigUrl -OutFile "$Tmp\SHA256SUMS.txt.minisig" -UseBasicParsing
+        $SigOk = $true
+    } catch {
+        if ($Legacy -or $SkipSig) {
+            Info "signature" "SHA256SUMS.txt.minisig not found for $Tag - skipping signature check"
+        } else {
+            Fail "release $Tag is not signed"
+        }
+    }
+    if ($SigOk) {
+        if ($SkipSig) {
+            Info "signature" "skipped (SKIP_SIGNATURE set)"
+        } elseif (-not (Get-Command minisign -ErrorAction SilentlyContinue)) {
+            Fail "minisign is required to verify this release. Install it (scoop install minisign, or download it from https://github.com/jedisct1/minisign/releases) or set SKIP_SIGNATURE=1 to skip the check"
+        } else {
+            & minisign -V -P $PubKey -m "$Tmp\SHA256SUMS.txt" -x "$Tmp\SHA256SUMS.txt.minisig"
+            if ($LASTEXITCODE -ne 0) { Fail "Signature verification failed for SHA256SUMS.txt" }
+            Info "signature" "verified"
+        }
+    }
     $line = Select-String -Path "$Tmp\SHA256SUMS.txt" -Pattern ([regex]::Escape($Archive)) | Select-Object -First 1
     if (-not $line) { Fail "No checksum listed for $Archive in SHA256SUMS.txt" }
     $expected = ($line.Line -split '\s+')[0].ToLower()

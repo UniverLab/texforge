@@ -1,6 +1,6 @@
 ---
 title: Templates
-description: Install, manage and validate LaTeX templates from the registry.
+description: Install, manage and validate LaTeX templates from the registry or a local folder.
 order: 7
 ---
 
@@ -14,14 +14,70 @@ project always works — even offline.
 ## Commands
 
 ```bash
-texforge template list              # installed + available in the registry
-texforge template list --installed  # only locally installed templates
-texforge template add <name>        # download a template from the registry
+texforge template list              # installed + available from every source
+texforge template list --local      # only locally installed templates
+texforge template list --json       # one JSON array: name, source, installed
+texforge template add <name>        # download a template (or source/name)
+texforge template add <folder>      # install a template from a local folder
 texforge template remove <name>     # remove an installed template
 texforge template validate <name>   # verify template compatibility
 ```
 
-Installed templates are cached under `~/.texforge/templates/`.
+Every line of `template list` shows its source in parentheses —
+`  - <name> (<source>)` (`official` for the official registry; the built-in
+template keeps `general (built-in)`). Installed templates are cached under
+`~/.texforge/templates/`: the official source and older installs stay flat
+(`~/.texforge/templates/<name>`), while a template installed from a
+non-official source lives at `~/.texforge/templates/<source>/<name>`. The
+built-in `general` template is listed once under `Installed:`, even when a
+downloaded copy of `general` is cached.
+
+## Resolving template names
+
+A template reference is a bare `name` or `source/name` (one `/` splits it;
+the part before must be a valid source name). The rule is the same for
+`texforge new -t`, `template add`, `template remove` and `template refresh`:
+
+- With `source/name`, exactly that source is used (an error if it does not
+  offer the template).
+- With a bare `name` offered by exactly one source, that source is used —
+  even when it is not the official one.
+- With a bare `name` offered by more than one source, the command fails
+  without doing anything, lists every candidate as a `source/name` line, and
+  tells you to pick one. There is no carve-out for the official source: if
+  two sources offer the same name, it is a clash, whichever is installed.
+
+An unknown source part fails with a message listing the valid sources, as
+`texforge template source list` would. A source that cannot be fetched never
+hides the others: its failure is printed once as
+`Warning: source '<name>': <reason>`.
+
+## Template sources
+
+Templates come from the official
+[texforge-templates](https://github.com/UniverLab/texforge-templates)
+registry, which is always present and used by default. You can add your own
+template repositories in `~/.texforge/config.toml` (or
+`$XDG_CONFIG_HOME/texforge/config.toml`) as `[[template_sources]]` tables:
+
+```toml
+[[template_sources]]
+name = "acme"
+repo = "acme/texforge-templates"
+ref = "main"
+```
+
+`name` is local to your config (`[a-z0-9][a-z0-9-]*`, and `official` is
+reserved for the official registry), `repo` is a GitHub `owner/name`, and
+`ref` is optional — it defaults to `main`. A misconfigured entry (a reserved
+or badly shaped name, a repo that is not `owner/name`, an empty `ref`, a
+duplicate name) is an error naming the entry and the rule.
+
+Requests to your own sources carry your GitHub credential when one exists —
+`GITHUB_TOKEN` first, then the output of `gh auth token` — so private
+repositories work. Without a credential the request is anonymous, and a 404
+or 403 answers that the repo may be private, pointing at both ways to
+authenticate. The official registry never gets a credential.
 
 ## Using a template
 
@@ -31,12 +87,128 @@ texforge new my-doc -t apa-general
 
 Or pick one interactively with `texforge init`.
 
+## Local templates
+
+To try a template you are still writing, point `template add` at its folder:
+
+```bash
+texforge template add ./my-template
+```
+
+The folder needs a `template.toml` manifest and a `main.tex`. The install
+name is the manifest's `id`, and the folder is copied into
+`~/.texforge/templates/<id>` as it is. If a template with that `id` is already
+installed, the command fails; pass `--force` to replace it:
+
+```bash
+texforge template add ./my-template --force
+```
+
+A template installed this way is marked as local and **is never refreshed from
+the network** — `texforge template refresh` skips it, and `texforge new` uses
+its files exactly as they are on disk. Install it again with `--force` after
+editing the folder.
+
+## Using a local folder without installing
+
+To skip the install step, point `texforge new -t` at the folder directly:
+
+```bash
+texforge new mi-tesis -t ./my-template
+```
+
+The `-t` value is a path when it starts with `./`, `../`, `/`, `~/` or is
+`.`/`..`, or when a directory of that exact name exists in the current
+directory and contains a `template.toml` (a trailing `/` is allowed);
+otherwise it is a template name as before. The folder is used in place:
+nothing is copied into `~/.texforge/templates/`, no registry request is
+made, and the `template` recorded in `project.toml` is the folder
+manifest's `id`, never the path. Placeholders, `--values`, defaults,
+required keys and the folder safety checks behave exactly as with an
+installed template, and `[files]` include/exclude stays parsed but not
+enforced. A path that is not a directory, a directory without
+`template.toml`, a manifest without a usable `id`, or a folder without
+`main.tex` fails naming what is missing, before the project directory is
+created.
+
+## Rate limits
+
+Downloads come from GitHub. If the registry refuses a request — usually
+because an anonymous caller hit the hourly rate limit — texforge prints why,
+including any `Retry-After` / `x-ratelimit-reset` values the server sent, and
+suggests installing a template from a local folder instead. The underlying
+reason is also shown by `texforge new -t <name>` when it cannot download a
+missing template.
+
 ## Placeholders
 
 Templates declare placeholders (title, author, institution, …) in their
 manifest. When you create a project, texforge fills them from your answers
 and from your [global configuration](configuration.md) — so you don't
 retype your name and institution for every document.
+
+### Filling placeholders from a file
+
+`texforge new` accepts `--values <FILE>`, a flat table of placeholder name to
+value, so documents such as contracts, orders and audit reports are produced
+from data. Repeat the flag to layer files — an organisation's own data live
+in one private file and each document adds only its specifics:
+
+```bash
+texforge new contract-2026 -t contract --values client.toml
+texforge new contract-2026 -t contract --values lab.toml --values client.toml
+```
+
+Layered files merge in command-line order: a later file's value replaces an
+earlier one for the same key, while keys only an earlier file sets survive.
+Each file may be TOML or YAML independently by its extension. Validation
+runs once on the merged map, and an error concerning a key names the file
+that last set it (or says no file set it).
+
+The format follows the extension: `.toml` parses as TOML, `.yaml` and `.yml`
+as YAML. Any other extension is an error. Every value must be a string, an
+integer, a float or a boolean — a nested table, an array, a null or a TOML
+datetime is rejected with the offending key.
+
+Values resolve in this order, the first one that exists winning:
+
+1. the `--values` files, in command-line order (later files win key by key)
+2. the project config (`./.texforge/config.toml`)
+3. your user config (`~/.texforge/config.toml`)
+4. the template default
+
+The project name is the value of `title` unless the values file sets `title`
+itself; that title is also written to `project.toml` as `[document] title`, so
+the PDF is named after it. Every key in the file must be a placeholder the
+template declares, and an unknown key fails the run naming both the unknown
+keys and the declared names. Values are substituted verbatim: they are LaTeX
+source, nothing is escaped, so a value may contain `\textbf{x}`, `&` or `%`.
+
+A required placeholder left without a value fails the run, reporting every
+missing placeholder and its description, and the directory the run created is
+removed. Optional placeholders without a value are left as they are.
+
+With `--values`, the values used are also written to `values.toml` in the new
+project: a header comment, then one `key = "value"` line per key of the merged
+map, sorted by key. With several files the header lists the source files in
+order. Only the files' own keys are written — never values that came
+from your configuration. Keep the file with the document and pass it back to
+`texforge new --values` to regenerate from the same data.
+
+### Building a template folder directly
+
+A folder that already carries a `template.toml` — a reusable document such
+as a contract that is both a buildable project and an installable template —
+needs no `texforge new` step. Run from that folder (or pass its path as `DIR`):
+
+```bash
+texforge build --values client.toml --out contract-2026.pdf
+texforge build --values client.toml path/to/template
+```
+
+The placeholders render into a temporary copy and the PDF is written to the
+current directory (not inside `DIR`, or to `--out`) without modifying any file of the folder; `--values` is repeatable here too, with later files
+winning key by key; see [Building](building.md#building-a-template-folder).
 
 ## Writing your own template
 
@@ -50,4 +222,5 @@ placeholders:
 
 The easiest way to start is to copy an existing template from the
 [texforge-templates](https://github.com/UniverLab/texforge-templates)
-repository and run `texforge template validate` against it.
+repository, then install it locally with `texforge template add <folder>`
+while you refine it.

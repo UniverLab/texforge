@@ -1,7 +1,10 @@
 //! Static linting rules.
 
+mod diagram_labels;
 mod engine;
 mod glyphs;
+mod listings;
+mod paths;
 pub(crate) mod spell;
 
 pub use spell::{
@@ -135,6 +138,7 @@ fn collect_labels(tex_files: &[std::path::PathBuf]) -> Result<HashSet<String>> {
                 all_labels.insert(label);
             }
         }
+        all_labels.extend(diagram_labels::labels(&content));
     }
     Ok(all_labels)
 }
@@ -245,6 +249,7 @@ fn run_file_checks(
             errors,
         );
         check_environments(&rel, &content, &verbatim_lines, errors);
+        errors.extend(listings::check_code_blocks(root, &rel, &content));
         check_diagram_blocks(&rel, &content, "mermaid", &verbatim_lines, errors);
         check_diagram_blocks(&rel, &content, "graphviz", &verbatim_lines, errors);
         check_diagram_blocks(&rel, &content, "d2", &verbatim_lines, errors);
@@ -371,6 +376,9 @@ fn check_input_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in texutil::extract_commands(line, "input") {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         let input_path = texutil::resolve_tex_path(root, arg);
         if !input_path.exists() {
             errors.push(LintFinding {
@@ -393,6 +401,9 @@ fn check_includegraphics_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in texutil::extract_commands(line, "includegraphics") {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         let img_path = root.join(arg);
         if !img_path.exists() {
             errors.push(LintFinding {
@@ -515,6 +526,9 @@ fn check_lstinputlisting_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in texutil::extract_commands(line, "lstinputlisting") {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         if !root.join(arg).exists() {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -536,6 +550,9 @@ fn check_inputminted_references(
     errors: &mut Vec<LintFinding>,
 ) {
     for arg in extract_inputminted_files(line) {
+        if paths::has_macro_parameter(arg) {
+            continue; // a macro parameter is filled in when the macro runs
+        }
         if !root.join(arg).exists() {
             errors.push(LintFinding {
                 severity: Severity::Error,
@@ -901,6 +918,88 @@ mod tests {
         let (dir, entry) = setup("\\inputminted{python}{code.py}");
         let errors = lint(dir.path(), &entry, None).unwrap();
         assert!(has_error(&errors, "code.py"));
+    }
+
+    /// A `#1` in a path argument is a macro parameter: the value only exists
+    /// when the macro runs, so the linter must not report the file missing.
+    #[test]
+    fn input_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\input{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\input{capturas/fig}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn includegraphics_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\includegraphics{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\fig}[1]{\\includegraphics{capturas/fig.png}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig.png"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn lstinputlisting_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\lstinputlisting{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\lstinputlisting{capturas/fig.py}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig.py"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn inputminted_macro_parameter_path_is_not_checked() {
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\inputminted{python}{capturas/#1}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&errors, "capturas"),
+            "a macro parameter is not a path: {errors:?}"
+        );
+
+        let (dir, entry) = setup("\\newcommand{\\code}[1]{\\inputminted{python}{capturas/fig.py}}");
+        let errors = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&errors, "capturas/fig.py"),
+            "a real path inside a macro body is still checked: {errors:?}"
+        );
+    }
+
+    /// The predicate accepts `#` only before a digit 1-9, never a bare `#`,
+    /// `#0` or a letter — those are ordinary text, not macro parameters.
+    #[test]
+    fn macro_parameter_predicate_is_hash_digit_only() {
+        for arg in ["#1", "#9", "capturas/#1"] {
+            assert!(paths::has_macro_parameter(arg), "{arg} holds a parameter");
+        }
+        for arg in ["capturas/fig", "#", "#0", "#a"] {
+            assert!(!paths::has_macro_parameter(arg), "{arg} holds no parameter");
+        }
     }
 
     #[test]
@@ -1272,6 +1371,126 @@ mod tests {
         assert!(
             has_error(&findings, "\\ref{lst:ghost}"),
             "foreign options do not define labels: {findings:?}"
+        );
+    }
+
+    /// A braced `label=` on a mermaid block defines a `\ref` target.
+    #[test]
+    fn a_mermaid_label_option_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{mermaid}[caption={Flow}, label={fig:flow}]\nA --> B\n\\end{mermaid}\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{fig:flow}"),
+            "the mermaid option defines the label: {findings:?}"
+        );
+    }
+
+    /// A plain (unbraced) `label=` on a mermaid block defines a target too.
+    #[test]
+    fn a_mermaid_plain_label_option_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{mermaid}[caption={Flow}, label=fig:flow]\nA --> B\n\\end{mermaid}\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{fig:flow}"),
+            "the plain mermaid option defines the label: {findings:?}"
+        );
+    }
+
+    /// The same on a d2 block.
+    #[test]
+    fn a_d2_label_option_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{d2}[caption={Flow}, label={fig:flow}]\na -> b\n\\end{d2}\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{fig:flow}"),
+            "the d2 option defines the label: {findings:?}"
+        );
+    }
+
+    /// The same on a graphviz block.
+    #[test]
+    fn a_graphviz_label_option_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{graphviz}[caption={Flow}, label={fig:flow}]\ndigraph { a -> b }\n\\end{graphviz}\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{fig:flow}"),
+            "the graphviz option defines the label: {findings:?}"
+        );
+    }
+
+    /// A diagram label counts with no caption, exactly as the build emits it.
+    #[test]
+    fn a_diagram_label_without_a_caption_defines_a_label() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{mermaid}[label={fig:flow}]\nA --> B\n\\end{mermaid}\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            !has_error(&findings, "\\ref{fig:flow}"),
+            "a diagram label needs no caption: {findings:?}"
+        );
+    }
+
+    /// A `\ref` to any other label is still dangling next to a diagram label.
+    #[test]
+    fn a_ref_to_another_label_beside_a_diagram_label_is_dangling() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{mermaid}[caption={Flow}, label={fig:flow}]\nA --> B\n\\end{mermaid}\n\
+             Ver \\ref{fig:other}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "\\ref{fig:other}"),
+            "an unknown label is still reported: {findings:?}"
+        );
+    }
+
+    /// A mermaid block without `label=` defines nothing.
+    #[test]
+    fn a_mermaid_block_without_a_label_defines_nothing() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             \\begin{mermaid}[caption={Flow}]\nA --> B\n\\end{mermaid}\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "\\ref{fig:flow}"),
+            "no label option means no label: {findings:?}"
+        );
+    }
+
+    /// A commented-out mermaid block defines nothing.
+    #[test]
+    fn a_commented_out_mermaid_block_defines_nothing() {
+        let (dir, entry) = setup(
+            "\\documentclass{article}\n\\begin{document}\n\
+             % \\begin{mermaid}[caption={Flow}, label={fig:flow}]\n\
+             Ver \\ref{fig:flow}.\n\\end{document}",
+        );
+        let findings = lint(dir.path(), &entry, None).unwrap();
+        assert!(
+            has_error(&findings, "\\ref{fig:flow}"),
+            "a commented block defines nothing: {findings:?}"
         );
     }
 

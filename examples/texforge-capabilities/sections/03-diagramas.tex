@@ -1,0 +1,419 @@
+% Capitulo 3: los cuatro diagramas, cada uno con pie, etiqueta y referencia.
+\section{Diagramas}\label{sec:diagramas}
+
+texforge compone diagramas descritos como texto dentro del propio fuente,
+sin Inkscape, sin Node y sin binarios externos: al compilar, cada entorno se
+compone en Rust puro y el resultado entra al PDF como una figura más.
+Los tres motores entienden las mismas opciones --- \texttt{width},
+\texttt{pos}, \texttt{caption} y \texttt{label} --- y el estilo visual se
+fija una vez en \texttt{project.toml} bajo \texttt{[diagrams]}, aquí el
+preajuste \texttt{editorial}, de modo que los tres dibujos comparten tinta,
+acento y aire aunque los dibujen motores distintos; la familia tipográfica
+llega hasta donde cada motor la deja elegir.
+
+\subsection{Mermaid}
+
+La figura~\ref{fig:secuencia} muestra la secuencia de una compilación: el
+usuario pide el PDF, texforge valida el fuente y, si hay diagramas, los
+envía al motor de composición dentro de un bucle antes de producir el
+resultado. El lenguaje es Mermaid~\cite{mermaid}, el de los diagramas de
+secuencia y de flujo que ya se escriben en la documentación técnica: los
+participantes se declaran con una palabra, los mensajes con flechas y el
+texto de cada flecha viaja sobre ella sin sintaxis adicional.
+
+\begin{mermaid}[width=0.9\linewidth, caption={Secuencia de compilación con texforge}, label={fig:secuencia}, pos=H]
+  sequenceDiagram
+  autonumber
+  actor Usuario
+  participant texforge
+  participant Validador
+  participant Motor
+  Usuario->>texforge: texforge build
+  activate texforge
+  texforge->>Validador: analiza el fuente
+  activate Validador
+  Validador-->>texforge: fuente válido
+  deactivate Validador
+  alt hay diagramas
+  texforge->>Motor: prepara el motor
+  activate Motor
+  loop cada diagrama
+  texforge->>Motor: renderiza diagrama
+  Motor-->>texforge: figura lista
+  end
+  Motor-->>texforge: motor libre
+  deactivate Motor
+  else sin diagramas
+  Note over texforge,Motor: compila directo
+  end
+  texforge->>Motor: compone el PDF
+  activate Motor
+  Motor-->>texforge: PDF final
+  deactivate Motor
+  texforge-->>Usuario: build/ listo
+  deactivate texforge
+\end{mermaid}
+
+\subsubsection{El mismo diagrama en los cuatro preajustes}
+
+El atributo \texttt{style} aplica uno de los cuatro preajustes; la misma
+secuencia se repite abajo, figuras \ref{fig:secuencia-editorial},
+\ref{fig:secuencia-monochrome}, \ref{fig:secuencia-technical} y
+\ref{fig:secuencia-default}.
+
+\begin{mermaid}[style=editorial, width=0.62\linewidth, caption={\texttt{editorial}: paleta sobria con un solo acento}, label={fig:secuencia-editorial}, pos=t]
+  sequenceDiagram
+  autonumber
+  actor Usuario
+  participant texforge
+  participant Validador
+  participant Motor
+  Usuario->>texforge: texforge build
+  activate texforge
+  texforge->>Validador: analiza el fuente
+  activate Validador
+  Validador-->>texforge: fuente válido
+  deactivate Validador
+  alt hay diagramas
+  texforge->>Motor: prepara el motor
+  activate Motor
+  loop cada diagrama
+  texforge->>Motor: renderiza diagrama
+  Motor-->>texforge: figura lista
+  end
+  Motor-->>texforge: motor libre
+  deactivate Motor
+  else sin diagramas
+  Note over texforge,Motor: compila directo
+  end
+  texforge->>Motor: compone el PDF
+  activate Motor
+  Motor-->>texforge: PDF final
+  deactivate Motor
+  texforge-->>Usuario: build/ listo
+  deactivate texforge
+\end{mermaid}
+
+\begin{mermaid}[style=monochrome, width=0.62\linewidth, caption={\texttt{monochrome}: solo grises, para blanco y negro}, label={fig:secuencia-monochrome}, pos=t]
+  sequenceDiagram
+  autonumber
+  actor Usuario
+  participant texforge
+  participant Validador
+  participant Motor
+  Usuario->>texforge: texforge build
+  activate texforge
+  texforge->>Validador: analiza el fuente
+  activate Validador
+  Validador-->>texforge: fuente válido
+  deactivate Validador
+  alt hay diagramas
+  texforge->>Motor: prepara el motor
+  activate Motor
+  loop cada diagrama
+  texforge->>Motor: renderiza diagrama
+  Motor-->>texforge: figura lista
+  end
+  Motor-->>texforge: motor libre
+  deactivate Motor
+  else sin diagramas
+  Note over texforge,Motor: compila directo
+  end
+  texforge->>Motor: compone el PDF
+  activate Motor
+  Motor-->>texforge: PDF final
+  deactivate Motor
+  texforge-->>Usuario: build/ listo
+  deactivate texforge
+\end{mermaid}
+
+\begin{mermaid}[style=technical, width=0.62\linewidth, caption={\texttt{technical}: trazo uniforme, sin rellenos}, label={fig:secuencia-technical}, pos=t]
+  sequenceDiagram
+  autonumber
+  actor Usuario
+  participant texforge
+  participant Validador
+  participant Motor
+  Usuario->>texforge: texforge build
+  activate texforge
+  texforge->>Validador: analiza el fuente
+  activate Validador
+  Validador-->>texforge: fuente válido
+  deactivate Validador
+  alt hay diagramas
+  texforge->>Motor: prepara el motor
+  activate Motor
+  loop cada diagrama
+  texforge->>Motor: renderiza diagrama
+  Motor-->>texforge: figura lista
+  end
+  Motor-->>texforge: motor libre
+  deactivate Motor
+  else sin diagramas
+  Note over texforge,Motor: compila directo
+  end
+  texforge->>Motor: compone el PDF
+  activate Motor
+  Motor-->>texforge: PDF final
+  deactivate Motor
+  texforge-->>Usuario: build/ listo
+  deactivate texforge
+\end{mermaid}
+
+\begin{mermaid}[style=default, width=0.62\linewidth, caption={\texttt{default}: el aspecto nativo del motor}, label={fig:secuencia-default}, pos=t]
+  sequenceDiagram
+  autonumber
+  actor Usuario
+  participant texforge
+  participant Validador
+  participant Motor
+  Usuario->>texforge: texforge build
+  activate texforge
+  texforge->>Validador: analiza el fuente
+  activate Validador
+  Validador-->>texforge: fuente válido
+  deactivate Validador
+  alt hay diagramas
+  texforge->>Motor: prepara el motor
+  activate Motor
+  loop cada diagrama
+  texforge->>Motor: renderiza diagrama
+  Motor-->>texforge: figura lista
+  end
+  Motor-->>texforge: motor libre
+  deactivate Motor
+  else sin diagramas
+  Note over texforge,Motor: compila directo
+  end
+  texforge->>Motor: compone el PDF
+  activate Motor
+  Motor-->>texforge: PDF final
+  deactivate Motor
+  texforge-->>Usuario: build/ listo
+  deactivate texforge
+\end{mermaid}
+
+El preajuste \texttt{editorial} sirve para documentos que se leen en pantalla
+o se imprimen a color y buscan un acabado sobrio; \texttt{monochrome} dibuja
+solo en grises y es el indicado cuando el documento se imprime en blanco y
+negro; \texttt{technical} viste los diagramas como planos o esquemas, sin
+rellenos y con etiquetas de ancho fijo. El valor \texttt{default} conserva el
+aspecto nativo de cada motor para no cambiar ningún documento existente. El
+preajuste se fija una vez en \texttt{project.toml}, bajo \texttt{[diagrams]}
+con \texttt{style = "..."}, y cada entorno puede cambiarlo con su propio
+atributo \texttt{style}; omitir ambos equivale a \texttt{default}. Este
+documento usa \texttt{editorial} en todo su recorrido.
+\FloatBarrier
+
+\subsection{Graphviz}
+
+La figura~\ref{fig:arquitectura} dibuja la arquitectura como un grafo
+dirigido con Graphviz~\cite{graphviz}, organizada en tres etapas: la interfaz
+de línea de comandos, el preprocesador con sus tres motores y la salida que
+produce el PDF. El motor de composición es Rust puro: no dibuja cajas de
+\texttt{subgraph cluster}, así que las etapas se distinguen por el relleno de
+sus nodos y la leyenda, no por un recuadro. Cada nodo nombra una pieza y las
+flechas marcan dependencias.
+
+\begin{graphviz}[width=1.0\linewidth, caption={Arquitectura de texforge: interfaz, preprocesador y salida}, label={fig:arquitectura}, pos=H]
+  digraph Arquitectura {
+    rankdir=LR
+    node [style=filled, fillcolor=linen, color=sienna, fontsize=14]
+    edge [color=sienna, fontsize=12]
+
+    subgraph front {
+      CLI [label="texforge CLI", shape=box, fillcolor=antiquewhite]
+    }
+
+    subgraph pre {
+      Mermaid [label="Mermaid", fillcolor=cornsilk]
+      Graphviz [label="Graphviz", fillcolor=cornsilk]
+      D2 [label="D2", fillcolor=cornsilk]
+      { rank=same; Mermaid; Graphviz; D2; }
+    }
+
+    subgraph back {
+      Tectonic [label="tectonic", shape=box, fillcolor=darkseagreen]
+      PDF [label="PDF", shape=doublecircle, fillcolor=white]
+      { rank=same; Tectonic; PDF; }
+    }
+
+    CLI -> Mermaid [label="fuente", penwidth=2]
+    CLI -> Graphviz [label="fuente", penwidth=2]
+    CLI -> D2 [label="fuente", penwidth=2]
+    Mermaid -> Tectonic [style=dashed, color=firebrick]
+    Graphviz -> Tectonic [style=dashed, color=firebrick]
+    D2 -> Tectonic [style=dashed, color=firebrick]
+    Tectonic -> PDF [penwidth=2, color=firebrick, label="genera"]
+
+    subgraph legend {
+      E1 [label="origen: CLI", shape=box, fillcolor=antiquewhite]
+      E2 [label="motor", shape=box, fillcolor=cornsilk]
+      E3 [label="salida", shape=box, fillcolor=darkseagreen]
+      E1 -> E2 [label="flujo", penwidth=2]
+      E2 -> E3 [label="genera", style=dashed, color=firebrick]
+    }
+  }
+\end{graphviz}
+\FloatBarrier
+
+\subsection{D2}
+
+La figura~\ref{fig:pipeline} resume el trabajo como un pipeline con la
+sintaxis de D2: escribir, revisar, componer e inspeccionar, cada etapa con
+su comando dentro de la caja, y el artefacto que produce la salida. La
+arista a trazos marca el paso de verificación.
+
+\begin{d2}[width=1.0\linewidth, caption={Flujo de trabajo, de la escritura a la inspección}, label={fig:pipeline}, pos=H]
+  direction: down
+
+  classes: {
+    etapa: {
+      style.border-radius: 4
+    }
+    control: {
+      style.stroke-dash: 3
+    }
+  }
+
+  autor: Autor {
+    shape: person
+    label: "Autor"
+    class: etapa
+  }
+
+  flujo: Pipeline {
+    grid-columns: 2
+    escribir: "Escribir\nfuente .tex" {
+      shape: document
+      class: etapa
+    }
+    revisar: "Revisar\ntexforge check" {
+      shape: rectangle
+      class: etapa
+    }
+    componer: "Componer\ntexforge build" {
+      shape: hexagon
+      class: etapa
+    }
+    inspeccionar: "Inspeccionar\ntexforge pdf info" {
+      shape: rectangle
+      class: etapa
+    }
+  }
+
+  salida: Resultado {
+    pdf: "build/\nPDF final" {
+      shape: page
+      class: etapa
+    }
+  }
+
+  autor -> flujo.escribir: redacta
+  flujo.escribir -> flujo.revisar {
+    class: control
+  }
+  flujo.revisar -> flujo.componer
+  flujo.componer -> flujo.inspeccionar
+  flujo.inspeccionar -> salida.pdf: entrega
+
+  leyenda: Leyenda {
+    a: paso
+    b: verificación
+    a -> b: acción
+    b -> a: "control" {
+      class: control
+    }
+  }
+\end{d2}
+\FloatBarrier
+
+\begin{notebox}
+  Los tres entornos aceptan \texttt{label=} con o sin \texttt{caption}, y
+  \texttt{texforge check} resuelve \texttt{\textbackslash ref} contra esas
+  etiquetas. Si una figura pierde su etiqueta, el error aparece antes de
+  compilar, no como una referencia sin resolver en el PDF.
+\end{notebox}
+
+\subsection{TikZ}
+
+Para lo que ningún motor describe, el TikZ de siempre sigue disponible. La
+figura~\ref{fig:pagina} dibuja la curva $f(x)=e^{-x^{2}/2}$ con su tangente
+en $x=1$: el área bajo la curva queda sombreada, el punto de tangencia y los
+ejes van anotados, y la paleta del documento (\texttt{docaccent} y los tonos
+\texttt{bench}) mantiene el mismo acabado que el resto del capítulo. El
+código fuente se muestra en el listado~\ref{lst:tikz-curva} para que pueda
+copiarse tal cual.
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+        width=0.82\linewidth,
+        height=4.9cm,
+        axis lines=middle,
+        axis line style={benchsepia},
+        xlabel={$x$},
+        ylabel={$f(x)$},
+        xmin=-2.6, xmax=2.6,
+        ymin=-0.15, ymax=1.25,
+        xtick={-2,-1,0,1,2},
+        ytick={0.5,1},
+        tick label style={font=\small\sffamily, color=docink},
+        label style={font=\small\sffamily, color=docink},
+        samples=120,
+        domain=-2.5:2.5,
+      ]
+      \addplot[draw=none, fill=benchlamp, domain=-2.5:2.5] {exp(-x^2/2)} \closedcycle;
+      \addplot[thick, color=docaccent] {exp(-x^2/2)};
+      \addplot[dashed, color=benchsepia, domain=-0.2:2.2] {exp(-0.5) - exp(-0.5)*(x-1)};
+      \addplot[only marks, mark=*, mark size=2pt, color=benchink] coordinates {(1,{exp(-0.5)})};
+      \node[anchor=south west, font=\small\sffamily, color=docink] at (axis cs:1.05,0.62) {tangente en $x=1$};
+      \node[anchor=south, font=\small\sffamily, color=benchsepia] at (axis cs:1.35,0.95) {$f(x)=e^{-x^{2}/2}$};
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Curva gaussiana con sombreado y tangente dibujada con TikZ}
+  \label{fig:pagina}
+\end{figure}
+
+\begin{code}[lang=latex, numbers=true, caption={Código fuente de la figura~\ref{fig:pagina}}, label={lst:tikz-curva}]
+\begin{tikzpicture}
+  \begin{axis}[
+    width=0.82\linewidth, height=4.9cm,
+    axis lines=middle, axis line style={benchsepia},
+    xlabel={$x$}, ylabel={$f(x)$},
+    xmin=-2.6, xmax=2.6, ymin=-0.15, ymax=1.25,
+    xtick={-2,-1,0,1,2}, ytick={0.5,1},
+    tick label style={font=\small\sffamily, color=docink},
+    label style={font=\small\sffamily, color=docink},
+    samples=120, domain=-2.5:2.5,
+  ]
+    \addplot[draw=none, fill=benchlamp,
+      domain=-2.5:2.5] {exp(-x^2/2)} \closedcycle;
+    \addplot[thick, color=docaccent] {exp(-x^2/2)};
+    \addplot[dashed, color=benchsepia,
+      domain=-0.2:2.2]
+      {exp(-0.5) - exp(-0.5)*(x-1)};
+    \addplot[only marks, mark=*, mark size=2pt,
+      color=benchink] coordinates {(1,{exp(-0.5)})};
+    \node[anchor=south west, font=\small\sffamily,
+      color=docink] at (axis cs:1.05,0.62)
+      {tangente en $x=1$};
+    \node[anchor=south, font=\small\sffamily,
+      color=benchsepia] at (axis cs:1.35,0.95)
+      {$f(x)=e^{-x^{2}/2}$};
+  \end{axis}
+\end{tikzpicture}
+\end{code}
+
+\subsection{Los preajustes}
+
+El valor de \texttt{style} se fija una vez en \texttt{project.toml}, bajo
+\texttt{[diagrams]}, y cada entorno puede cambiarlo con su propio atributo.
+Los cuatro preajustes comparten el mismo criterio en Mermaid, Graphviz y D2:
+\texttt{editorial} usa una paleta sobria con un solo acento para documentos a
+color, \texttt{monochrome} dibuja solo en grises para la impresión en blanco y
+negro, \texttt{technical} elimina rellenos y usa etiquetas de trazo uniforme
+para esquemas, y \texttt{default} conserva el aspecto nativo de cada motor.
+Omitir el atributo y la clave de proyecto equivale a \texttt{default}, de
+modo que ningún documento existente cambia de aspecto.

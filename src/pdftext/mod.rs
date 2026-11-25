@@ -8,17 +8,23 @@
 //! Also verifies font embedding and Info-dictionary date shape (TF15).
 
 mod breaks;
+mod dest_number;
 mod extract;
 mod fidelity;
 mod outline;
 mod quality;
+mod sanitize;
 
 #[cfg(test)]
 mod fixtures;
 
 pub use breaks::page_breaks;
+pub(crate) use dest_number::column_letters;
+pub use dest_number::{number_from_dest, DestNumber};
 pub use extract::{extract_text, extract_text_by_pages, normalize_pdf_text};
 pub use fidelity::check_fidelity;
+#[cfg(test)]
+pub(crate) use fidelity::significant_words;
 pub use outline::{format_page_breaks, page_breaks_from_outline, read_pdf_outline};
 pub use quality::{check_quality, pdf_info};
 
@@ -79,6 +85,10 @@ pub struct PdfOutlineEntry {
     pub page: usize,
     /// Nesting level (0 = top-level).
     pub level: usize,
+    /// Hyperref destination name (`chapter.1`, `appendix.Alph1`, ...), when
+    /// the entry points at one: it carries the number printed in the PDF.
+    /// `None` for plain page destinations and documents without hyperref.
+    pub dest: Option<String>,
 }
 
 /// Which path was used to derive the section-to-page mapping.

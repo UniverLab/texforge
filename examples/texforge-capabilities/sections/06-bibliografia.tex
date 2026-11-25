@@ -1,0 +1,38 @@
+% Capitulo 6: bibliografia con seis citas distintas.
+\section{Bibliografía}\label{sec:bib}
+
+Las citas viven en \texttt{bib/references.bib} y se resuelven al componer,
+con el estilo \texttt{plain} al final del documento. Este capítulo cita
+seis entradas distintas para demostrar que el mecanismo funciona desde
+cualquier capítulo: tres herramientas reales que sostienen el flujo y tres
+entradas históricas del ejemplo original.
+
+El motor que lo compone todo es tectonic~\cite{tectonic}, el corazón
+embebido que presentó el capítulo~\ref{sec:que-es}. Los diagramas de
+secuencia hablan Mermaid~\cite{mermaid} y los grafos dirigidos hablan el
+lenguaje DOT de Graphviz~\cite{graphviz}; ambos se citaron ya en el
+capítulo~\ref{sec:diagramas}, donde se componen.
+
+Junto a ellas conviven las tres entradas originales del ejemplo: un
+artículo de revista~\cite{example}, un libro~\cite{example2} y un recurso
+en línea~\cite{example3}. Se conservan tal cual para que los documentos
+que ya las citaban sigan compilando, y sirven aquí de testigos de que las
+citas clásicas --- artículo, libro y web --- siguen resolviéndose como
+siempre. \texttt{texforge check} avisa de toda clave \texttt{\textbackslash
+  cite} sin entrada en el \texttt{.bib} antes de compilar.
+
+El flujo bibliográfico no tiene misterio: cada obra vive una vez en
+\texttt{bib/references.bib} con su clave, se cita en el texto con
+\texttt{\textbackslash cite} y aparece formateada al final, ordenada según
+el estilo elegido, aquí \texttt{plain}. Las claves conviene que sean
+cortas y memorables --- el apellido, la herramienta, el año --- porque se
+escriben a mano en cada cita. Y cuando el documento crece, el mismo
+\texttt{.bib} sirve a varios capítulos sin duplicar nada: este capítulo
+cita seis entradas distintas repartidas por todo el documento, y la lista
+final las reúne a todas sin que nadie las ordene a mano.
+
+\begin{notebox}
+  Las tres primeras entradas vienen del ejemplo original y se conservan a
+  propósito: los documentos que ya las citaban siguen compilando sin
+  cambios, y aquí demuestran que lo clásico convive con lo nuevo.
+\end{notebox}

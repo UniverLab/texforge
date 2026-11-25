@@ -19,6 +19,10 @@ Runs static analysis without compiling, including spell-check:
 | `\begin{env}` / `\end{env}` | no unclosed environments |
 | Spelling | prose against language-specific dictionaries |
 
+File-existence checks skip any path that holds a macro parameter (`#1`..`#9`): in
+`\newcommand{\fig}[1]{\includegraphics{capturas/#1}}` the argument is only a real
+path once the macro runs, so it is not reported missing.
+
 Errors come with file, line and a suggestion:
 
 ```
@@ -43,6 +47,10 @@ Language is detected from the document:
 - `\usepackage[spanish]{babel}` — uses Spanish Hunspell dictionary
 - `\usepackage[polyglossia]{...}` — language extracted from polyglossia declaration
 - No declaration — falls back to `texforge config language` (default: `english`)
+
+Only prose is checked. The bodies of diagram environments (`mermaid`, `d2`,
+`graphviz`) are treated as diagram source, not prose, so they are not
+spell-checked.
 
 Dictionaries download automatically into `~/.texforge/dicts/` on first use.
 
@@ -69,6 +77,10 @@ Applies opinionated formatting inspired by `rustfmt`:
 - Consistent indentation (2 spaces) inside environments
 - Collapsed multiple blank lines
 - Aligned `\begin{}` / `\end{}` blocks
+- Comments ignored when computing indentation: a `%` starts a comment unless
+  escaped as `\%`, so a commented-out `\begin{abstract}` or a comment that
+  mentions `\begin{document}` changes no depth. Comment-only lines keep the
+  indentation of the code around them
 
 One canonical output regardless of input style — git diffs stay clean.
 

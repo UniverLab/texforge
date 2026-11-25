@@ -7,8 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Dark (`dark`, `dark-mono`) code listings no longer show a thin light line between code lines: consecutive per-line background rules now overlap instead of abutting.
+- Diagram figures given only `width=` now keep their natural aspect ratio instead of being distorted.
+- `texforge check` and `texforge spell` no longer report words from `mermaid`, `d2` or `graphviz` diagram bodies as unknown prose.
+
+### Notes
+
+- `texforge pdf text`, `pdf pages` and `pdf check` now yield the full text of a PDF whose font genuinely lacks a text mapping for some characters (checked on a synthetic fixture), marking each unmapped character with `U+FFFD` and printing one warning with the count on stderr instead of failing; no character is ever guessed through a default encoding.
+- `texforge bib check` verifies DOI/arXiv ids in bibliography against Crossref/arXiv.
+
+- New `diagram-design` diagram style preset: warm paper-tint nodes, muted brown lines and arrows, ink text, a sans-serif face and extra spacing, applied consistently across Mermaid, D2 and Graphviz.
+- `texforge build` now converts SVG files included via `\includegraphics` to vector PDF automatically (same PNG fallback as diagrams); bare stems resolve to SVG only when no `.pdf`/`.png`/`.jpg`/`.jpeg`/`.eps` sits beside it, only `\input`-reachable files are rewritten, and `\graphicspath` is not supported.
+- `texforge build --values <file>... [DIR]` now accepts an optional template folder `DIR` (default `.`), writing the resulting PDF to the current directory rather than inside `DIR`.
+- `texforge pdf check` no longer reports LaTeX spacing lengths (`\vspace*{...}`, `\vskip`/`\hskip`/`\kern`/`\vglue`/`\hglue` unbraced glue) as missing source words; prose measurements like `3cm` are still checked.
+- `texforge pdf text` (and `pdf pages`, `stats`, `outline`, `pdf check`) decodes text font by font, so fonts of included figures never decode with a page font of the same resource name. This also fixes PDFs on which `pdf text` returned wrong text with exit 0, or failed with a missing-mapping error, only because an included figure and its page used the same font resource name.
+- `texforge preview` deletes stale `page-<n>.png` files from the output folder before rasterizing, so an old unpadded name never sits beside its zero-padded replacement.
+- `texforge build` keeps the engine log at `build/<entry-stem>.log` (`--log <path>` overrides it), reports overfull boxes wider than 1pt by file and line, and `--max-overfull <pt>` fails after writing the PDF when any box exceeds the value.
+- `texforge new -t` now also takes a path to a local template folder (`./my-template`), used in place without installing; the `template` recorded in `project.toml` is the folder manifest's `id`.
+- In the `ink` code-listing style, gutter line numbers now render in grey so they do not compete with the code.
+- The capabilities example regained the Mermaid preset comparison and got richer Graphviz, D2 and TikZ figures.
+- Code listings default to DejaVu Sans Mono unless `[highlight] font` is set or project sources load fontspec; set `font = "document"` to keep the preamble's typewriter family.
+- The default DejaVu Sans Mono listing font now survives OpenType text packages (such as `ebgaramond`/`sourcesanspro`) that pull in fontspec: the injection re-selects T1 with the installed family when fontspec is loaded, so listings still embed DejaVu Sans Mono instead of falling back to Latin Modern.
+- Copying a numbered code listing in viewers that honour PDF `ActualText` skips the line numbers; they still print on the page, `numbers=false` removes them everywhere, and other viewers may still copy them.
+- The `ink` code-listing style now distinguishes keywords and numbers (bold), names (bold italic) and comments (italic), still black on white.
+- `outline`/`stats` no longer count `\section`/`\subsection` inside `\titleformat`/`\titlespacing*` args as empty sections.
+- `pdf pages`, `outline` and `stats` report the number the PDF prints: unnumbered sections stay empty, appendices take letters, and headings deeper than `secnumdepth` stay empty.
+- `outline` and `stats` list starred sectioning commands (`\chapter*`, `\section*`, ...) unnumbered with an empty number, resolving title macros such as `\abstractname` to their English text.
+- On release, set `date-released` and `version` in `CITATION.cff` to the release date and the released Cargo.toml version.
+- Release checksums (`SHA256SUMS.txt`) are now signed with minisign.
+- `texforge update` and `scripts/install.sh` verify the minisign signature of `SHA256SUMS.txt` before installing 1.x releases.
+- `scripts/install.ps1` verifies the minisign signature of `SHA256SUMS.txt` on 1.x releases (`SKIP_SIGNATURE=1` skips the check).
+- An outdated managed Tectonic is updated to the supported version on the next build or `doctor`, which also warns when the Tectonic in `PATH` is older than the supported one.
+- `texforge template list` prints the built-in `general` template once under `Installed:`, even when a downloaded copy of `general` is cached.
+- `texforge template list` shows each template's source as `  - <name> (<source>)` (plus `list --json`), and every command taking a template name accepts `source/name`, failing on clashes instead of picking silently.
+- Piping output to a closed pipe (e.g. `texforge skill | head`) now exits quietly with code 0.
+- `texforge new --values` now writes the file's `title` into `project.toml`, so the PDF is named after it instead of the directory.
+- `texforge build --values <file> [--out <path>]` builds a folder carrying a `template.toml` straight to a filled PDF, rendering placeholders into a temporary copy without modifying any file of the folder; the PDF lands in the current directory unless `--out` says otherwise.
+- `texforge new` and `texforge build` accept `--values` more than once: files merge in order with later files winning key by key, and the echoed `values.toml` lists the source files.
+- `texforge check` resolves `\ref` to a `label=` option on `mermaid`, `d2` and `graphviz` blocks, with or without a `caption`.
+- The example directory was renamed to `texforge-capabilities` (the old name was misspelled).
+- The `texforge-capabilities` example was redone as an editorial document.
+- `~/.texforge/config.toml` accepts `[[template_sources]]` tables (`name`, `repo`, optional `ref` defaulting to `main`) for extra template repositories; the official registry stays always present and default, and requests to your own sources use `GITHUB_TOKEN` (else `gh auth token`) so private repos work.
+- `texforge new` prints where each filled placeholder came from (`(from user config <path>)`, `(from project config ./.texforge/config.toml)`, `(from template default)` and, for interpolated defaults, which source supplied each `{{user.name}}`/`{{user.email}}`/`{{institution.name}}` token), skipping values supplied by `--values` files.
+- `texforge template source add <name> <repo-or-url> [--ref <ref>] [--no-check]`, `texforge template source list [--json]` and `texforge template source remove <name>` manage those extra registries from the CLI instead of editing the config file by hand.
+- The embedded skill now guides agents to suggest contributing back: reporting texforge or official-template defects as drafted issues, offering good documents as templates, and offering the user's own templates repository.
+- `texforge build` now runs each TeX pass in its own Tectonic process until the auxiliary files settle (at most 6 passes plus the final PDF pass), working around stretched lines in multi-pass documents (tectonic#1412); `TEXFORGE_SINGLE_PROCESS=1` restores the single-process build.
+
 ### Added
 
+- The startup banner now picks a large or compact font from the terminal width, and prints nothing when stdout is not a TTY.
+- `texforge new --values <FILE>` fills the placeholders a template declares
+  from a flat TOML (`.toml`) or YAML (`.yaml`, `.yml`) table: strings,
+  integers, floats and booleans, with file values winning over the project
+  config, the user config and the template defaults. The values used are
+  written to `values.toml` in the new project. A key the template does not
+  declare fails the run listing the unknown and the declared names, and a
+  required placeholder with no value now fails the run instead of leaving a
+  raw `{{name}}` in the generated document (the directory the run created is
+  removed).
 - `texforge update` — the explicit self-update command. It fetches the latest
   stable GitHub release (drafts and prereleases excluded), always asks before
   replacing the running binary (default **NO**, `--yes` skips the prompt),
@@ -50,11 +108,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twice; only a build that rewrote at least one code block injects it, and an
   unknown value fails the build listing the valid ones.
 
+- `texforge template add <folder>` installs a template from a local directory
+  (`--force` replaces an existing one); a local template is never refreshed
+  from the network. Registry downloads no longer count against GitHub's
+  unauthenticated API limit, and a refused request now says so — including
+  the `Retry-After`/`x-ratelimit-reset` values — instead of only "not found".
+
 ### Changed
 
+- The `editorial` diagram preset now uses the refreshed template palette
+  (ink `#1D1510`, garnet accent `#87222C`, muted brown `#6B5A43`) with an
+  EB Garamond font stack for Mermaid, suiting the `article` and `workshop`
+  templates; `monochrome` (for the `apa` templates) and `technical` (for
+  `ieee`) gained matching font stacks, and D2/Graphviz render colours only.
+  Cached diagrams render once more after this change, then reuse the cache.
 - The release check used by `texforge init` moved into the updater so both
   paths share one lookup, throttled to once a day for the notice; `init`
   keeps its existing prompt-and-confirm behaviour.
 - A `cargo install` binary is refused with `cargo install --force texforge`
   guidance instead of being overwritten; `texforge uninstall` now reads the
   same cargo-install detection.
+- The pinned Tectonic used for automatic installs is now 0.17.0.

@@ -11,7 +11,7 @@
 
 Texforge is a unified LaTeX workspace — one tool for writing, rendering diagrams (Mermaid, Graphviz), and building PDFs. Set it up once and stay focused on your document.
 
-**[univerlab.org/texforge](https://univerlab.org/texforge)** — the project page: what it does and why it exists. Command-level documentation lives in [`docs/`](docs/).
+**[univerlab.org/texforge](https://univerlab.org/texforge)** — the project page: what it does and why it exists. Command-level documentation lives in [`docs/`](docs/), starting with the [CLI reference](docs/cli-reference.md). From 1.0 the command surface follows semantic versioning.
 
 ---
 
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/UniverLab/texforge/main/scripts/ins
 irm https://raw.githubusercontent.com/UniverLab/texforge/main/scripts/install.ps1 | iex
 ```
 
-This downloads and installs `texforge`. No Rust toolchain required. Tectonic (the LaTeX engine) is installed automatically on first build.
+This downloads and installs `texforge`. No Rust toolchain required. Tectonic (the LaTeX engine) is installed automatically on first build. For 1.x releases both installers verify the minisign signature of `SHA256SUMS.txt` and need `minisign` on `PATH` (`apt install minisign` / `brew install minisign` / `scoop install minisign`) or `SKIP_SIGNATURE=1` to skip that check.
 
 You can customize the install:
 
@@ -174,14 +174,17 @@ texforge init
 | Command | Description |
 |---|---|
 | `texforge new <name>` | Create new project from template |
-| `texforge new <name> -t <template>` | Create with specific template |
+| `texforge new <name> -t <template>` | Create with specific template (name or local folder) |
+| `texforge new <name> --values <file>...` | Fill template placeholders from repeatable `.toml`/`.yaml`/`.yml` files (later files win) |
 | `texforge init` | Interactive wizard — new project or migrate existing |
 | `texforge build` | Compile to PDF |
 | `texforge build --watch` | Watch for changes and rebuild automatically |
+| `texforge build --values <file>... [--out <path>] [<dir>]` | Build a template folder to a filled PDF (repeatable `--values`, later files win; optional `[<dir>]` template folder, PDF goes to the current directory) |
 | `texforge clean` | Remove build artifacts |
 | `texforge fmt` | Format .tex files |
 | `texforge fmt --check` | Check formatting without modifying |
 | `texforge check` | Lint without compiling (includes spell-check) |
+| `texforge bib check` | Verify DOIs and arXiv IDs in the `.bib` against Crossref and arXiv |
 | `texforge spell add <word>` | Add word to personal dictionary (default: global) |
 | `texforge spell list` | List personal dictionary words |
 | `texforge spell remove <word>` | Remove word from personal dictionary |
@@ -193,6 +196,9 @@ texforge init
 | `texforge stats` | Count words by section (or by file with `--by file`) |
 | `texforge preview` | Rasterize PDF to PNG pages |
 | `texforge doctor` | Diagnose Tectonic, cache, fonts, dictionaries, project |
+| `texforge skill` | Print the agent skill embedded in the binary |
+| `texforge skill --references` | Also print the bundled reference files |
+| `texforge skill --list` | List the bundled reference file names, one per line |
 | `texforge update` | Update to the latest release (always asks first; default answer is NO) |
 | `texforge update --check` | Check for a newer release: exit 1 if available, 0 if up to date, 2 if the check could not be completed |
 | `texforge update --yes` | Install the update without asking |
@@ -201,8 +207,10 @@ texforge init
 | `texforge config <key>` | Show value for key (name, email, institution, language) |
 | `texforge config <key> <value>` | Set value for key |
 | `texforge template list` | List installed + available in registry |
-| `texforge template list --installed` | List only locally installed templates |
+| `texforge template list --local` | List only locally installed templates |
+| `texforge template list --json` | List as one JSON array (`name`, `source`, `installed`) per template |
 | `texforge template add <name>` | Download template from registry |
+| `texforge template add <folder>` | Install a template from a local folder (`--force` replaces an existing one) |
 | `texforge template remove <name>` | Remove installed template |
 | `texforge template validate <name>` | Verify template compatibility |
 
@@ -244,7 +252,7 @@ texforge config language "spanish"
 
 ## Templates
 
-Templates are managed through the [texforge-templates](https://github.com/UniverLab/texforge-templates) registry. The `general` template is embedded in the binary and works offline. Run `texforge template list --all` to see all available templates.
+Templates are managed through the [texforge-templates](https://github.com/UniverLab/texforge-templates) registry. The `general` template is embedded in the binary and works offline. Run `texforge template list` to see all available templates. A template you are developing can be installed from a folder with `texforge template add <folder>` (`--force` replaces an existing one); local templates are never refreshed from the network.
 
 ---
 
@@ -334,6 +342,7 @@ ERROR [main.tex:23]
 - Consistent indentation (2 spaces) inside environments
 - Collapsed multiple blank lines
 - Aligned `\begin{}`/`\end{}` blocks
+- Commented-out `\begin`/`\end` (after an unescaped `%`) never change indentation
 
 One canonical output regardless of input style. Git diffs stay clean.
 
@@ -447,7 +456,9 @@ texforge stats --json
 
 ## Preview
 
-Rasterize the compiled PDF to PNG pages:
+Rasterize the compiled PDF to PNG pages. Before rasterizing, stale `page-<n>.png`
+files are removed from the output folder (all of them, or only those for
+`--page <n>`); other files are left alone.
 
 ```bash
 # Rasterize all pages (writes to ./preview/ by default)
@@ -478,6 +489,9 @@ Reports:
 - Disk usage of the Tectonic cache and downloaded templates
 - Available fonts and dictionaries
 - Whether the current directory is a recognized texforge project
+
+Like a build, `doctor` first updates an outdated managed Tectonic to the
+supported version, and flags a Tectonic in `PATH` that is older than it.
 
 ---
 

@@ -47,6 +47,7 @@ fn release(tag: &str) -> GitHubRelease {
 struct FakeDownloader {
     asset: Vec<u8>,
     checksums: Option<Vec<u8>>,
+    sigs: Option<Vec<u8>>,
     calls: RefCell<Vec<String>>,
 }
 
@@ -55,6 +56,7 @@ impl FakeDownloader {
         Self {
             asset,
             checksums: None,
+            sigs: None,
             calls: RefCell::new(Vec::new()),
         }
     }
@@ -67,7 +69,14 @@ impl FakeDownloader {
 impl BinaryDownloader for FakeDownloader {
     fn download(&self, url: &str) -> Result<Vec<u8>> {
         self.calls.borrow_mut().push(url.to_string());
-        if url.ends_with("SHA256SUMS.txt") {
+        // The `.minisig` route comes first: without it the signature URL
+        // would fall into the asset branch and serve the tarball.
+        if url.ends_with(".minisig") {
+            match &self.sigs {
+                Some(bytes) => Ok(bytes.clone()),
+                None => Err(anyhow!("404: release ships no signature file")),
+            }
+        } else if url.ends_with("SHA256SUMS.txt") {
             match &self.checksums {
                 Some(bytes) => Ok(bytes.clone()),
                 None => Err(anyhow!("404: release ships no checksum file")),
@@ -610,25 +619,24 @@ fn matching_checksum_passes() {
 
 #[test]
 fn checksum_mismatch_is_fatal_and_changes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let (exe, cargo_bin) = install_target(dir.path());
     let asset_bytes = tar_bytes(BIN_NAME, b"new");
-    let mut downloader = FakeDownloader::new(asset_bytes);
-    let asset = asset_name(
-        GITHUB_REPO,
-        &fake_newer_version(),
-        "x86_64-unknown-linux-musl",
-        "tar.gz",
-    );
-    downloader.checksums =
-        Some(format!("{}  {asset}\n", sha256_hex(b"something else")).into_bytes());
-    let deps = install_deps(&exe, &cargo_bin, &downloader, &|| {
-        panic!("--yes skips the prompt")
-    });
+    // A signed sums file listing the wrong digest: the test key signs the
+    // tampered sums, so verification runs and the SHA256 comparison fails.
+    let version = v1();
+    let (asset, _) = sums_for(&version, &asset_bytes);
+    let sums = format!("{}  {asset}\n", sha256_hex(b"something else"));
+    let keypair = test_keypair();
+    let downloader = signed_downloader(asset_bytes.clone(), sums.as_bytes(), &keypair);
 
-    let error = run_update_with(false, true, &deps).unwrap_err();
+    let error = verify_checksum_with_key(
+        &downloader,
+        &version,
+        &asset,
+        &asset_bytes,
+        &keypair.pk.to_base64(),
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("SHA256 mismatch"));
-    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
 }
 
 #[test]
@@ -651,6 +659,248 @@ fn checksum_binary_mode_marker_still_verifies() {
     let deps = install_deps(&exe, &cargo_bin, &downloader, &|| {
         panic!("--yes skips the prompt")
     });
+
+    assert_eq!(run_update_with(false, true, &deps).unwrap(), 0);
+    assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+}
+
+#[test]
+fn unsigned_0x_release_still_checks_the_checksum() {
+    // 0.x releases predate signing: a missing .minisig skips only the
+    // signature check — the SHA256 comparison still runs, as before.
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let mut downloader = FakeDownloader::new(tar_bytes(BIN_NAME, b"new"));
+    downloader.checksums = Some(checksums_for(b"not the asset").into_bytes());
+    let deps = install_deps(&exe, &cargo_bin, &downloader, &|| {
+        panic!("--yes skips the prompt")
+    });
+
+    let error = run_update_with(false, true, &deps).unwrap_err();
+    assert!(error.to_string().contains("SHA256 mismatch"));
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+}
+
+// ── Signed checksums (minisign) ─────────────────────────────
+
+/// A fixed 1.x version for the signing tests: `install_deps` tracks the
+/// compiled-in 0.x version through `fake_newer_tag`, which stays lenient.
+fn v1() -> SemVer {
+    SemVer::parse("1.2.0").expect("v1.2.0 parses")
+}
+
+/// A throwaway minisign keypair, generated at test time: the secret half
+/// never leaves the test, and nothing is checked into the repository.
+fn test_keypair() -> minisign::KeyPair {
+    minisign::KeyPair::generate_unencrypted_keypair().expect("test keypair generates")
+}
+
+/// Sign `sums` the way the release workflow does: the returned text is the
+/// `.minisig` file body the fake downloader serves.
+fn sign_sums(sums: &[u8], keypair: &minisign::KeyPair) -> Vec<u8> {
+    minisign::sign(None, &keypair.sk, sums, None, None)
+        .expect("test signing works")
+        .to_string()
+        .into_bytes()
+}
+
+/// A downloader serving `asset` with `sums` signed by `keypair`.
+fn signed_downloader(asset: Vec<u8>, sums: &[u8], keypair: &minisign::KeyPair) -> FakeDownloader {
+    let mut downloader = FakeDownloader::new(asset);
+    downloader.checksums = Some(sums.to_vec());
+    downloader.sigs = Some(sign_sums(sums, keypair));
+    downloader
+}
+
+/// Deps pinned to an explicit release list, so the 1.x tests do not depend
+/// on the compiled-in version the way `install_deps` does.
+fn install_deps_for<'a>(
+    releases: Vec<GitHubRelease>,
+    exe: &'a Path,
+    cargo_bin: &'a Path,
+    downloader: &'a FakeDownloader,
+    confirm: &'a dyn Fn() -> bool,
+) -> UpdateDeps<'a> {
+    UpdateDeps {
+        current: current(),
+        releases: Ok(releases),
+        exe,
+        cargo_bin,
+        target: Ok(("x86_64-unknown-linux-musl", "tar.gz")),
+        downloader,
+        confirm,
+    }
+}
+
+/// The asset name and sums line the release workflow publishes for
+/// `asset_bytes` of `version`.
+fn sums_for(version: &SemVer, asset_bytes: &[u8]) -> (String, String) {
+    let asset = asset_name(GITHUB_REPO, version, "x86_64-unknown-linux-musl", "tar.gz");
+    let sums = format!("{}  {asset}\n", sha256_hex(asset_bytes));
+    (asset, sums)
+}
+
+#[test]
+fn public_key_decodes() {
+    assert!(minisign_verify::PublicKey::from_base64(PUBLIC_KEY).is_ok());
+}
+
+#[test]
+fn verify_sums_accepts_a_valid_signature() {
+    let keypair = test_keypair();
+    let sums = b"abc123  texforge-v1.2.0-x86_64-unknown-linux-musl.tar.gz\n";
+    let sig = sign_sums(sums, &keypair);
+    verify_sums(
+        &keypair.pk.to_base64(),
+        sums,
+        &String::from_utf8_lossy(&sig),
+    )
+    .unwrap();
+}
+
+#[test]
+fn verify_sums_rejects_a_signature_made_by_another_key() {
+    let signer = test_keypair();
+    let other = test_keypair();
+    let sums = b"abc123  texforge-v1.2.0-x86_64-unknown-linux-musl.tar.gz\n";
+    let sig = sign_sums(sums, &signer);
+    let error =
+        verify_sums(&other.pk.to_base64(), sums, &String::from_utf8_lossy(&sig)).unwrap_err();
+    assert!(error
+        .to_string()
+        .starts_with("Signature verification failed for SHA256SUMS.txt"));
+}
+
+#[test]
+fn verify_sums_rejects_sums_altered_after_signing() {
+    let keypair = test_keypair();
+    let sums = b"abc123  texforge-v1.2.0-x86_64-unknown-linux-musl.tar.gz\n";
+    let sig = sign_sums(sums, &keypair);
+    let mut tampered = sums.to_vec();
+    tampered[0] = b'0';
+    let error = verify_sums(
+        &keypair.pk.to_base64(),
+        &tampered,
+        &String::from_utf8_lossy(&sig),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .starts_with("Signature verification failed for SHA256SUMS.txt"));
+}
+
+#[test]
+fn verify_sums_rejects_a_malformed_signature() {
+    let keypair = test_keypair();
+    let sums = b"abc123  texforge-v1.2.0-x86_64-unknown-linux-musl.tar.gz\n";
+    let error = verify_sums(&keypair.pk.to_base64(), sums, "not a signature").unwrap_err();
+    assert!(error
+        .to_string()
+        .starts_with("Signature verification failed for SHA256SUMS.txt"));
+}
+
+#[test]
+fn signed_1x_release_with_valid_sums_and_signature_passes_verification() {
+    // The release key is secret, so no test can forge its signature: the
+    // fixture is signed by a throwaway key and verified against that key.
+    // A passing gate here means the update proceeds to install.
+    let version = v1();
+    let asset_bytes = tar_bytes(BIN_NAME, b"new");
+    let (asset, sums) = sums_for(&version, &asset_bytes);
+    let keypair = test_keypair();
+    let downloader = signed_downloader(asset_bytes.clone(), sums.as_bytes(), &keypair);
+    verify_checksum_with_key(
+        &downloader,
+        &version,
+        &asset,
+        &asset_bytes,
+        &keypair.pk.to_base64(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn release_with_a_bad_signature_is_fatal_and_changes_nothing() {
+    // The fixture is signed by a throwaway key the release key never
+    // vouches for, so the update refuses it before the SHA256 comparison.
+    let version = v1();
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let asset_bytes = tar_bytes(BIN_NAME, b"new");
+    let (_, sums) = sums_for(&version, &asset_bytes);
+    let downloader = signed_downloader(asset_bytes, sums.as_bytes(), &test_keypair());
+    let deps = install_deps_for(
+        vec![release("v1.2.0")],
+        &exe,
+        &cargo_bin,
+        &downloader,
+        &|| panic!("--yes skips the prompt"),
+    );
+
+    let error = run_update_with(false, true, &deps).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Signature verification failed for SHA256SUMS.txt"));
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+}
+
+#[test]
+fn release_without_a_signature_file_is_fatal_on_1x() {
+    let version = v1();
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let asset_bytes = tar_bytes(BIN_NAME, b"new");
+    let (_, sums) = sums_for(&version, &asset_bytes);
+    let mut downloader = FakeDownloader::new(asset_bytes);
+    downloader.checksums = Some(sums.into_bytes());
+    let deps = install_deps_for(
+        vec![release("v1.2.0")],
+        &exe,
+        &cargo_bin,
+        &downloader,
+        &|| panic!("--yes skips the prompt"),
+    );
+
+    let error = run_update_with(false, true, &deps).unwrap_err();
+    assert!(error.to_string().contains("has no SHA256SUMS.txt.minisig"));
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+}
+
+#[test]
+fn release_without_a_sums_file_is_fatal_on_1x() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let downloader = FakeDownloader::new(tar_bytes(BIN_NAME, b"new"));
+    let deps = install_deps_for(
+        vec![release("v1.2.0")],
+        &exe,
+        &cargo_bin,
+        &downloader,
+        &|| panic!("--yes skips the prompt"),
+    );
+
+    let error = run_update_with(false, true, &deps).unwrap_err();
+    assert!(error.to_string().contains("has no SHA256SUMS.txt"));
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+}
+
+#[test]
+fn unsigned_0x_release_still_installs() {
+    // 0.x releases predate signing: missing sums and signature files skip
+    // verification, as before. The pinned 0.1.0 current keeps v0.9.0 newer.
+    let old = SemVer::parse("0.1.0").expect("0.1.0 parses");
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, cargo_bin) = install_target(dir.path());
+    let downloader = FakeDownloader::new(tar_bytes(BIN_NAME, b"new"));
+    let deps = UpdateDeps {
+        current: &old,
+        releases: Ok(vec![release("v0.9.0")]),
+        exe: &exe,
+        cargo_bin: &cargo_bin,
+        target: Ok(("x86_64-unknown-linux-musl", "tar.gz")),
+        downloader: &downloader,
+        confirm: &|| panic!("--yes skips the prompt"),
+    };
 
     assert_eq!(run_update_with(false, true, &deps).unwrap(), 0);
     assert_eq!(std::fs::read(&exe).unwrap(), b"new");

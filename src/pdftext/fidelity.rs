@@ -254,6 +254,7 @@ mod tests {
     fn significant_words_obey_the_begin_and_end_document_switch() {
         let section = |title: &str| Token::Section {
             level: 1,
+            starred: false,
             title: title.to_string(),
             raw_title: title.to_string(),
         };

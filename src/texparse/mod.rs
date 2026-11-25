@@ -44,7 +44,9 @@ use std::path::{Path, PathBuf};
 
 use crate::texutil;
 
-pub use sections::SectionTracker;
+pub use sections::{
+    appendix_top_level, apply_secnumdepth, default_secnumdepth, document_class, SectionTracker,
+};
 pub use verbatim::{verbatim_blocks, verbatim_body_lines};
 
 /// A single token produced by the tokenizer.
@@ -77,14 +79,20 @@ pub enum Token {
     ///   (`\textit`, `\href`, `\textcolor`, dot-leader constructs, ...)
     ///   resolved to plain text and escaped specials (`\&`, `\%`, ...)
     ///   unescaped to their literal character — see
-    ///   [`resolve_section_title`]. This is what `outline`, `wordcount` and
-    ///   `pdftext` display: human-readable prose.
+    ///   [`resolve_section_title`]. A title that is exactly one standard
+    ///   heading macro (`\abstractname`, `\contentsname`, ...) instead
+    ///   resolves to that macro's English text; any other bare macro stays as
+    ///   written. This is what `outline`, `wordcount` and `pdftext` display:
+    ///   human-readable prose.
     /// * `raw_title` is the verbatim source text of that same braced
     ///   argument, escapes and macros intact. This is what the glyph linter
     ///   reads: it needs to see `\&` as still escaped to judge whether a
     ///   special character is protected.
     Section {
         level: u8,
+        /// True for the `*` form (`\section*{...}`), which LaTeX leaves
+        /// unnumbered.
+        starred: bool,
         title: String,
         raw_title: String,
     },
@@ -500,6 +508,7 @@ mod tests {
             tokens[2],
             Token::Section {
                 level: 2,
+                starred: false,
                 title: "Three".to_string(),
                 raw_title: "Three".to_string(),
             }
@@ -513,6 +522,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: true,
                 title: "Intro".to_string(),
                 raw_title: "Intro".to_string(),
             }]
@@ -526,6 +536,7 @@ mod tests {
             tokens,
             vec![Token::Section {
                 level: 2,
+                starred: false,
                 title: "Full title".to_string(),
                 raw_title: "Full title".to_string(),
             }]
@@ -635,8 +646,9 @@ mod tests {
         );
         for t in &tokens {
             if let Token::Text(text) = t {
-                assert!(!text.contains("p{3cm"), "column spec leaked: {text:?}");
+                assert!(!text.contains("p{3cm"), "column spec leaked: {text:?}"); // }
                 assert!(!text.contains("p{5.5cm"), "column spec leaked: {text:?}");
+                // }
             }
         }
         assert!(tokens.iter().any(
@@ -706,7 +718,7 @@ mod tests {
 
     #[test]
     fn unbalanced_braces_do_not_panic() {
-        let tokens = tokenize(r"\textbf{unclosed and }}}} stray");
+        let tokens = tokenize(r"\textbf{unclosed and }}}} stray"); // {{{
         assert!(tokens.iter().any(|t| matches!(
             t,
             Token::Command { name, .. } if name == "textbf"
@@ -1118,5 +1130,269 @@ mod tests {
                 Token::Text("|".to_string()),
             ]
         );
+    }
+
+    /// Sectioning commands inside `\titleformat`/`\titlespacing*` arguments
+    /// are not sections: `\section`/`\subsection` name the command, they do
+    /// not start one.
+    #[test]
+    fn sectioning_commands_as_arguments_are_not_sections() {
+        let tokens = tokenize(r"\titleformat{\section}{\Large}{}{0pt}{}");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Section { .. })),
+            "titleformat arg must not be a section: {tokens:?}"
+        );
+        let tokens = tokenize(r"\titlespacing*{\subsection}{0pt}{1ex}{1ex}");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Section { .. })),
+            "titlespacing arg must not be a section: {tokens:?}"
+        );
+        assert!(
+            tokens.contains(&Token::Command {
+                name: "subsection".to_string(),
+                args: vec![],
+            }),
+            "bare subsection is a plain command: {tokens:?}"
+        );
+    }
+
+    /// The four section forms keep their titles: starred, optional TOC
+    /// title, plain, and space-before-brace (which reads an empty title).
+    #[test]
+    fn section_forms_stay_sections() {
+        for (src, title, starred) in [
+            (r"\section*{Title}", "Title", true),
+            (r"\section[Short]{Long}", "Long", false),
+            (r"\section{Title}", "Title", false),
+        ] {
+            let tokens = tokenize(src);
+            assert_eq!(
+                tokens,
+                vec![Token::Section {
+                    level: 2,
+                    starred,
+                    title: title.to_string(),
+                    raw_title: title.to_string(),
+                }],
+                "section form: {src}"
+            );
+        }
+        // A space before the brace still opens a section, but the group reads
+        // do not skip spaces, so the title reads empty.
+        let tokens = tokenize(r"\section {Title}");
+        let sections: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Section { .. }))
+            .collect();
+        assert_eq!(
+            sections,
+            vec![&Token::Section {
+                level: 2,
+                starred: false,
+                title: String::new(),
+                raw_title: String::new(),
+            }],
+            "space before brace: {tokens:?}"
+        );
+    }
+
+    /// A sectioning command at end of input is a plain command, never a
+    /// section, and tokenization stays panic-free.
+    #[test]
+    fn bare_sectioning_command_at_eof_is_plain() {
+        let tokens = tokenize(r"\section");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "section".to_string(),
+                args: vec![],
+            }]
+        );
+    }
+
+    /// A titlesec preamble adds no sections: the real sections that follow
+    /// still number `1` and `1.1`.
+    #[test]
+    fn preamble_titlesec_does_not_shift_numbers() {
+        let tokens = tokenize(
+            "\\titleformat{\\section}{}{}{}{}\n\\titlespacing*{\\section}{0pt}{1ex}{1ex}\n\\section{Introduction}\n\\subsection{A}",
+        );
+        let sections: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Section { .. }))
+            .collect();
+        assert_eq!(sections.len(), 2, "only real sections: {tokens:?}");
+        let mut tracker = SectionTracker::new(6);
+        let mut numbers = Vec::new();
+        for token in &tokens {
+            if let Token::Section { level, .. } = token {
+                numbers.push(tracker.enter(*level));
+            }
+        }
+        assert_eq!(numbers, vec!["1", "1.1"]);
+    }
+
+    fn significant_words_in(source: &str) -> Vec<String> {
+        let files = vec![TokenizedFile {
+            path: std::path::PathBuf::from("main.tex"),
+            tokens: tokenize(&format!("\\begin{{document}}\n{source}\n\\end{{document}}")),
+        }];
+        crate::pdftext::significant_words(&files)
+            .into_keys()
+            .collect()
+    }
+
+    #[test]
+    fn starred_vspace_consumes_braced_length_as_argument() {
+        let tokens = tokenize(r"\vspace*{1.2cm}");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vspace".to_string(),
+                args: vec!["1.2cm".to_string()],
+            }]
+        );
+        let words = significant_words_in(r"\vspace*{1.2cm}");
+        assert!(
+            !words.iter().any(|w| w == "1.2cm"),
+            "length leaked as word: {words:?}"
+        );
+    }
+
+    #[test]
+    fn starred_vspace_consumes_glue_with_stretch() {
+        let tokens = tokenize(r"\vspace*{2em plus 1fill}");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vspace".to_string(),
+                args: vec!["2em plus 1fill".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn vskip_unbraced_length_does_not_leak_into_words() {
+        let tokens = tokenize(r"\vskip 1.2cm");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vskip".to_string(),
+                args: vec![" 1.2cm".to_string()],
+            }]
+        );
+        let words = significant_words_in(r"\vskip 1.2cm");
+        assert!(
+            !words.iter().any(|w| w == "1.2cm"),
+            "length leaked as word: {words:?}"
+        );
+    }
+
+    #[test]
+    fn hskip_glue_with_stretch_and_shrink_does_not_leak() {
+        let source = r"\hskip 2em plus 1fill minus 0.5em";
+        let tokens = tokenize(source);
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "hskip".to_string(),
+                args: vec![" 2em plus 1fill minus 0.5em".to_string()],
+            }]
+        );
+        let words = significant_words_in(source);
+        for leaked in ["2em", "plus", "1fill", "minus", "0.5em"] {
+            assert!(
+                !words.iter().any(|w| w == leaked),
+                "{leaked} leaked as word: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kern_consumes_signed_dimension() {
+        for source in [r"\kern-1pt", r"\kern -1pt"] {
+            let tokens = tokenize(source);
+            assert!(
+                matches!(&tokens[..], [Token::Command { name, args }] if name == "kern" && args.len() == 1),
+                "unexpected tokens for {source}: {tokens:?}"
+            );
+            let words = significant_words_in(source);
+            assert!(
+                !words.iter().any(|w| w == "1pt" || w == "-1pt"),
+                "kern length leaked for {source}: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vglue_consumes_unbraced_dimension() {
+        let tokens = tokenize(r"\vglue 3mm");
+        assert_eq!(
+            tokens,
+            vec![Token::Command {
+                name: "vglue".to_string(),
+                args: vec![" 3mm".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn vskip_consumes_control_sequence_glue() {
+        for source in [r"\vskip\baselineskip", r"\vskip 2\baselineskip"] {
+            let tokens = tokenize(source);
+            assert!(
+                matches!(&tokens[..], [Token::Command { name, args }] if name == "vskip" && args.len() == 1),
+                "unexpected tokens for {source}: {tokens:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_after_consumed_glue_survives() {
+        let words = significant_words_in(r"A \vskip 1.2cm B");
+        assert!(words.iter().any(|w| w == "A"), "A missing: {words:?}");
+        assert!(words.iter().any(|w| w == "B"), "B missing: {words:?}");
+        assert!(
+            !words.iter().any(|w| w == "1.2cm"),
+            "length leaked: {words:?}"
+        );
+    }
+
+    #[test]
+    fn prose_lengths_remain_significant_words() {
+        let words = significant_words_in("La pared mide 3cm de espesor");
+        assert!(words.iter().any(|w| w == "3cm"), "3cm missing: {words:?}");
+
+        let words = significant_words_in("La pared mide 5 cm de espesor");
+        assert!(words.iter().any(|w| w == "cm"), "cm missing: {words:?}");
+        assert!(
+            !words.iter().any(|w| w == "5"),
+            "numeric token should be excluded: {words:?}"
+        );
+    }
+
+    #[test]
+    fn prose_plus_and_kern_remain_significant_words() {
+        let words = significant_words_in("we add plus and kern in running text");
+        assert!(words.iter().any(|w| w == "plus"), "plus missing: {words:?}");
+        assert!(words.iter().any(|w| w == "kern"), "kern missing: {words:?}");
+    }
+
+    #[test]
+    fn token_after_consumed_glue_keeps_correct_start_offset() {
+        let src = "A \\vskip 1.2cm B";
+        let spanned = tokenize_with_spans(src).tokens;
+        let b = spanned
+            .iter()
+            .find(|t| matches!(&t.token, Token::Text(s) if s.contains('B')))
+            .expect("text containing B");
+        let b_pos = src.find('B').expect("B in source");
+        assert!(
+            b.start <= b_pos && b_pos < b.end,
+            "B at {b_pos} not within token span {}..{}",
+            b.start,
+            b.end
+        );
+        assert_eq!(&src[b.start..b.end], " B");
     }
 }

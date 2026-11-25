@@ -59,11 +59,36 @@ info "download" "$URL"
 HTTP_CODE=$(curl -fSL -w '%{http_code}' -o "$TMPDIR/$ARCHIVE" "$URL" 2>/dev/null) || true
 [ "$HTTP_CODE" = "200" ] || error "Download failed (HTTP $HTTP_CODE). Check that $TAG exists for $TARGET at:\n  $URL"
 
-# --- verify checksum ---
-# Match against SHA256SUMS.txt from the same release. Missing sums file (older
-# releases) or no sha256 tool → skip; a present-but-mismatched checksum is fatal.
+# --- verify signature and checksum ---
+# From v1.0.0 releases sign SHA256SUMS.txt with minisign
+# (SHA256SUMS.txt.minisig next to it), and the signature is verified before
+# the checksums are trusted. 0.x releases predate signing, so a missing sums
+# file skips verification there and a missing signature file skips only the
+# signature check; on 1.x either is fatal, as is a bad signature. A
+# present-but-mismatched checksum is fatal on every version.
+PUBKEY="RWRDOZx1ameWKtWCHDVp3YmIsBiJszM2U4SJbCMkZ8/iSkW9Pi1yWzDD"
+case "$TAG" in
+  v0.*) LEGACY=1 ;;
+  *)    LEGACY=0 ;;
+esac
 SUMS_URL="https://github.com/$REPO/releases/download/${TAG}/SHA256SUMS.txt"
+SIG_URL="https://github.com/$REPO/releases/download/${TAG}/SHA256SUMS.txt.minisig"
 if curl -fsSL -o "$TMPDIR/SHA256SUMS.txt" "$SUMS_URL" 2>/dev/null; then
+  if curl -fsSL -o "$TMPDIR/SHA256SUMS.txt.minisig" "$SIG_URL" 2>/dev/null; then
+    if command -v minisign >/dev/null 2>&1; then
+      minisign -V -P "$PUBKEY" -m "$TMPDIR/SHA256SUMS.txt" -x "$TMPDIR/SHA256SUMS.txt.minisig" >/dev/null 2>&1 \
+        || error "Signature verification failed for SHA256SUMS.txt"
+      info "signature" "verified"
+    elif [ -n "${SKIP_SIGNATURE:-}" ]; then
+      info "signature" "skipped (SKIP_SIGNATURE set)"
+    else
+      error "minisign is required to verify this release. Install it (apt install minisign, brew install minisign) or set SKIP_SIGNATURE=1 to skip the check"
+    fi
+  elif [ "$LEGACY" = "1" ] || [ -n "${SKIP_SIGNATURE:-}" ]; then
+    info "signature" "SHA256SUMS.txt.minisig not found for $TAG — skipping signature check"
+  else
+    error "release $TAG is not signed"
+  fi
   EXPECTED=$(awk -v f="$ARCHIVE" '$2 == f { print $1 }' "$TMPDIR/SHA256SUMS.txt" | head -1)
   [ -n "$EXPECTED" ] || error "No checksum listed for $ARCHIVE in SHA256SUMS.txt"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -78,8 +103,10 @@ if curl -fsSL -o "$TMPDIR/SHA256SUMS.txt" "$SUMS_URL" 2>/dev/null; then
     [ "$ACTUAL" = "$EXPECTED" ] || error "Checksum mismatch for $ARCHIVE (expected $EXPECTED, got $ACTUAL)"
     info "checksum" "verified"
   fi
-else
+elif [ "$LEGACY" = "1" ]; then
   info "checksum" "SHA256SUMS.txt not found for $TAG — skipping verification"
+else
+  error "SHA256SUMS.txt not found for $TAG"
 fi
 
 # --- extract ---

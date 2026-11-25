@@ -8,7 +8,36 @@ use anyhow::{Context, Result};
 
 use crate::utils;
 
-const REGISTRY_REPO: &str = "UniverLab/texforge-templates";
+mod http;
+mod local;
+pub(crate) mod refs;
+mod safety;
+pub(crate) mod sources;
+
+pub(crate) use http::private_repo_message;
+pub(crate) use local::{install_from_dir, is_plain_name};
+pub(crate) use refs::{installed_candidates, resolve_in, union_candidates};
+pub(crate) use safety::is_safe_relative;
+pub(crate) use sources::{load_sources, TemplateSource, OFFICIAL_NAME};
+
+/// True when the installed template `name` came from a local folder.
+pub(crate) fn installed_from_local(name: &str) -> Result<bool> {
+    Ok(is_local_install(&utils::templates_dir()?.join(name)))
+}
+
+/// Drop the local-source marker of `name`, so a registry download that
+/// replaces it takes part in refreshes again.
+pub(crate) fn clear_local_marker(name: &str) -> Result<()> {
+    let marker = utils::templates_dir()?.join(name).join(LOCAL_SOURCE_MARKER);
+    if marker.exists() {
+        std::fs::remove_file(marker)?;
+    }
+    Ok(())
+}
+
+/// Marks a template directory installed from a local folder. Such a template
+/// is never refreshed from the network.
+pub(crate) const LOCAL_SOURCE_MARKER: &str = ".local_source";
 
 /// How long a cached template is considered fresh before `resolve` attempts a
 /// background refresh. Twenty-four hours is a defensible default: templates
@@ -38,20 +67,54 @@ pub struct ResolvedTemplate {
     pub files: HashMap<String, Vec<u8>>,
 }
 
-/// Resolve a template by name: fresh cache → refresh stale cache → download → embedded fallback.
+/// Resolve a template by reference (`name` or `source/name`): local
+/// install → fresh cache → refresh stale cache → download → embedded
+/// fallback. A qualified reference resolves from that source's storage
+/// (`templates/<source>/<name>`); a bare name uses the official layout.
 pub fn resolve(name: &str) -> Result<ResolvedTemplate> {
+    match name.split_once('/') {
+        Some((source_name, bare)) => {
+            let sources = load_sources()?;
+            let source = sources
+                .iter()
+                .find(|s| s.name == source_name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Unknown template source '{source_name}'. Valid sources: {}",
+                        sources
+                            .iter()
+                            .map(|s| s.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
+            resolve_for(source, bare)
+        }
+        None => resolve_for(&TemplateSource::official(), name),
+    }
+}
+
+/// Resolve `name` from `source`, caching under that source's layout.
+fn resolve_for(source: &TemplateSource, name: &str) -> Result<ResolvedTemplate> {
+    let label = label_for(&source.name, name);
+    // 0. A template installed from a local folder is used exactly as it is.
+    let dir = cache_dir_for(&source.name, name)?;
+    if is_local_install(&dir) {
+        return load_dir_recursive(&dir);
+    }
+
     // 1. Check local cache
-    if let Ok((t, fetched_at)) = load_from_cache_with_meta(name) {
+    if let Ok((t, fetched_at)) = load_from_cache_with_meta(&dir) {
         if !is_stale(fetched_at) {
             return Ok(t);
         }
         // Stale: attempt a refresh, but fall back to the cached copy on failure.
-        match download(name) {
+        match download_from(source, name) {
             Ok(fresh) => return Ok(fresh),
             Err(e) => {
                 eprintln!(
                     "texforge: could not refresh template '{}' ({}); using cached copy",
-                    name, e
+                    label, e
                 );
                 return Ok(t);
             }
@@ -59,20 +122,33 @@ pub fn resolve(name: &str) -> Result<ResolvedTemplate> {
     }
 
     // 2. Try downloading from GitHub
-    if let Ok(t) = download(name) {
-        return Ok(t);
+    match download_from(source, name) {
+        Ok(t) => Ok(t),
+        // 3. Fallback to embedded (only "general")
+        Err(_) if name == "general" => Ok(embedded_general()),
+        Err(e) => anyhow::bail!(
+            "Template '{}' could not be downloaded: {}. Run 'texforge template add {}' to retry.",
+            label,
+            e,
+            label
+        ),
     }
+}
 
-    // 3. Fallback to embedded (only "general")
-    if name == "general" {
-        return Ok(embedded_general());
+/// Display form of an installed template: bare for the official source,
+/// `source/name` otherwise.
+fn label_for(source_name: &str, name: &str) -> String {
+    if source_name == OFFICIAL_NAME {
+        name.to_string()
+    } else {
+        format!("{source_name}/{name}")
     }
+}
 
-    anyhow::bail!(
-        "Template '{}' not found. Run 'texforge template add {}' first.",
-        name,
-        name
-    );
+/// True when `dir` holds the [`LOCAL_SOURCE_MARKER`], i.e. it was installed
+/// from a local folder and must never be refreshed from the network.
+fn is_local_install(dir: &Path) -> bool {
+    dir.join(LOCAL_SOURCE_MARKER).is_file()
 }
 
 fn is_stale(fetched_at: Option<u64>) -> bool {
@@ -104,13 +180,12 @@ fn embedded_general() -> ResolvedTemplate {
     ResolvedTemplate { files }
 }
 
-fn load_from_cache_with_meta(name: &str) -> Result<(ResolvedTemplate, Option<u64>)> {
-    let dir = utils::templates_dir()?.join(name);
+fn load_from_cache_with_meta(dir: &Path) -> Result<(ResolvedTemplate, Option<u64>)> {
     if !dir.is_dir() {
         anyhow::bail!("not cached");
     }
-    let t = load_dir_recursive(&dir)?;
-    let fetched_at = read_cache_meta(&dir);
+    let t = load_dir_recursive(dir)?;
+    let fetched_at = read_cache_meta(dir);
     Ok((t, fetched_at))
 }
 
@@ -144,7 +219,7 @@ fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
                 .strip_prefix(base)?
                 .to_string_lossy()
                 .to_string();
-            if rel == CACHE_META_FILE {
+            if rel == CACHE_META_FILE || rel == LOCAL_SOURCE_MARKER {
                 continue;
             }
             let content = std::fs::read(entry.path())?;
@@ -154,14 +229,25 @@ fn load_dir_recursive(base: &Path) -> Result<ResolvedTemplate> {
     Ok(ResolvedTemplate { files })
 }
 
-/// Download a template tarball from GitHub and cache it locally.
-pub fn download(name: &str) -> Result<ResolvedTemplate> {
+/// Where `name` from `source` is cached: the flat layout for the official
+/// source (older installs stay where they are), `templates/<source>/<name>`
+/// otherwise.
+pub fn cache_dir_for(source_name: &str, name: &str) -> Result<PathBuf> {
+    if source_name == OFFICIAL_NAME {
+        Ok(utils::templates_dir()?.join(name))
+    } else {
+        Ok(utils::templates_dir()?.join(source_name).join(name))
+    }
+}
+
+/// Download a template tarball from `source` and cache it locally.
+pub fn download_from(source: &TemplateSource, name: &str) -> Result<ResolvedTemplate> {
     #[cfg(test)]
     {
         let override_fn = TEST_DOWNLOAD_OVERRIDE.with(|o| o.borrow().as_ref().map(|f| f(name)));
         if let Some(result) = override_fn {
             let files = result?;
-            let cache_dir = utils::templates_dir()?.join(name);
+            let cache_dir = cache_dir_for(&source.name, name)?;
             std::fs::create_dir_all(&cache_dir)?;
             for (rel, content) in &files {
                 let dest = cache_dir.join(rel);
@@ -175,26 +261,21 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
         }
     }
 
-    let url = format!(
-        "https://api.github.com/repos/{}/tarball/main",
-        REGISTRY_REPO
-    );
+    let url = source.tarball_url();
 
-    let response = reqwest::blocking::Client::new()
-        .get(&url)
-        .header("User-Agent", "texforge")
+    let response = sources::authed_get(&url, source)
         .send()
         .context("Failed to connect to template registry")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Registry returned HTTP {}", response.status());
+        bail_for_status(&response, source)?;
     }
 
     let bytes = response.bytes()?;
     let decoder = flate2::read::GzDecoder::new(&bytes[..]);
     let mut archive = tar::Archive::new(decoder);
 
-    let cache_dir = utils::templates_dir()?.join(name);
+    let cache_dir = cache_dir_for(&source.name, name)?;
     let cache_existed = cache_dir.is_dir();
     let mut files = HashMap::new();
     let prefix = format!("{}/", name);
@@ -211,7 +292,8 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
         let Some(rel) = after_root.strip_prefix(&prefix) else {
             continue;
         };
-        if rel.is_empty() || entry.header().entry_type().is_dir() {
+        let entry_type = entry.header().entry_type();
+        if rel.is_empty() || !entry_type.is_file() || !safety::is_safe_relative(rel) {
             continue;
         }
 
@@ -240,6 +322,36 @@ pub fn download(name: &str) -> Result<ResolvedTemplate> {
     Ok(ResolvedTemplate { files })
 }
 
+fn read_header<'a>(response: &'a reqwest::blocking::Response, name: &str) -> Option<&'a str> {
+    response.headers().get(name)?.to_str().ok()
+}
+
+/// Fail for a non-success response from `source`: a 404/403 from a
+/// non-official source probably means a private repo, anything else keeps the
+/// registry refusal/generic message. The credential never appears in errors.
+fn bail_for_status(response: &reqwest::blocking::Response, source: &TemplateSource) -> Result<()> {
+    let status = response.status();
+    if !source.is_official() && (status.as_u16() == 404 || status.as_u16() == 403) {
+        anyhow::bail!("{}", http::private_repo_message(&source.repo));
+    }
+    bail_on_status(response)
+}
+
+/// Fail for a non-success registry response, explaining a refusal (403/429,
+/// usually a rate limit) when the headers say so.
+fn bail_on_status(response: &reqwest::blocking::Response) -> Result<()> {
+    let status = response.status();
+    let refusal = http::refusal_message(
+        status.as_u16(),
+        read_header(response, "retry-after"),
+        read_header(response, "x-ratelimit-reset"),
+    );
+    match refusal {
+        Some(message) => anyhow::bail!("{message}"),
+        None => anyhow::bail!("Registry returned HTTP {status}"),
+    }
+}
+
 #[cfg(test)]
 type DownloadOverride =
     Box<dyn Fn(&str) -> std::result::Result<HashMap<String, Vec<u8>>, anyhow::Error>>;
@@ -263,23 +375,52 @@ pub(crate) fn clear_download_override() {
     TEST_DOWNLOAD_OVERRIDE.with(|o| *o.borrow_mut() = None);
 }
 
-/// List template names available in the remote registry: the templates its
+#[cfg(test)]
+type ListOverride = Box<dyn Fn(&str) -> std::result::Result<Vec<String>, anyhow::Error>>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_LIST_OVERRIDE: std::cell::RefCell<Option<ListOverride>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn set_list_override<F>(f: F)
+where
+    F: Fn(&str) -> std::result::Result<Vec<String>, anyhow::Error> + 'static,
+{
+    TEST_LIST_OVERRIDE.with(|o| *o.borrow_mut() = Some(Box::new(f)));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_list_override() {
+    TEST_LIST_OVERRIDE.with(|o| *o.borrow_mut() = None);
+}
+
+/// List template names available in the official registry: the templates its
 /// `registry.toml` declares. Listing the repo's directories instead would
 /// offer anything that lives there (a `scripts/` folder) as a template.
 pub fn list_remote() -> Result<Vec<String>> {
-    let url = format!(
-        "https://raw.githubusercontent.com/{}/main/registry.toml",
-        REGISTRY_REPO
-    );
+    list_remote_from(&TemplateSource::official())
+}
 
-    let response = reqwest::blocking::Client::new()
-        .get(&url)
-        .header("User-Agent", "texforge")
+/// List template names available in `source`'s remote registry.
+pub fn list_remote_from(source: &TemplateSource) -> Result<Vec<String>> {
+    #[cfg(test)]
+    {
+        let override_fn = TEST_LIST_OVERRIDE.with(|o| o.borrow().as_ref().map(|f| f(&source.name)));
+        if let Some(result) = override_fn {
+            return result;
+        }
+    }
+    let url = source.registry_url();
+
+    let response = sources::authed_get(&url, source)
         .send()
         .context("Failed to connect to template registry")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Registry returned HTTP {}", response.status());
+        bail_for_status(&response, source)?;
     }
 
     parse_registry_names(&response.text()?)
@@ -304,27 +445,81 @@ fn parse_registry_names(text: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// List template names available in local cache.
-pub fn list_cached() -> Result<Vec<String>> {
+/// An installed template and the source it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedTemplate {
+    /// Template name within its source.
+    pub name: String,
+    /// Source name (`official` for the flat layout).
+    pub source: String,
+}
+
+/// List installed templates with their source, from both storage layouts: a
+/// directory holding `template.toml` is a flat template of the official
+/// source; a directory without one whose children hold it is a source
+/// directory. Empty directories are ignored.
+pub fn list_cached_entries() -> Result<Vec<CachedTemplate>> {
     let dir = utils::templates_dir()?;
-    let mut names = Vec::new();
+    let mut entries = Vec::new();
     if dir.is_dir() {
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    names.push(name.to_string());
-                }
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let Some(top) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if entry.path().join("template.toml").is_file() {
+                entries.push(CachedTemplate {
+                    name: top,
+                    source: OFFICIAL_NAME.to_string(),
+                });
+            } else {
+                entries.extend(scan_source_dir(&entry.path(), &top)?);
             }
         }
     }
+    entries.sort_by(|a, b| (&a.name, &a.source).cmp(&(&b.name, &b.source)));
+    Ok(entries)
+}
+
+/// Templates installed from the source directory `top`: children holding
+/// `template.toml` are that source's templates. Empty directories and
+/// non-template children are ignored.
+fn scan_source_dir(top: &Path, source: &str) -> Result<Vec<CachedTemplate>> {
+    let mut entries = Vec::new();
+    for child in std::fs::read_dir(top)? {
+        let path = child?.path();
+        if !path.is_dir() || !path.join("template.toml").is_file() {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            entries.push(CachedTemplate {
+                name: name.to_string(),
+                source: source.to_string(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+/// List template names available in local cache, both storage layouts.
+pub fn list_cached() -> Result<Vec<String>> {
+    let mut names: Vec<String> = list_cached_entries()?.into_iter().map(|e| e.name).collect();
     names.sort();
+    names.dedup();
     Ok(names)
 }
 
-/// Remove a template from local cache.
+/// Remove a template from local cache. A `source/name` reference removes that
+/// source's install; a bare name removes the flat official install.
 pub fn remove_cached(name: &str) -> Result<PathBuf> {
-    let dir = utils::templates_dir()?.join(name);
+    let (source, bare) = match name.split_once('/') {
+        Some((source, bare)) => (source.to_string(), bare.to_string()),
+        None => (OFFICIAL_NAME.to_string(), name.to_string()),
+    };
+    let dir = cache_dir_for(&source, &bare)?;
     if !dir.is_dir() {
         anyhow::bail!("Template '{}' is not installed", name);
     }
@@ -335,14 +530,33 @@ pub fn remove_cached(name: &str) -> Result<PathBuf> {
 /// Force-refresh a single cached template, bypassing the TTL.
 /// If the download fails and a cached copy exists, the cache is kept.
 pub fn refresh(name: &str) -> Result<()> {
-    let dir = utils::templates_dir()?.join(name);
+    match name.split_once('/') {
+        Some((source_name, bare)) => {
+            let sources = load_sources()?;
+            let source = sources
+                .iter()
+                .find(|s| s.name == source_name)
+                .ok_or_else(|| anyhow::anyhow!("Unknown template source '{source_name}'"))?;
+            refresh_from(source, bare)
+        }
+        None => refresh_from(&TemplateSource::official(), name),
+    }
+}
+
+/// Force-refresh `name` from `source`, bypassing the TTL.
+fn refresh_from(source: &TemplateSource, name: &str) -> Result<()> {
+    let label = label_for(&source.name, name);
+    let dir = cache_dir_for(&source.name, name)?;
+    if is_local_install(&dir) {
+        return Ok(());
+    }
     let had_cache = dir.is_dir();
-    match download(name) {
+    match download_from(source, name) {
         Ok(_) => Ok(()),
         Err(e) if had_cache => {
             eprintln!(
                 "texforge: could not refresh template '{}' ({}); keeping cached copy",
-                name, e
+                label, e
             );
             Ok(())
         }
@@ -353,14 +567,25 @@ pub fn refresh(name: &str) -> Result<()> {
 /// Force-refresh every cached template, bypassing the TTL.
 /// Templates that fail to refresh are reported on stderr but do not abort.
 pub fn refresh_all() -> Result<()> {
-    let names = list_cached()?;
-    if names.is_empty() {
+    let entries = list_cached_entries()?;
+    if entries.is_empty() {
         println!("No cached templates to refresh.");
         return Ok(());
     }
-    for name in &names {
-        print!("Refreshing '{}'... ", name);
-        match download(name.as_str()) {
+    let sources = load_sources().unwrap_or_else(|_| vec![TemplateSource::official()]);
+    for entry in &entries {
+        let label = label_for(&entry.source, &entry.name);
+        let dir = cache_dir_for(&entry.source, &entry.name)?;
+        if is_local_install(&dir) {
+            continue;
+        }
+        print!("Refreshing '{}'... ", label);
+        let source = sources
+            .iter()
+            .find(|s| s.name == entry.source)
+            .cloned()
+            .unwrap_or_else(TemplateSource::official);
+        match download_from(&source, entry.name.as_str()) {
             Ok(_) => println!("done"),
             Err(e) => {
                 println!("failed ({})", e);
@@ -454,16 +679,137 @@ mod tests {
         assert_eq!(t.files.len(), 4);
     }
 
+    /// Run `f` with `HOME` and `XDG_CONFIG_HOME` pointing at a fresh tempdir,
+    /// holding [`crate::test_sync::ENV_LOCK`] so no other test sees the swap.
+    /// Keeps the real `~/.texforge` template store untouched.
+    fn with_temp_home(f: impl FnOnce(&std::path::Path)) {
+        let _env = templates_dir_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let _restore = crate::test_sync::EnvGuard::capture(&["HOME", "XDG_CONFIG_HOME"]);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        f(tmp.path());
+    }
+
     #[test]
     fn resolve_unknown_template_errors() {
-        ensure_rustls();
-        let result = resolve("nonexistent-template-xyz-123");
-        assert!(result.is_err());
-        // Verify the error message mentions the template name
-        if let Err(e) = result {
-            let msg = format!("{}", e);
-            assert!(msg.contains("not found"));
-        }
+        with_temp_home(|_home| {
+            set_download_override(|_name| {
+                Err(anyhow::anyhow!("Template 'x' not found in registry"))
+            });
+            let result = resolve("nonexistent-template-xyz-123");
+            clear_download_override();
+            // The message mentions the template name and the underlying cause
+            let msg = result.err().expect("resolve must fail").to_string();
+            assert!(msg.contains("not found"), "{msg}");
+            assert!(msg.contains("nonexistent-template-xyz-123"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn resolve_error_keeps_the_download_cause() {
+        with_temp_home(|_home| {
+            set_download_override(|_name| {
+                Err(anyhow::anyhow!(
+                    "The template registry refused the request (HTTP 403)"
+                ))
+            });
+            let result = resolve("nonexistent-template-xyz-456");
+            clear_download_override();
+            let msg = result.err().expect("resolve must fail").to_string();
+            assert_eq!(
+                msg,
+                "Template 'nonexistent-template-xyz-456' could not be downloaded: \
+                 The template registry refused the request (HTTP 403). \
+                 Run 'texforge template add nonexistent-template-xyz-456' to retry."
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_general_falls_back_to_embedded_on_download_error() {
+        with_temp_home(|_home| {
+            set_download_override(|_name| Err(anyhow::anyhow!("network is down")));
+            let result = resolve("general");
+            clear_download_override();
+            let files = result.unwrap().files;
+            assert!(files.contains_key("main.tex"), "embedded fallback used");
+        });
+    }
+
+    #[test]
+    fn resolve_returns_a_local_install_without_downloading() {
+        with_temp_home(|_home| {
+            let test_dir = crate::utils::templates_dir().unwrap().join("lab-report");
+            std::fs::create_dir_all(&test_dir).unwrap();
+            std::fs::write(test_dir.join("main.tex"), "local-content").unwrap();
+            std::fs::write(test_dir.join(LOCAL_SOURCE_MARKER), "").unwrap();
+
+            set_download_override(|_name| Err(anyhow::anyhow!("download must not happen")));
+            let result = resolve("lab-report");
+            clear_download_override();
+
+            let files = result.unwrap().files;
+            assert_eq!(files.get("main.tex").unwrap(), b"local-content");
+            assert!(!files.contains_key(LOCAL_SOURCE_MARKER));
+        });
+    }
+
+    #[test]
+    fn refresh_skips_a_local_install() {
+        with_temp_home(|_home| {
+            let test_dir = crate::utils::templates_dir().unwrap().join("lab-report");
+            std::fs::create_dir_all(&test_dir).unwrap();
+            std::fs::write(test_dir.join("main.tex"), "local-content").unwrap();
+            std::fs::write(test_dir.join(LOCAL_SOURCE_MARKER), "").unwrap();
+
+            set_download_override(|name| {
+                let mut files = HashMap::new();
+                files.insert("main.tex".into(), b"network-content".to_vec());
+                files.insert(format!("from-{name}.tex"), Vec::new());
+                Ok(files)
+            });
+            refresh("lab-report").unwrap();
+            assert_eq!(
+                std::fs::read(test_dir.join("main.tex")).unwrap(),
+                b"local-content"
+            );
+
+            refresh_all().unwrap();
+            assert_eq!(
+                std::fs::read(test_dir.join("main.tex")).unwrap(),
+                b"local-content"
+            );
+            assert!(!test_dir.join("from-lab-report.tex").exists());
+            clear_download_override();
+        });
+    }
+
+    #[test]
+    fn official_source_uses_the_pinned_codeload_archive() {
+        let url = TemplateSource::official().tarball_url();
+        assert_eq!(
+            url,
+            "https://codeload.github.com/UniverLab/texforge-templates/tar.gz/refs/heads/main"
+        );
+        assert!(url.starts_with("https://codeload.github.com/"));
+        assert!(!url.contains("api.github.com"));
+        assert_eq!(
+            TemplateSource::official().registry_url(),
+            "https://raw.githubusercontent.com/UniverLab/texforge-templates/main/registry.toml"
+        );
+    }
+
+    #[test]
+    fn load_dir_recursive_skips_the_local_source_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("main.tex"), "content").unwrap();
+        fs::write(tmp.path().join(LOCAL_SOURCE_MARKER), "").unwrap();
+
+        let result = load_dir_recursive(tmp.path()).unwrap();
+        assert!(result.files.contains_key("main.tex"));
+        assert!(!result.files.contains_key(LOCAL_SOURCE_MARKER));
+        assert_eq!(result.files.len(), 1);
     }
 
     #[test]
@@ -558,7 +904,7 @@ version = "0.1.0"
 
     #[test]
     fn load_from_cache_nonexistent_errors() {
-        let result = load_from_cache_with_meta("no-such-template-xyz-abc");
+        let result = load_from_cache_with_meta(std::path::Path::new("no-such-template-xyz-abc"));
         assert!(result.is_err());
     }
 
@@ -653,7 +999,7 @@ version = "0.1.0"
         std::fs::create_dir_all(&test_dir).unwrap();
         std::fs::write(test_dir.join("main.tex"), "no-meta-content").unwrap();
 
-        let (_, fetched_at) = load_from_cache_with_meta(test_name).unwrap();
+        let (_, fetched_at) = load_from_cache_with_meta(&test_dir).unwrap();
         assert!(fetched_at.is_none());
         assert!(is_stale(fetched_at));
 
@@ -755,7 +1101,7 @@ version = "0.1.0"
 
         refresh(test_name).unwrap();
 
-        let result = load_from_cache_with_meta(test_name).unwrap();
+        let result = load_from_cache_with_meta(&test_dir).unwrap();
         assert_eq!(
             result.0.files.get("main.tex").unwrap(),
             b"refreshed-content"

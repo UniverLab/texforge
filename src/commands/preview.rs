@@ -69,6 +69,8 @@ fn execute_for_project(
         page_indexes.len(),
         out_dir.display()
     );
+    let removed = remove_stale_page_images(&out_dir, page)?;
+    println!("  removed {removed} stale page image(s)");
     let width_digits = pages.to_string().len();
     for index in page_indexes {
         let rendered = document.render_page(index, scale)?;
@@ -88,6 +90,53 @@ fn execute_for_project(
     }
 
     Ok(())
+}
+
+/// Delete stale `page-<n>.png` files from `out_dir` before rasterizing.
+///
+/// With `page` unset (all pages), every file matching `^page-\d+\.png$` is
+/// removed; with `page` set to `n`, only the files for that same page number
+/// under any zero padding (`page-3.png`, `page-03.png`, `page-003.png`, ...)
+/// are removed. Only the output folder itself is scanned, never recursively,
+/// and nothing else is touched. Returns the number of files deleted.
+fn remove_stale_page_images(out_dir: &Path, page: Option<usize>) -> Result<usize> {
+    let entries = std::fs::read_dir(out_dir)
+        .with_context(|| format!("failed to read {}", out_dir.display()))?;
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to read {}", out_dir.display()))?;
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(digits) = name
+            .strip_prefix("page-")
+            .and_then(|rest| rest.strip_suffix(".png"))
+        else {
+            continue;
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if let Some(n) = page {
+            let value: usize = if digits.trim_start_matches('0').is_empty() {
+                0
+            } else {
+                digits.trim_start_matches('0').parse().unwrap_or(usize::MAX)
+            };
+            if value != n {
+                continue;
+            }
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// Write `rgba` to `path` as a PNG.
@@ -118,13 +167,61 @@ mod tests {
     /// A project whose compiled PDF is the committed two-page fixture. The
     /// title sanitizes to `preview-doc`, so the PDF must be named accordingly.
     fn project() -> (tempfile::TempDir, Project) {
+        project_with_pdf(FIXTURE)
+    }
+
+    /// A ten-page blank US-Letter PDF built with lopdf, for stale-output tests
+    /// where the zero-padded names (`page-01..page-10`) differ from the
+    /// unpadded ones (`page-1.png`, `page-2.png`).
+    fn ten_page_pdf() -> Vec<u8> {
+        use lopdf::{dictionary, Document, Object};
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let mut kids = Vec::new();
+        for _ in 0..10 {
+            let page_id = doc.new_object_id();
+            kids.push(Object::Reference(page_id));
+            doc.objects.insert(
+                page_id,
+                Object::Dictionary(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => Object::Reference(pages_id),
+                    "MediaBox" => vec![
+                        Object::Integer(0),
+                        Object::Integer(0),
+                        Object::Integer(612),
+                        Object::Integer(792),
+                    ],
+                }),
+            );
+        }
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => Object::Array(kids),
+                "Count" => 10,
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+        });
+        doc.trailer.set("Root", catalog_id);
+        let mut buf = Vec::new();
+        doc.save_to(&mut buf).unwrap();
+        buf
+    }
+
+    /// A project whose compiled PDF is `pdf_bytes`.
+    fn project_with_pdf(pdf_bytes: &[u8]) -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("project.toml"),
             "[document]\ntitle = \"Preview Doc\"\nauthor = \"A\"\ntemplate = \"general\"\n\n[build]\nentry = \"main.tex\"\n",
         )
         .unwrap();
-        fs::write(dir.path().join("preview-doc.pdf"), FIXTURE).unwrap();
+        fs::write(dir.path().join("preview-doc.pdf"), pdf_bytes).unwrap();
         let project = Project {
             root: dir.path().to_path_buf(),
             config: ProjectConfig {
@@ -242,5 +339,55 @@ mod tests {
         let (_dir, project) = project();
         let err = run(&project, Some(1), 0.0, None).unwrap_err();
         assert!(err.to_string().contains("finite positive"));
+    }
+
+    #[test]
+    fn stale_page_images_removed_for_all_pages() {
+        let pdf = ten_page_pdf();
+        let (dir, project) = project_with_pdf(&pdf);
+        let preview = dir.path().join("preview");
+        fs::create_dir_all(preview.join("sub")).unwrap();
+        fs::write(preview.join("page-1.png"), b"stale").unwrap();
+        fs::write(preview.join("page-2.png"), b"stale").unwrap();
+        fs::write(preview.join("keep.txt"), b"keep").unwrap();
+        fs::write(preview.join("sub/page-1.png"), b"stale").unwrap();
+
+        run(&project, None, 1.0, None).unwrap();
+
+        let mut names: Vec<String> = fs::read_dir(&preview)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mut expected: Vec<String> = (1..=10).map(|n| format!("page-{n:02}.png")).collect();
+        expected.push("keep.txt".to_string());
+        expected.push("sub".to_string());
+        expected.sort();
+        assert_eq!(names, expected);
+        assert_eq!(fs::read(preview.join("keep.txt")).unwrap(), b"keep");
+        assert!(preview.join("sub/page-1.png").exists());
+        for n in 1..=10 {
+            let (w, h, _) = decode(&preview.join(format!("page-{n:02}.png")));
+            assert_eq!((w, h), (612, 792), "page-{n:02}.png");
+        }
+    }
+
+    #[test]
+    fn page_flag_removes_only_that_page() {
+        let pdf = ten_page_pdf();
+        let (dir, project) = project_with_pdf(&pdf);
+        let preview = dir.path().join("preview");
+        fs::create_dir_all(&preview).unwrap();
+        fs::write(preview.join("page-3.png"), b"stale3").unwrap();
+        fs::write(preview.join("page-003.png"), b"stale003").unwrap();
+        fs::write(preview.join("page-4.png"), b"keep4").unwrap();
+
+        run(&project, Some(3), 1.0, None).unwrap();
+
+        assert!(!preview.join("page-3.png").exists());
+        assert!(!preview.join("page-003.png").exists());
+        assert_eq!(fs::read(preview.join("page-4.png")).unwrap(), b"keep4");
+        let (w, h, _) = decode(&preview.join("page-03.png"));
+        assert_eq!((w, h), (612, 792));
     }
 }
